@@ -43,6 +43,7 @@ _CLI_OVERRIDES = {k: v for k in ("MODEL_PROFILE",) if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_CLI_OVERRIDES)
 
+from artifacts import ArtifactMiddleware  # noqa: E402
 from models import check_gateway_config, describe, root_model, subagent_model  # noqa: E402
 from prompts import ABSTRACT_ANALYST, SYSTEM_PROMPT  # noqa: E402
 from pubmed import fetch_abstracts, pubmed_search  # noqa: E402
@@ -63,7 +64,7 @@ SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py")
 PROVISION = (
     f"mkdir -p {WORKSPACE}/out && "
     "pip install --break-system-packages --quiet "
-    "numpy pandas scipy matplotlib 2>&1 | tail -2"
+    "numpy pandas scipy matplotlib openpyxl 2>&1 | tail -2"
 )
 
 
@@ -131,7 +132,12 @@ def build_agent(backend):
                 # Enough room for the collected fan-out results to survive to synthesis.
                 max_result_chars=40_000,
                 max_ptc_calls=512,
-            )
+            ),
+            # Carries anything the agent writes to /workspace/out out of the sandbox
+            # and into the `ui` state key, so a frontend can render it. Ordered after
+            # the interpreter because it sweeps once the tool call it wraps has
+            # returned, and `eval` is the tool that does most of the writing.
+            ArtifactMiddleware(backend),
         ],
     )
 

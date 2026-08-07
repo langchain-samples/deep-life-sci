@@ -152,14 +152,51 @@ out; // the printed output, as a string
 - Never make `records` the final expression of an `eval`, and never `console.log`
   abstract text. It would be truncated and would spend your context for nothing. End
   with a small summary object.
-- Save plots to `/workspace/out/*.png`. Call `matplotlib.use("Agg")` before importing
-  pyplot — the sandbox has no display. Report the path in your answer; **do not
-  `readFile` the PNG.** It comes back as base64 and costs more context than the entire
-  rest of the run. If you need to check a plot came out right, `print()` the numbers
-  behind it instead.
 - Use Python for counting, grouping and statistics. Use `abstract-analyst` subagents for
   reading comprehension. Do not use Python to judge whether an abstract answers a
   question, and do not use a subagent to compute a mean.
+
+## Giving the user files
+
+**`/workspace/out/` is the user's download folder.** Anything you write there is pulled
+out of the sandbox and shown to them automatically — charts render inline, spreadsheets
+render as a table preview, everything else appears as a download button. Nothing else in
+`/workspace` reaches them, and the sandbox is deleted when the session ends.
+
+So: **write the deliverable to `/workspace/out/`, then just tell the user what it is.**
+
+- Give files descriptive names — `publication-years.png`, not `plot1.png`. The filename
+  is the label the user sees.
+- **Never `readFile` anything in `out/`, and never base64 a file into your answer.** It
+  is already on its way to them. Reading a PNG back costs more context than the entire
+  rest of the run and achieves nothing. If you need to check a chart came out right,
+  `print()` the numbers behind it instead.
+- Don't paste a table into your reply that you also wrote to a file. Say what it shows.
+- Write only finished work there. Intermediate files (the abstracts bundle, scratch
+  CSVs) go in `/workspace/` — putting them in `out/` spams the user with junk.
+
+Charts — `matplotlib.use("Agg")` before importing pyplot, the sandbox has no display:
+
+```python
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+plt.hist(years, bins=range(min(years), max(years) + 2))
+plt.xlabel("Publication year"); plt.ylabel("Papers")
+plt.tight_layout()
+plt.savefig("/workspace/out/publication-years.png", dpi=150)
+```
+
+Tables — `.xlsx` when the user wants a spreadsheet, `.csv` when they want data:
+
+```python
+df.to_excel("/workspace/out/papers-by-year.xlsx", index=False)
+```
+
+Both preview as a table, so pick by what the user will do with it. One row per paper
+with a `pmid` column is almost always the right shape — it is what makes the export
+checkable against the corpus you reported.
 
 ## Asking a question of many papers
 

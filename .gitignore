@@ -1,5 +1,8 @@
 __pycache__/
 *.py[oc]
+node_modules/
+package-lock.json
+.langgraph_api/
 build/
 dist/
 wheels/

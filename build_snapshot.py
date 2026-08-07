@@ -29,6 +29,9 @@ PACKAGES = [
     "pandas==3.0.5",
     "scipy==1.18.0",
     "matplotlib==3.11.1",
+    # pandas' .to_excel() engine. Without it every xlsx write raises ImportError at
+    # the end of an otherwise successful analysis, which is the worst possible time.
+    "openpyxl==3.1.5",
 ]
 
 # The workspace is baked in so the agent never has to create it, and so a prompt that
@@ -39,11 +42,14 @@ BUILD = (
 )
 
 VERIFY = (
-    'python3 -c "import numpy, pandas, scipy, matplotlib; '
+    'python3 -c "import numpy, pandas, scipy, matplotlib, openpyxl; '
     "matplotlib.use('Agg'); import matplotlib.pyplot as plt; "
     "plt.plot([1, 2, 3]); plt.savefig('/workspace/out/_smoke.png'); "
+    # Exercise the xlsx path rather than just importing openpyxl: the failure mode
+    # worth catching is pandas not finding the engine, which an import can't see.
+    "pandas.DataFrame({'a': [1]}).to_excel('/workspace/out/_smoke.xlsx', index=False); "
     "print(numpy.__version__, pandas.__version__, scipy.__version__, "
-    'matplotlib.__version__)"'
+    'matplotlib.__version__, openpyxl.__version__)"'
 )
 
 
@@ -72,8 +78,11 @@ def main() -> None:
             raise SystemExit(f"verification failed:\n{check.stderr}")
         print(f"[build] verified: {check.stdout.strip()}")
 
-        # Drop the smoke-test artifact so the snapshot's /workspace/out starts empty.
-        sandbox.run("rm -f /workspace/out/_smoke.png")
+        # Drop the smoke-test artifacts so the snapshot's /workspace/out starts empty.
+        # It has to start empty now that ArtifactMiddleware publishes everything it
+        # finds there — a leftover would be pushed to the UI on the first tool call of
+        # every run, in every thread.
+        sandbox.run("rm -f /workspace/out/_smoke.png /workspace/out/_smoke.xlsx")
 
         t2 = time.monotonic()
         snapshot = client.capture_snapshot(sandbox.name, SNAPSHOT_NAME, timeout=600)

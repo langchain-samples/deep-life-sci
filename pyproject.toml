@@ -12,3 +12,11 @@ dependencies = [
     "langchain-quickjs>=0.3.5",
     "python-dotenv>=1.2.2",
 ]
+
+[dependency-groups]
+# `langgraph dev` serves graph.py so a chat UI can connect. The CLI is only needed for
+# that path — `uv run agent.py` doesn't touch it. [inmem] is the in-process server;
+# without that extra the `dev` subcommand isn't registered at all.
+dev = [
+    "langgraph-cli[inmem]>=0.4.7",
+]
