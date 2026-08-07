@@ -1,38 +1,60 @@
-"""Model construction via the LangSmith LLM gateway.
+"""Model construction via the LangSmith LLM gateway, with switchable providers.
 
 Follows the intro-to-langsmith pattern: gateway compute is authenticated by
 OPENAI_API_KEY (the `lsv2_sk_...` gateway service key, not an OpenAI key), while
-LANGSMITH_API_KEY stays dedicated to tracing so runs land in a readable workspace.
+LANGSMITH_API_KEY stays dedicated to tracing.
 
-We use the gateway's **Anthropic-native** path rather than its OpenAI-compatible one,
-because prompt caching only survives on the native path. Verified against the live
-gateway:
+Pick a profile with MODEL_PROFILE in .env (or `MODEL_PROFILE=openai uv run agent.py`):
 
-    /v1/chat/completions   (OpenAI-compatible)  -> cached_tokens: 0 on a repeated
-                                                   14k-token prefix, with and without
-                                                   an explicit cache_control block.
-                                                   The gateway drops cache_control here.
-    /anthropic/v1/messages (Anthropic-native)   -> cache_creation_input_tokens: 14413
-                                                   then cache_read_input_tokens: 14413.
+    anthropic  Sonnet 4.6 root  + Haiku 4.5 subagents   (default)
+    openai     GPT-5.6 terra    + GPT-5.6 luna
 
-That matters a lot here: the root agent re-reads a growing transcript every turn, and
-uncached it was ~96k input tokens per run — 82% of the bill.
+The two profiles reach the gateway by different paths, and the difference is not
+cosmetic:
 
-Two quirks of the native path, both discovered the hard way:
-  - The base URL must NOT include `/v1`; the Anthropic SDK appends it, and
-    `/anthropic/v1/v1/messages` returns a 501 "path not allow-listed".
-  - Model ids are bare here (`claude-sonnet-4-6`), not provider-prefixed. The
-    `anthropic/`-prefixed form is only for the OpenAI-compatible path.
+    /anthropic/v1/messages  (native)            prompt caching WORKS
+    /v1/chat/completions    (OpenAI-compatible) prompt caching for Anthropic models
+                                                does NOT work — verified: cached_tokens
+                                                stays 0 on a repeated 14k-token prefix
+                                                even with an explicit cache_control
+                                                block, which the gateway drops.
+
+So Anthropic models must go native or they silently lose caching. OpenAI models only
+have the OpenAI-compatible path, where caching is automatic and server-side.
+
+Two quirks of the native path, both found the hard way:
+  - The base URL must NOT include `/v1`; the Anthropic SDK appends it and
+    `/anthropic/v1/v1/messages` returns 501 "path not allow-listed".
+  - Model ids are bare there (`claude-sonnet-4-6`). The `anthropic/`-prefixed form is
+    only for the OpenAI-compatible path.
 """
 
 import os
 
-from langchain_anthropic import ChatAnthropic
+ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
+OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 
-DEFAULT_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
+PROFILES = {
+    "anthropic": {
+        "root": "claude-sonnet-4-6",
+        "subagent": "claude-haiku-4-5-20251001",
+    },
+    "openai": {
+        "root": "openai/gpt-5.6-terra",
+        "subagent": "openai/gpt-5.6-luna",
+    },
+}
+DEFAULT_PROFILE = "anthropic"
 
-ROOT_MODEL = "claude-sonnet-4-6"
-SUBAGENT_MODEL = "claude-haiku-4-5-20251001"
+
+def active_profile() -> str:
+    name = os.environ.get("MODEL_PROFILE", DEFAULT_PROFILE).strip().lower()
+    if name not in PROFILES:
+        raise SystemExit(
+            f"MODEL_PROFILE={name!r} is not a known profile. "
+            f"Choose one of: {', '.join(PROFILES)}"
+        )
+    return name
 
 
 def check_gateway_config() -> None:
@@ -51,12 +73,39 @@ def check_gateway_config() -> None:
         )
 
 
-def gateway_model(model: str, **kwargs) -> ChatAnthropic:
-    """Build a chat model backed by the LangSmith gateway's Anthropic path."""
+def _build(model: str, **kwargs):
     check_gateway_config()
-    return ChatAnthropic(
+    key = os.environ["OPENAI_API_KEY"]
+    if active_profile() == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            model=model,
+            base_url=os.environ.get("LANGSMITH_GATEWAY_ANTHROPIC_URL", ANTHROPIC_BASE_URL),
+            api_key=key,
+            **kwargs,
+        )
+
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(
         model=model,
-        base_url=os.environ.get("LANGSMITH_GATEWAY_ANTHROPIC_URL", DEFAULT_BASE_URL),
-        api_key=os.environ["OPENAI_API_KEY"],
+        base_url=os.environ.get("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL),
+        api_key=key,
         **kwargs,
     )
+
+
+def root_model(**kwargs):
+    """The orchestrating agent's model."""
+    return _build(PROFILES[active_profile()]["root"], **kwargs)
+
+
+def subagent_model(**kwargs):
+    """The per-abstract analyst's model — the cheaper one of the pair."""
+    return _build(PROFILES[active_profile()]["subagent"], **kwargs)
+
+
+def describe() -> str:
+    p = active_profile()
+    return f"{p}: root={PROFILES[p]['root']} subagent={PROFILES[p]['subagent']}"

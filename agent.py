@@ -10,6 +10,7 @@ LANGSMITH_API_KEY are set in .env.
 """
 
 import asyncio
+import os
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -18,17 +19,24 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 # override=True so .env wins over ambient shell values. Without it a LANGSMITH_PROJECT
 # already exported in the shell silently captures this project's traces.
+#
+# But override=True is too blunt for settings you want to vary per run, so anything
+# passed explicitly on the command line is captured first and restored afterwards.
+# Without this, `MODEL_PROFILE=openai uv run agent.py` is silently overwritten by the
+# MODEL_PROFILE in .env and you get the default profile with no indication why.
+_CLI_OVERRIDES = {k: v for k in ("MODEL_PROFILE",) if (v := os.environ.get(k))}
 load_dotenv(override=True)
+os.environ.update(_CLI_OVERRIDES)
 
-from models import ROOT_MODEL, SUBAGENT_MODEL, gateway_model  # noqa: E402
+from models import describe, root_model, subagent_model  # noqa: E402
 from prompts import ABSTRACT_ANALYST, SYSTEM_PROMPT  # noqa: E402
 from pubmed import fetch_abstracts, pubmed_search  # noqa: E402
 
 agent = create_deep_agent(
-    model=gateway_model(ROOT_MODEL),
+    model=root_model(),
     tools=[pubmed_search, fetch_abstracts],
     system_prompt=SYSTEM_PROMPT,
-    subagents=[{**ABSTRACT_ANALYST, "model": gateway_model(SUBAGENT_MODEL)}],
+    subagents=[{**ABSTRACT_ANALYST, "model": subagent_model()}],
     # Rooted at data/, so the agent sees the abstract cache as /abstracts/<pmid>.json.
     backend=FilesystemBackend(root_dir="data", virtual_mode=True),
     middleware=[
@@ -60,6 +68,7 @@ DEMO_QUESTION = (
 
 
 async def main() -> None:
+    print(f"[models] {describe()}\n")
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": DEMO_QUESTION}]}
     )

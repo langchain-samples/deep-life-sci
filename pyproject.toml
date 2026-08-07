@@ -8,6 +8,7 @@ dependencies = [
     "deepagents>=0.7.4",
     "httpx>=0.28.1",
     "langchain-anthropic>=1.5.3",
+    "langchain-openai>=1.4.2",
     "langchain-quickjs>=0.3.5",
     "python-dotenv>=1.2.2",
 ]
