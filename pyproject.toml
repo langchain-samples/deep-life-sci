@@ -1,0 +1,11 @@
+[project]
+name = "deepagents-testing"
+version = "0.1.0"
+description = "Minimal Deep Agents scaffold with LangSmith tracing"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.4",
+    "langchain-anthropic>=1.5.3",
+    "python-dotenv>=1.2.2",
+]
