@@ -12,4 +12,5 @@ wheels/
 uv.lock
 data
 pubmed_api_notes/
+pmc_api_notes/
 demo_questions.md

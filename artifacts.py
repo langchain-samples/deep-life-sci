@@ -21,6 +21,7 @@ the UI as noise. `out/` is the deliverables contract, and the prompt states it.
 
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
 import posixpath
@@ -60,6 +61,54 @@ EXTRA_MIME = {
     ".webp": "image/webp",
     ".md": "text/markdown",
 }
+
+
+def _list_command(out_dir: str) -> str:
+    """Shell command emitting one JSON object per file under `out_dir`.
+
+    `aglob` would be the obvious way to list the directory, but its matches carry only
+    `path` and `is_dir`. This middleware needs two more things: `size`, or the inline
+    cap can't be enforced, and `mtime`, or a regenerated chart is indistinguishable
+    from the one already published and the user keeps seeing a stale image.
+
+    Doing the walk in Python rather than `find | stat` keeps filenames with spaces or
+    non-ASCII characters intact, and Python is guaranteed present — running it is the
+    reason the sandbox exists.
+    """
+    return (
+        "python3 - <<'__ARTIFACTS_EOF__'\n"
+        "import json, os\n"
+        f"out = {out_dir!r}\n"
+        "for root, _dirs, files in os.walk(out):\n"
+        "    for name in files:\n"
+        "        p = os.path.join(root, name)\n"
+        "        try:\n"
+        "            st = os.stat(p)\n"
+        "        except OSError:\n"
+        "            continue\n"
+        '        print(json.dumps({"path": p, "size": st.st_size, '
+        '"mtime": st.st_mtime}))\n'
+        "__ARTIFACTS_EOF__"
+    )
+
+
+def _parse_listing(output: str) -> list[dict[str, Any]]:
+    """Pull the JSON lines out of the command's combined output.
+
+    `execute` returns stdout plus a trailing `[Command succeeded ...]` status line, and
+    a missing `out/` produces no lines at all, so anything that isn't a JSON object is
+    skipped rather than treated as an error.
+    """
+    files: list[dict[str, Any]] = []
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            files.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return files
 
 
 def _component_for(suffix: str) -> str:
@@ -155,23 +204,24 @@ class ArtifactMiddleware(AgentMiddleware):
         return None
 
     async def _publish_new_files(self, request: ToolCallRequest) -> None:
-        listing = await self.backend.aglob("**/*", self.out_dir)
-        if listing.error or not listing.matches:
+        result = await self.backend.aexecute(_list_command(self.out_dir))
+        listing = _parse_listing(getattr(result, "output", "") or "")
+        if not listing:
             return
 
         seen = self._seen.setdefault(self._thread_key(request), {})
 
         fresh: list[tuple[str, int]] = []
-        for info in listing.matches:
-            if info.get("is_dir"):
+        for info in listing:
+            path = info.get("path")
+            if not path:
                 continue
-            path = info["path"]
             size = int(info.get("size") or 0)
             # size+mtime is the rsync heuristic: cheap, and wrong only if a file is
             # rewritten to the identical byte count within the filesystem's mtime
             # resolution. Hashing would mean downloading every file on every sweep,
             # which is the cost this check exists to avoid.
-            fingerprint = f"{size}:{info.get('modified_at') or '?'}"
+            fingerprint = f"{size}:{info.get('mtime')}"
             if seen.get(path) == fingerprint:
                 continue
             seen[path] = fingerprint

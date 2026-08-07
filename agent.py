@@ -45,7 +45,13 @@ os.environ.update(_CLI_OVERRIDES)
 
 from artifacts import ArtifactMiddleware  # noqa: E402
 from models import check_gateway_config, describe, root_model, subagent_model  # noqa: E402
-from prompts import ABSTRACT_ANALYST, SYSTEM_PROMPT  # noqa: E402
+from pmc import fetch_full_text, make_sandbox_tools, pmc_locate  # noqa: E402
+from prompts import (  # noqa: E402
+    ABSTRACT_ANALYST,
+    FIGURE_ANALYST,
+    FULL_TEXT_ANALYST,
+    SYSTEM_PROMPT,
+)
 from pubmed import fetch_abstracts, pubmed_search  # noqa: E402
 
 # Where the agent works inside the sandbox. Mirrored in the system prompt.
@@ -93,24 +99,42 @@ def provision(sandbox) -> None:
 
 def build_agent(backend):
     """Assemble the agent against a backend. In practice the backend is the sandbox."""
+    # fetch_figures and fetch_supplementary need the backend to upload bytes straight
+    # into the sandbox, so they're built per-run rather than imported as module globals.
+    # That upload is the whole point: an image has to exist as a real file on a real
+    # path before a subagent can read_file it and actually see it.
+    fetch_figures, fetch_supplementary = make_sandbox_tools(backend)
+
+    # Every leaf analyst gets the same shape: no PubMed tools, no shell, read_file only.
+    # Subagents inherit the parent's tools unless they declare their own, so without
+    # these two keys every analyst would get the PubMed tools and a shell into the
+    # shared sandbox — contradicting its own description and the no-I/O promise the
+    # fan-out depends on. read_file is the floor; FilesystemMiddleware rejects a tools
+    # list that omits it, and figure-analyst genuinely needs it: read_file on an image
+    # is what turns a staged path into something the model can see.
+    def leaf(spec: dict) -> dict:
+        return {
+            **spec,
+            "model": subagent_model(),
+            "tools": [],
+            "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
+        }
+
     return create_deep_agent(
         model=root_model(),
-        tools=[pubmed_search, fetch_abstracts],
+        tools=[
+            pubmed_search,
+            fetch_abstracts,
+            pmc_locate,
+            fetch_full_text,
+            fetch_figures,
+            fetch_supplementary,
+        ],
         system_prompt=SYSTEM_PROMPT,
         subagents=[
-            {
-                **ABSTRACT_ANALYST,
-                "model": subagent_model(),
-                # Subagents inherit the parent's tools unless they declare their own, so
-                # without these two keys every analyst would get the PubMed tools and a
-                # shell into the shared sandbox — contradicting its own description and
-                # the no-I/O promise the fan-out depends on. read_file is the floor;
-                # FilesystemMiddleware rejects a tools list that omits it.
-                "tools": [],
-                "middleware": [
-                    FilesystemMiddleware(backend=backend, tools=["read_file"])
-                ],
-            }
+            leaf(ABSTRACT_ANALYST),
+            leaf(FULL_TEXT_ANALYST),
+            leaf(FIGURE_ANALYST),
         ],
         backend=backend,
         middleware=[
@@ -120,6 +144,10 @@ def build_agent(backend):
                 ptc=[
                     "pubmed_search",
                     "fetch_abstracts",
+                    "pmc_locate",
+                    "fetch_full_text",
+                    "fetch_figures",
+                    "fetch_supplementary",
                     "execute",
                     "read_file",
                     "write_file",

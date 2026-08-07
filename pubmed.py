@@ -10,6 +10,9 @@ The three that produce *wrong answers rather than errors*:
    `query_translation` and `warnings` are always returned to the caller.
 3. esummary's 500-UID cap returns HTTP 200 with no `result` key, so the error key is
    checked before the payload is read.
+4. an efetch record's reference list carries an `ArticleIdList` per reference (58 of them
+   in one measured record), so `.//ArticleIdList/ArticleId` returns a *cited* paper's
+   ids; id extraction is scoped to `PubmedData/ArticleIdList`. See `_article_ids`.
 """
 
 from __future__ import annotations
@@ -180,6 +183,22 @@ def validate_pmids(pmids: list[str]) -> tuple[list[str], list[str]]:
     return list(dict.fromkeys(valid)), invalid
 
 
+def normalize_pmcid(raw: Any) -> str | None:
+    """'5904197' | 'pmc5904197' | 'PMC5904197.1' -> 'PMC5904197'. None if unusable.
+
+    Lives here rather than in `pmc.py` for the same reason `validate_pmids` does: an id
+    that gets coerced instead of rejected fetches a real, unrelated paper. Strict about
+    the digits for that reason.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().upper().removeprefix("PMC")
+    # A trailing version suffix is common in copy-paste; the version is resolved from
+    # the bucket listing, never taken on faith from the caller.
+    s = s.split(".", 1)[0]
+    return f"PMC{s}" if s.isdigit() else None
+
+
 def _chunks(items: list[str], size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
@@ -253,6 +272,10 @@ def _summary_to_record(uid: str, rec: dict) -> dict:
         # Book records (StatPearls, GeneReviews) leave `source` empty.
         "journal": rec.get("source") or rec.get("booktitle") or None,
         "doi": articleids.get("doi"),
+        # Free: esummary already carries this, so knowing whether a paper has PMC full
+        # text costs no extra request. `pmc` is the bare-ish id and `pmcid` the prefixed
+        # form; both appear for 88/145 of the test corpus. Take either.
+        "pmcid": normalize_pmcid(articleids.get("pmcid") or articleids.get("pmc")),
     }
 
 
@@ -340,14 +363,12 @@ async def pubmed_search(
 
     saved_to_host = None
     if len(records) > DUMP_THRESHOLD:
-        SEARCH_DUMPS.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")[:60] or "search"
-        path = SEARCH_DUMPS / f"{slug}.json"
-        path.write_text(json.dumps(records, indent=2))
+        # Off the event loop: this coroutine runs inside the ASGI server under
+        # `langgraph dev`, where a blocking write raises BlockingError. See cache_io.
         # A real host path, deliberately. The agent works in a sandbox and cannot open
         # this; the `_host` suffix and the absolute host path are what keep it from
         # looking like something `read_file` could resolve.
-        saved_to_host = str(path.resolve())
+        saved_to_host = await asyncio.to_thread(_dump_search, term, records)
 
     return {
         "count": count,
@@ -376,8 +397,36 @@ def _text_of(node: ET.Element) -> str:
     return "".join(node.itertext()).strip()
 
 
+def _article_ids(art: ET.Element) -> dict[str, str]:
+    """The article's OWN ids, from the scoped ArticleIdList only.
+
+    ⚠️ Do not reach for `.//ArticleIdList/ArticleId` here. Every entry in a record's
+    reference list carries its own `ArticleIdList`, so `.//` matches all of them —
+    PMID 29695998 has **58** — and a last-wins dict comprehension over that returns a
+    *cited paper's* ids. Measured: it reported `pmc: PMC5379068` for a paper whose real
+    PMCID is PMC5904197, which would then fetch the wrong full text with no error
+    anywhere. Same silent-wrong-answer class as the traps in the module docstring.
+    """
+    for path in ("PubmedData/ArticleIdList", "PubmedBookData/ArticleIdList"):
+        node = art.find(path)
+        if node is not None:
+            return {
+                a.get("IdType"): (a.text or "").strip()
+                for a in node.findall("ArticleId")
+                if a.get("IdType")
+            }
+    return {}
+
+
 def _parse_article(art: ET.Element) -> dict | None:
-    pmid = art.findtext(".//PMID")
+    # Scoped, not `.//PMID`: a record's reference list and CommentsCorrections carry
+    # PMIDs too. `findtext` returns the first in document order, which happens to be
+    # the right one — but only by accident of ordering. See `_article_ids` below.
+    pmid = (
+        art.findtext("MedlineCitation/PMID")
+        or art.findtext("BookDocument/PMID")
+        or art.findtext(".//PMID")
+    )
     if not pmid:
         return None
 
@@ -400,6 +449,8 @@ def _parse_article(art: ET.Element) -> dict | None:
 
     year = art.findtext(".//PubDate/Year") or art.findtext(".//PubDate/MedlineDate") or ""
 
+    ids = _article_ids(art)
+
     return {
         "pmid": pmid,
         "title": art.findtext(".//ArticleTitle") or art.findtext(".//BookTitle"),
@@ -409,7 +460,59 @@ def _parse_article(art: ET.Element) -> dict | None:
         "year": year[:4] or None,
         "retracted": retracted,
         "publication_types": pubtypes,
+        "doi": ids.get("doi"),
+        # The handoff to PMC: non-null means full text may be retrievable.
+        "pmcid": normalize_pmcid(ids.get("pmc") or ids.get("pmcid")),
     }
+
+
+def _dump_search(term: str, records: list[dict]) -> str:
+    """Archive a large result set host-side. Blocking; call via `asyncio.to_thread`."""
+    SEARCH_DUMPS.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")[:60] or "search"
+    path = SEARCH_DUMPS / f"{slug}.json"
+    path.write_text(json.dumps(records, indent=2))
+    return str(path.resolve())
+
+
+def _scan_cache(valid: list[str]) -> tuple[dict[str, dict], list[str], list[str]]:
+    """Partition PMIDs into cached records and ones still needing a fetch.
+
+    Blocking, and called via a single `asyncio.to_thread` rather than one hop per
+    PMID: a 200-paper corpus is 200 cache reads, and paying thread-handoff overhead
+    on each would cost more than the reads themselves.
+
+    Returns `(records, from_cache, to_fetch)`.
+    """
+    ABSTRACT_CACHE.mkdir(parents=True, exist_ok=True)
+    records: dict[str, dict] = {}
+    from_cache: list[str] = []
+    to_fetch: list[str] = []
+
+    for pmid in valid:
+        path = ABSTRACT_CACHE / f"{pmid}.json"
+        if path.exists():
+            try:
+                cached = json.loads(path.read_text())
+                # Schema migration: entries written before PMC support predate the
+                # `pmcid` key. Checking for the key (not its value) is what makes this
+                # a one-time refetch — None is a legitimate answer for 39% of papers,
+                # so a truthiness check would refetch those forever.
+                if "pmcid" in cached:
+                    records[pmid] = cached
+                    from_cache.append(pmid)
+                    continue
+            except (OSError, json.JSONDecodeError):
+                pass  # corrupt cache entry, refetch
+        to_fetch.append(pmid)
+
+    return records, from_cache, to_fetch
+
+
+def _write_cache(parsed: dict[str, dict]) -> None:
+    """Persist a chunk of freshly fetched records. Blocking; call via `to_thread`."""
+    for pmid, rec in parsed.items():
+        (ABSTRACT_CACHE / f"{pmid}.json").write_text(json.dumps(rec, indent=2))
 
 
 def _parse_efetch(xml_text: str) -> dict[str, dict]:
@@ -442,40 +545,31 @@ async def fetch_abstracts(pmids: list[str]) -> dict:
 
     Returns:
         records: {pmid: {title, abstract, sections, journal, year, retracted,
-            publication_types}}. `abstract` is None for errata and editorials, which
-            have citation metadata but no body. `sections` preserves structured-abstract
-            labels (BACKGROUND / METHODS / FINDINGS / ...) when the journal uses them.
-            `retracted` is True for retracted papers — always surface that to the user.
+            publication_types, doi, pmcid}}. `abstract` is None for errata and editorials,
+            which have citation metadata but no body. `sections` preserves
+            structured-abstract labels (BACKGROUND / METHODS / FINDINGS / ...) when the
+            journal uses them. `retracted` is True for retracted papers — always surface
+            that to the user. `pmcid` is non-null for roughly 61% of papers and is what
+            you pass to `pmc_locate` to check for full text; null means abstract-only.
         missing: requested PMIDs that PubMed returned nothing for
         invalid: inputs rejected as malformed
         from_cache: PMIDs served from the local cache
     """
     valid, invalid = validate_pmids([str(p) for p in pmids])
 
-    ABSTRACT_CACHE.mkdir(parents=True, exist_ok=True)
-    records: dict[str, dict] = {}
-    from_cache: list[str] = []
-    to_fetch: list[str] = []
-
-    for pmid in valid:
-        path = ABSTRACT_CACHE / f"{pmid}.json"
-        if path.exists():
-            try:
-                records[pmid] = json.loads(path.read_text())
-                from_cache.append(pmid)
-                continue
-            except (OSError, json.JSONDecodeError):
-                pass  # corrupt cache entry, refetch
-        to_fetch.append(pmid)
+    # The cache lives on the host filesystem, so reading it is blocking I/O. This
+    # coroutine runs on the server's event loop under `langgraph dev`, which forbids
+    # that outright — see cache_io for why it matters in production too.
+    records, from_cache, to_fetch = await asyncio.to_thread(_scan_cache, valid)
 
     for chunk in _chunks(to_fetch, FETCH_CHUNK):
         # retmode=xml, never the text mode: text concatenates every abstract behind a
         # positional counter that renumbers when records drop, so it can't be mapped
         # back to the requested ids. Never pass retmax — it truncates silently.
         resp = await _request("efetch", db="pubmed", id=",".join(chunk), retmode="xml")
-        for pmid, rec in _parse_efetch(resp.text).items():
-            records[pmid] = rec
-            (ABSTRACT_CACHE / f"{pmid}.json").write_text(json.dumps(rec, indent=2))
+        parsed = _parse_efetch(resp.text)
+        records.update(parsed)
+        await asyncio.to_thread(_write_cache, parsed)
 
     return {
         "records": records,
