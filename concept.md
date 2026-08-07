@@ -14,7 +14,16 @@ The API has enough sharp edges to be worth its own writeup—silent query mangli
 
 To start with, we’ll just do abstract, since that’s always just text. Papers, with their associated multimodal and multi-file-type data will come later.
 
-Rather than exposing tools to the model directly, we’ll have it compose them in code via LangChain’s interpreter (https://docs.langchain.com/oss/python/deepagents/interpreters). The interpreter runs JavaScript in QuickJS with no network, filesystem, or shell access, so the PubMed calls themselves still have to be real Python tools—they reach the interpreter through programmatic tool calling (`ptc=[...]`), which exposes them as async functions on a `tools` global (`pubmed_search` → `tools.pubmedSearch(...)`). So: two thin Python tools, and each gets a segment in the prompt with a reference JS snippet showing how to call and compose it. Put the built-in filesystem tools in the allowlist too, so the agent can check the cache and write out result sets.
+Rather than exposing tools to the model directly, we’ll have it compose them in code via LangChain’s interpreter (https://docs.langchain.com/oss/python/deepagents/interpreters). The interpreter runs JavaScript in QuickJS with no network, filesystem, or shell access, so the PubMed calls themselves still have to be real Python tools—they reach the interpreter through programmatic tool calling (`ptc=[...]`), which exposes them as async functions on a `tools` global (`pubmed_search` → `tools.pubmedSearch(...)`). So: two thin Python tools, and each gets a segment in the prompt with a reference JS snippet showing how to call and compose it.
+
+That covers orchestration but not quantitative work—reading a corpus and then actually computing over it (group by year, tally model organisms, run a statistic, draw a plot) needs real Python, which QuickJS can’t give us. So there are **two code surfaces**, and the prompt has to draw the line between them or the model reaches for the wrong one:
+
+- **`eval` (QuickJS)** — orchestration. Search, fetch, fan out, collect. Everything reaches outside through `tools.*`.
+- **`execute` (sandbox shell)** — Python 3 with numpy/pandas/scipy/matplotlib, in an isolated Linux container. This comes from swapping the agent’s *backend* to a LangSmith sandbox, which adds `execute` alongside the filesystem tools.
+
+Both go in the PTC allowlist, so one `eval` call can run search → fetch → write → compute → collect. The filesystem tools are in there too and operate on the sandbox’s filesystem, the same one `execute` sees.
+
+The sandbox starts empty and is deleted when the run ends, so **PubMed data doesn’t appear in it by itself—the agent writes it there.** That’s cheap: PTC tool output is marshalled straight into the JS heap and never enters model context, so piping `fetch_abstracts` records into `tools.writeFile` costs no tokens. The on-disk abstract cache stays host-side and stays invisible to the agent; it exists to serve the rate limit, not the agent. Booting the sandbox is a ~30s `pip install` unless you bake the libraries into a snapshot first (`build_snapshot.py`), which takes it to ~1-3s.
 
 Watch the interpreter defaults—`timeout` is 5s, which a fan-out will blow through immediately. `max_result_chars` (4000) truncates what comes back to the model.
 

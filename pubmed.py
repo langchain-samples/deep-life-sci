@@ -39,7 +39,12 @@ SUMMARY_CHUNK = 200
 FETCH_CHUNK = 200
 # esearch silently clamps retmax to this; clamp explicitly so the caller knows.
 MAX_RETMAX = 9999
-# Above this many hits, dump the full record list to disk instead of returning it all.
+# The corpus the agent should be aiming a query at. Not a hard cap — the point is to
+# make the agent narrow the *query* until the result set is genuinely this size, rather
+# than let it truncate a million-hit search to an arbitrary first-N and call that "the
+# most relevant papers".
+TARGET_MAX_RESULTS = 200
+# Above this many records, also write the full list to disk for the user's convenience.
 DUMP_THRESHOLD = 50
 
 PMID_RE = re.compile(r"^\d+$")
@@ -270,9 +275,13 @@ async def pubmed_search(
     unrecognised field tag is dropped and the search runs across all fields, which can
     return millions of irrelevant hits that look like a successful search.
 
+    Use `retmax=0` to probe: it returns `count`, `query_translation` and `warnings`
+    without fetching any records, so it is cheap and fast. Probe first, refine the query
+    until `count` is at or under 200, and only then pull the records.
+
     Args:
         term: The boolean query.
-        retmax: Max papers to return (capped at 9999).
+        retmax: Max papers to return (capped at 9999). 0 = count-only probe.
         sort: 'relevance', 'pub_date', or 'Author'. Invalid values are ignored by
             PubMed without error, so stick to these three.
         mindate: Earliest publication date, 'YYYY' or 'YYYY/MM/DD'.
@@ -282,11 +291,16 @@ async def pubmed_search(
         count: total matches in PubMed (may be far larger than the records returned)
         returned: how many records are in this response
         query_translation: what PubMed ACTUALLY searched, with MeSH expansion
-        warnings: list of ways PubMed altered the query; empty means it ran as written
+        warnings: list of ways PubMed altered the query, plus a notice when `count`
+            exceeds the 200-paper target. Empty means the query ran as written and the
+            result set is a workable size.
         records: list of {pmid, title, first_author, last_author, year, journal, doi}
-        saved_to: path to a JSON dump when the result set is large, else None
+        saved_to_host: host filesystem path to a JSON dump when the result set is
+            large, else None. This is an operator-side archive — it is not reachable
+            from the agent's sandbox.
     """
-    retmax = max(1, min(int(retmax), MAX_RETMAX))
+    probe_only = int(retmax) == 0
+    retmax = 0 if probe_only else max(1, min(int(retmax), MAX_RETMAX))
     params: dict[str, Any] = {
         "db": "pubmed",
         "term": term,
@@ -302,32 +316,50 @@ async def pubmed_search(
     # Local tag check first: an unknown field tag leaves no trace anywhere in the
     # response, so _collect_warnings alone cannot see it.
     warnings = check_field_tags(term) + _collect_warnings(result)
-    pmids = result.get("idlist", [])
+    count = int(result.get("count", 0) or 0)
 
+    # Surface an oversized result set the same way as a mangled query: as something the
+    # agent must act on, not a number it can quietly slice.
+    if count > TARGET_MAX_RESULTS:
+        warnings.append(
+            f"this query matches {count:,} papers, well over the {TARGET_MAX_RESULTS} "
+            f"target. Narrow it — add field tags ([tiab], [majr]), tighten the date "
+            f"range, AND in a more specific concept, or exclude with NOT — and search "
+            f"again. Do NOT just take the first N of this set: they are the top hits "
+            f"for an over-broad query, not the most relevant papers for the question."
+        )
+
+    pmids = result.get("idlist", [])
     records = []
-    if pmids:
+    if pmids and not probe_only:
         summaries = await _esummary(pmids)
         # Keep esearch's ordering (relevance/date), which the summary dict loses.
         records = [
             _summary_to_record(p, summaries[p]) for p in pmids if p in summaries
         ]
 
-    saved_to = None
+    saved_to_host = None
     if len(records) > DUMP_THRESHOLD:
         SEARCH_DUMPS.mkdir(parents=True, exist_ok=True)
         slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")[:60] or "search"
         path = SEARCH_DUMPS / f"{slug}.json"
         path.write_text(json.dumps(records, indent=2))
-        # Agent-visible path: the filesystem backend is rooted at data/.
-        saved_to = f"/searches/{path.name}"
+        # A real host path, deliberately. The agent works in a sandbox and cannot open
+        # this; the `_host` suffix and the absolute host path are what keep it from
+        # looking like something `read_file` could resolve.
+        saved_to_host = str(path.resolve())
 
     return {
-        "count": int(result.get("count", 0) or 0),
+        "count": count,
         "returned": len(records),
         "query_translation": result.get("querytranslation") or "",
         "warnings": warnings,
-        "records": records[:DUMP_THRESHOLD] if saved_to else records,
-        "saved_to": saved_to,
+        # Every record is returned, not a truncated head. These land in the interpreter's
+        # JS heap, not the model's context — only what `eval` returns reaches the model —
+        # so the agent can filter and slice all of them in code. Truncating here would
+        # hide records from that code for no benefit.
+        "records": records,
+        "saved_to_host": saved_to_host,
     }
 
 

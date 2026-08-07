@@ -14,7 +14,7 @@ question across many papers at once. See `concept.md` for the design rationale.
 
    LANGSMITH_API_KEY=lsv2_pt_...
    LANGSMITH_TRACING=true
-   LANGSMITH_PROJECT=deepagents_testing
+   LANGSMITH_PROJECT=science-agent
 
    NCBI_API_KEY=          # optional: raises the rate limit from 3 to 10 req/sec
    NCBI_TOOL=deepagents_demo
@@ -65,15 +65,17 @@ question across many papers at once. See `concept.md` for the design rationale.
 
 The agent does **not** call the PubMed tools directly. It writes JavaScript in a QuickJS
 interpreter and reaches them through programmatic tool calling, so a whole workflow —
-search, batch-fetch, fan out across 30 abstracts, collect — happens inside one `eval`
-call instead of dozens of round trips.
+search, batch-fetch, fan out across 30 abstracts, compute, collect — happens inside one
+`eval` call instead of dozens of round trips.
 
 ```
 user question
    -> eval (JS)
         tools.pubmedSearch()      esearch + esummary
-        tools.fetchAbstracts()    efetch, batched, disk-cached
+        tools.fetchAbstracts()    efetch, batched, host-side disk cache
+        tools.writeFile()         materialise records into the sandbox
         Promise.all(task(...))    one abstract-analyst subagent per paper
+        tools.execute()           Python in the sandbox: stats, tables, plots
    -> synthesis with PMID citations
 ```
 
@@ -81,21 +83,53 @@ Subagents receive abstract text in their prompt and do no I/O of their own. That
 deliberate: NCBI allows 3 requests/sec, so N subagents each fetching their own abstract
 would collect HTTP 429s. Fetching in batches up front is what makes the fan-out safe.
 
+### Two code surfaces
+
+`eval` (QuickJS) is orchestration only — no network, filesystem, or shell of its own.
+For quantitative work the agent needs real Python, so the agent's **backend** is a
+LangSmith sandbox: an isolated Linux container with numpy, pandas, scipy and matplotlib,
+exposed as an `execute` shell tool. Both surfaces are in the PTC allowlist, so one `eval`
+call can run search → fetch → write → compute → collect.
+
+The sandbox is created per run and deleted when the run ends (with a 10-minute idle TTL
+as a server-side backstop, since a `finally` doesn't survive `kill -9`). It starts empty:
+**PubMed data does not appear in it by itself — the agent writes it there** with
+`tools.writeFile`. That's free in tokens, because PTC tool output is marshalled into the
+JS heap and never enters the model's context.
+
+Booting a bare sandbox and `pip install`ing the stack costs ~30s per run. Bake it into a
+snapshot once instead:
+
+```bash
+uv run build_snapshot.py     # ~35s, once
+```
+
+That freezes a sandbox with the libraries and `/workspace/out/` already in place; runs
+then start in ~1-3s. `agent.py` looks for the snapshot named by `SANDBOX_SNAPSHOT_NAME`
+(default `pubmed-py`) and falls back to installing at runtime if it isn't there, so a
+fresh clone works without the build step — just slower.
+
 ## Files
 
 | | |
 |---|---|
-| `agent.py` | assembles the agent; `__main__` runs a demo question |
+| `agent.py` | assembles the agent, owns the sandbox lifecycle; `__main__` runs a demo question |
+| `build_snapshot.py` | one-off: bakes the Python stack into a named sandbox snapshot |
 | `pubmed.py` | E-utilities client + the two tools |
 | `prompts.py` | system prompt with reference JS snippets, and the subagent definition |
 | `models.py` | gateway-backed model construction |
 | `pubmed_api_notes/` | per-endpoint API notes (gitignored) |
-| `data/` | abstract cache and search dumps (gitignored) |
+| `data/` | abstract cache and search dumps (gitignored) — **host-side only, the agent never sees it** |
 
 Root model is Sonnet; the per-abstract analyst subagent runs on Haiku. The fan-out is
 where the token volume is, so that split is most of the cost story.
 
 ## Measured on a real run
+
+**These numbers predate the sandbox.** They were measured with a host-rooted filesystem
+backend and no `execute` tool, so the prompt was shorter and no run spent time booting a
+container. The profile comparison still holds directionally; the absolute figures will
+have moved. For sandbox-era figures see [After the sandbox](#after-the-sandbox) below.
 
 The demo question: *"recent papers on base editing in the liver — which used in vivo
 mouse models?"*, one run per profile.
@@ -156,11 +190,51 @@ the leaves benefit instead of being penalised.
 The one-search/one-fetch count holds in both: subagents never touch the network, so a
 run costs two HTTP requests regardless of how many papers are analysed.
 
+### After the sandbox
+
+Three runs on the `anthropic` profile with the computational demo question (*"...then use
+Python to plot the distribution of publication years and report the median year"*),
+measured off the returned root message list rather than the trace UI:
+
+| | run 1 | run 2 | run 3 (after prompt fix) |
+|---|---|---|---|
+| wall clock | 214s | 162s | **145s** |
+| root messages | 34 | 24 | **16** |
+| root AI turns | 17 | 12 | **8** |
+| root context | — | 115,097 chars | **31,034 chars** |
+| largest single message | 121,047 | 91,587 | **12,941** |
+
+Runs 1 and 2 each had one enormous message, and both were the same thing: the agent
+calling `read_file` on the PNG it had just drawn, which returns base64 and cost more
+context than the entire rest of the run. The system prompt now tells it to report the
+path and print the underlying numbers instead — that one line is the whole difference
+between run 2 and run 3.
+
+Two things verified directly rather than assumed:
+
+- **No abstract text reaches the root.** Sampling 40 verbatim mid-abstract fragments
+  from the on-disk cache and searching the root message list finds **0**. The fan-out
+  isolation the design depends on holds under the sandbox.
+- **`abstract-analyst` really has no tools.** Its resolved spec is `tools: []` with a
+  `FilesystemMiddleware` restricted to `read_file` — no `execute`, no PubMed tools.
+  Without that, deepagents' inherit-parent-tools default (`graph.py`) would hand every
+  analyst a shell into the shared container.
+
+One caveat worth knowing: the auto-added `general-purpose` subagent *does* inherit the
+PubMed tools and an unrestricted filesystem including `execute`. That's stock deepagents
+behaviour and nothing in the prompt routes work to it, but it's a path to a shell if you
+start dispatching to it.
+
+Sandbox boot from the snapshot was 2.3-2.9s across these runs, against ~30s for a bare
+sandbox plus `pip install`.
+
 ## The tools
 
 **`pubmed_search(term, retmax, sort, mindate, maxdate)`** — esearch then esummary.
 Returns records with `pmid/title/first_author/last_author/year/journal/doi`, plus
-`query_translation` and `warnings`.
+`query_translation` and `warnings`. Large result sets are also dumped to
+`data/searches/`; `saved_to_host` names that file, which is an operator-side archive the
+agent's sandbox cannot open.
 
 **`fetch_abstracts(pmids)`** — batched efetch, XML parsed, one JSON per PMID cached
 under `data/abstracts/`. Returns `records/missing/invalid/from_cache`. Structured
@@ -188,6 +262,9 @@ produce **wrong answers rather than errors**, all verified against the live API:
 
 Abstracts only — no full text or PMC retrieval. No skills (`skills/example-skill/` is
 still the placeholder). No web search beyond PubMed. No UI.
+
+The sandbox is Python plus the standard scientific stack only — no genomics binaries
+(PLINK, bcftools) and no data sources beyond PubMed. Nothing persists between runs.
 
 The interpreter and dynamic subagents are both **beta**; APIs may change between
 releases.
