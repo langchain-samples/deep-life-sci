@@ -8,3 +8,4 @@ wheels/
 .env
 uv.lock
 data
+pubmed_api_notes/
