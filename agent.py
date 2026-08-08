@@ -26,9 +26,9 @@ import os
 import time
 
 from deepagents import create_deep_agent
-from deepagents.backends import LangSmithSandbox
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from dotenv import load_dotenv
+from langchain_core.messages import AIMessageChunk
 from langchain_quickjs import CodeInterpreterMiddleware
 from langsmith.sandbox import SandboxClient
 
@@ -45,6 +45,7 @@ os.environ.update(_CLI_OVERRIDES)
 
 from artifacts import ArtifactMiddleware  # noqa: E402
 from models import check_gateway_config, describe, root_model, subagent_model  # noqa: E402
+from perf import LoopLagProbe, install_logging  # noqa: E402
 from pmc import fetch_full_text, make_sandbox_tools, pmc_locate  # noqa: E402
 from prompts import (  # noqa: E402
     ABSTRACT_ANALYST,
@@ -53,6 +54,7 @@ from prompts import (  # noqa: E402
     SYSTEM_PROMPT,
 )
 from pubmed import fetch_abstracts, pubmed_search  # noqa: E402
+from resilience import ResilientSandbox  # noqa: E402
 
 # Where the agent works inside the sandbox. Mirrored in the system prompt.
 WORKSPACE = "/workspace"
@@ -105,14 +107,39 @@ def build_agent(backend):
     # path before a subagent can read_file it and actually see it.
     fetch_figures, fetch_supplementary = make_sandbox_tools(backend)
 
-    # Every leaf analyst gets the same shape: no PubMed tools, no shell, read_file only.
-    # Subagents inherit the parent's tools unless they declare their own, so without
-    # these two keys every analyst would get the PubMed tools and a shell into the
-    # shared sandbox — contradicting its own description and the no-I/O promise the
-    # fan-out depends on. read_file is the floor; FilesystemMiddleware rejects a tools
-    # list that omits it, and figure-analyst genuinely needs it: read_file on an image
-    # is what turns a staged path into something the model can see.
-    def leaf(spec: dict) -> dict:
+    # Subagents inherit the parent's tools unless they declare their own, so every leaf
+    # sets `tools: []` explicitly. Without it each analyst would get the PubMed tools and
+    # a shell into the shared sandbox — contradicting its own description and the no-I/O
+    # promise that makes a 100-way fan-out safe.
+    #
+    # The two leaves differ in whether they get a filesystem at all, and that difference
+    # is load-bearing:
+
+    def text_leaf(spec: dict) -> dict:
+        """An analyst whose payload arrives in its prompt. Genuinely no tools.
+
+        Their prompts say "you have no tools and cannot retrieve anything". Handing them
+        `read_file` anyway made that false, and the models used it: in trace
+        019fde70-69b6-7190-a969-a6a60e52894d, three of nine abstract-analysts called
+        `read_file` on paths they invented — `/dev/null` twice, and
+        `/tmp/pubmed_abstract.txt` — looking for an abstract that was already in the
+        prompt. Each error bought a second model turn, and those three were the slowest
+        analysts in the fan-out (21.0s, 21.5s, 24.0s against 17.3s for the clean ones),
+        so they set the critical path the whole `eval` waited on.
+
+        Every one of those calls also opened a sandbox WebSocket, which is the same
+        connection that returned HTTP 502 and destroyed a completed 18-way fan-out
+        (see resilience.py). Removing the tool removes both costs.
+        """
+        return {**spec, "model": subagent_model(), "tools": [], "middleware": []}
+
+    def image_leaf(spec: dict) -> dict:
+        """An analyst that must open a file to do its job.
+
+        figure-analyst is handed a sandbox path, not an image: `read_file` on that path
+        is what turns it into something the model can actually see. read_file is also
+        the floor here — FilesystemMiddleware rejects a tools list that omits it.
+        """
         return {
             **spec,
             "model": subagent_model(),
@@ -132,9 +159,9 @@ def build_agent(backend):
         ],
         system_prompt=SYSTEM_PROMPT,
         subagents=[
-            leaf(ABSTRACT_ANALYST),
-            leaf(FULL_TEXT_ANALYST),
-            leaf(FIGURE_ANALYST),
+            text_leaf(ABSTRACT_ANALYST),
+            text_leaf(FULL_TEXT_ANALYST),
+            image_leaf(FIGURE_ANALYST),
         ],
         backend=backend,
         middleware=[
@@ -166,6 +193,10 @@ def build_agent(backend):
             # the interpreter because it sweeps once the tool call it wraps has
             # returned, and `eval` is the tool that does most of the writing.
             ArtifactMiddleware(backend),
+            # Last, so it is the innermost wrapper and its wall time is the `eval`
+            # itself rather than the artifact sweep that follows it. Measures event-loop
+            # lag during the fan-out; see perf.py for what the number distinguishes.
+            LoopLagProbe(),
         ],
     )
 
@@ -179,9 +210,51 @@ DEMO_QUESTION = (
 )
 
 
+async def stream_answer(agent, question: str) -> None:
+    """Run the agent, printing the final answer as it is generated.
+
+    Synthesis is the single longest span in a run — 23.4s and 32.2s in the two traces
+    from thread 019fde6d-d25c-77b3-a751-56c6b7aa4ead, against a measured 48-60 tok/s
+    for Sonnet with a 1.6s time-to-first-token. `ainvoke` returns nothing until that
+    span completes, so the user waits the full ~30s staring at a blank terminal for
+    text that was ready to show after 1.6s. Streaming does not make the run shorter;
+    it removes almost all of the *perceived* latency of its slowest part.
+
+    Two filters, both load-bearing:
+
+    * **`AIMessageChunk` only.** `stream_mode="messages"` also emits `ToolMessage`s, and
+      a `ToolMessage`'s `.text` is the tool's *result* — an `eval` result runs up to
+      max_result_chars (40k), so printing those dumps the entire fan-out payload into
+      the terminal ahead of the answer that summarises it.
+    * **Root graph only.** Subagent model tokens do not currently reach this stream at
+      all, because `task` invokes its subagent rather than streaming it. If that
+      changes, 18 analysts interleaved token-by-token would be unreadable, so nested
+      namespaces are dropped rather than relied upon to stay empty.
+    """
+    printed = False
+    async for chunk, metadata in agent.astream(
+        {"messages": [{"role": "user", "content": question}]},
+        stream_mode="messages",
+    ):
+        if not isinstance(chunk, AIMessageChunk):
+            continue
+        # Root nodes are a single segment ("model:<uuid>"); anything running inside a
+        # subgraph carries its parent's segments ahead of its own, joined by "|".
+        if "|" in (metadata or {}).get("langgraph_checkpoint_ns", ""):
+            continue
+        # `.text` is the natural-language part only — tool-call arguments stream as
+        # separate content blocks and are not what the user is waiting to read.
+        if text := chunk.text:
+            print(text, end="", flush=True)
+            printed = True
+    if printed:
+        print()
+
+
 async def main() -> None:
     # Fail on a bad model config before paying to boot a sandbox.
     check_gateway_config()
+    install_logging()
     print(f"[models] {describe()}\n")
 
     client = SandboxClient()
@@ -199,13 +272,12 @@ async def main() -> None:
         print(f"[sandbox] up in {time.monotonic() - t0:.1f}s ({snapshot or 'base image'})")
         if snapshot is None:
             provision(sandbox)
-        backend = LangSmithSandbox(sandbox=sandbox)
+        # No `reacquire`: the CLI owns exactly one sandbox for the life of the `with`
+        # block and has nothing to hand back. Retries still cover a blinking socket,
+        # which is the common case.
+        backend = ResilientSandbox(sandbox=sandbox)
         try:
-            agent = build_agent(backend)
-            result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": DEMO_QUESTION}]}
-            )
-            print(result["messages"][-1].content)
+            await stream_answer(build_agent(backend), DEMO_QUESTION)
         finally:
             # ainvoke lazily builds a cached async client with its own connection pool;
             # aclose() is the only thing that closes it.

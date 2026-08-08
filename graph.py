@@ -14,6 +14,13 @@ Point a chat UI at this:
 
     uv run langgraph dev                     # this graph, on :2024
     npx create-agent-chat-app                # UI, on :5173 -> deployment http://localhost:2024
+
+**Clients should request `streamMode: ["messages", "updates"]`.** Synthesis is the
+longest single span in a run — 23-32s in the traces from thread
+019fde6d-d25c-77b3-a751-56c6b7aa4ead — and with `updates` alone the answer appears all
+at once when that span ends. `messages` streams it token by token instead, at a measured
+1.6s to first token. The run takes the same time either way; the wait stops being blank.
+`updates` is worth keeping alongside it for the tool-call and `ui` artifact events.
 """
 
 from __future__ import annotations
@@ -21,11 +28,14 @@ from __future__ import annotations
 import asyncio
 import re
 
-from deepagents.backends import LangSmithSandbox
 from langchain_core.runnables import RunnableConfig
 from langsmith.sandbox import SandboxClient
 
 from agent import IDLE_TTL_SECONDS, SNAPSHOT_NAME, build_agent, find_snapshot, provision
+from perf import install_logging
+from resilience import ResilientSandbox
+
+install_logging()
 
 _client = SandboxClient()
 
@@ -99,7 +109,17 @@ async def make_graph(config: RunnableConfig):
     """
     thread_id = (config.get("configurable") or {}).get("thread_id")
     if not thread_id:
-        return build_agent(LangSmithSandbox(sandbox=_UnboundSandbox()))
+        return build_agent(ResilientSandbox(sandbox=_UnboundSandbox()))
 
-    sandbox = await asyncio.to_thread(_acquire, str(thread_id))
-    return build_agent(LangSmithSandbox(sandbox=sandbox))
+    key = str(thread_id)
+    sandbox = await asyncio.to_thread(_acquire, key)
+    # `_acquire` is both the initial lookup and the recovery path: it re-creates the
+    # sandbox under the same thread-derived name if the container is gone. Handing it to
+    # the backend lets a connection failure mid-run be repaired without the model ever
+    # seeing an error string — which is exactly what it could not do in trace
+    # 019fde6d-d267-70f0-924b-e0cccae622be, where one 502 cost ~46s of a 101s run.
+    #
+    # Files written before the container died do not come back. That is a real loss, but
+    # a strictly smaller one than failing the tool call: /workspace/out is swept and
+    # published after every writing call, so anything already delivered is already out.
+    return build_agent(ResilientSandbox(sandbox=sandbox, reacquire=lambda: _acquire(key)))
