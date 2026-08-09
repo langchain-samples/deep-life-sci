@@ -1,15 +1,32 @@
 [project]
-name = "deepagents-testing"
+name = "pubmed-research-assistant"
 version = "0.1.0"
-description = "Minimal Deep Agents scaffold with LangSmith tracing"
+description = "A Deep Agents research assistant for life scientists: PubMed/PMC search, subagent fan-out, and sandboxed analysis"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.4",
+    # NCBI E-utilities and PMC OA are plain HTTP; pubmed.py/pmc.py drive them directly.
     "httpx>=0.28.1",
+    # Both halves of the model pair, one per MODEL_PROFILE in models.py. Anthropic goes
+    # over the native gateway path, OpenAI over the /v1 shim — see models.py.
     "langchain-anthropic>=1.5.3",
     "langchain-openai>=1.4.2",
+    # QuickJS is the root model's orchestration surface (programmatic tool calling), not
+    # an optional accelerator — the agent has no other way to reach the PubMed tools.
     "langchain-quickjs>=0.3.5",
+    # The four below arrive transitively via deepagents, but this package imports them
+    # directly, so they are pinned here rather than inherited:
+    #   langchain      -> AgentMiddleware/AgentState (artifacts.py)
+    #   langchain-core -> @tool, message and runnable types (pubmed.py, pmc.py, graph.py)
+    #   langgraph      -> push_ui_message and the `ui` state reducer (artifacts.py)
+    #   langsmith      -> SandboxClient, the container every `execute` call lands in
+    "langchain>=1.3.14",
+    "langchain-core>=1.5.3",
+    "langgraph>=1.2.10",
+    # [sandbox] is empty today (websockets is an unconditional langsmith dep); the extra
+    # is named so the sandbox transport stays declared if that ever moves behind it.
+    "langsmith[sandbox]>=0.10.15",
     "python-dotenv>=1.2.2",
 ]
 

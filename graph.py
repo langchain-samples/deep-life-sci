@@ -10,10 +10,15 @@ sandbox that has gone quiet, which is the only cleanup that survives the process
 killed. We never explicitly delete one, because "the user might come back to this
 thread" is true right up until it isn't.
 
-Point a chat UI at this:
+Point a chat UI at this — `./dev.sh` starts both halves, or by hand:
 
     uv run langgraph dev                     # this graph, on :2024
-    npx create-agent-chat-app                # UI, on :5173 -> deployment http://localhost:2024
+    cd ../agent-chat-ui && pnpm dev          # UI, on :3000 -> http://localhost:2024
+
+The UI must serve `/ui/*` from its own origin — a `next.config.mjs` rewrite to :2024.
+`/ui/{graph}` hands back a script tag with a host-relative `src`, so the browser resolves
+it against the page, not the API. Cross-origin (hosted Agent Chat, Studio) it 404s and
+`ArtifactMiddleware`'s components render as an empty div with the run otherwise intact.
 
 **Clients should request `streamMode: ["messages", "updates"]`.** Synthesis is the
 longest single span in a run — 23-32s in the traces from thread

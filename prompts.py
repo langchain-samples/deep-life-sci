@@ -48,7 +48,7 @@ the first 40 of an 8,000-hit query gives you the top hits of an over-broad searc
 the 40 papers that best answer the question — and it hides from the user that 7,960
 others matched. Precision has to come from the query itself.
 
-Target **no more than 200 papers**. Work in two steps.
+Most common pattern for searching:
 
 **Step 1 — probe with `retmax: 0`.** Returns `count`, `query_translation` and `warnings`
 without fetching records, so it is cheap. Iterate here.
@@ -70,15 +70,16 @@ To **narrow** (in rough order of how much precision they buy):
 To **broaden**: drop the narrowest AND clause, widen the dates, add synonyms with OR, or
 move from `[tiab]` to unrestricted terms.
 
-Iterate until `count` is at or under 200. Two or three probes is normal — they cost
-almost nothing. If a query cannot get under 200 without cutting something the user asked
-for, stop and say so, then proceed with the most defensible narrowing and tell the user
-exactly what you excluded and how many papers matched in total.
+Iterate until `count` is appropriate if you are planning to actually fan out subagents 
+to read the papers (10 max) or their abstracts (200 max). Multiple probes is normal if 
+necessary — they cost almost nothing. If a query cannot get to the appropriate number without
+cutting something the user asked for, stop and say so, then proceed with the most defensible 
+narrowing and tell the user exactly what you excluded and how many papers matched in total.
 
 **Step 2 — fetch the records** once the count is right:
 
 ```js
-const res = await tools.pubmedSearch({ term, retmax: 200, sort: "relevance" });
+const res = await tools.pubmedSearch({ term, sort: "relevance" });
 res.records; // [{ pmid, title, first_author, last_author, year, journal, doi }]
 ```
 
@@ -199,6 +200,9 @@ const answers = await Promise.all(Object.values(full).map(async (r) => ({
 answers;
 ```
 
+Never fan out more than 200 subagents concurrently to read abstracts or more than 10
+concurrently to read papers--this becomes prohibitively expensive.
+
 ### Figures
 
 Try captions first — `pmcLocate` already gave you every caption in full, and they answer
@@ -280,9 +284,15 @@ out; // the printed output, as a string
 ```
 
 - Write ONE bundle file, not one file per paper. Every `writeFile` is a round trip.
-- A heredoc is fine for a Python *script*. Never put abstract *text* in a heredoc, an
-  `echo`, or any other shell argument — it breaks on quoting and on argument length.
-  Data goes through `tools.writeFile`, which has neither limit.
+- A heredoc is fine for a Python *script*. But the script is inside a JS template
+  literal, so **JavaScript eats backslashes before Python ever sees them**: `"a\\nb"` in
+  your `eval` arrives as a real line break and Python dies with `unterminated string
+  literal`. Write `\\\\n` for a literal backslash-n, and remember that a backtick ends
+  the literal and `${...}` interpolates.
+  Better: keep text out of the script entirely. Labels, titles, annotations and abstract
+  text all go through `tools.writeFile` + `JSON.stringify`, which escapes correctly and
+  has no length limit (a shell argument has neither property). The script should contain
+  logic, not strings.
 - Never make `records` the final expression of an `eval`, and never `console.log`
   abstract text. It would be truncated and would spend your context for nothing. End
   with a small summary object.
@@ -329,8 +339,7 @@ df.to_excel("/workspace/out/papers-by-year.xlsx", index=False)
 ```
 
 Both preview as a table, so pick by what the user will do with it. One row per paper
-with a `pmid` column is almost always the right shape — it is what makes the export
-checkable against the corpus you reported.
+with a `pmid` column is often the right shape.
 
 ## Asking a question of many papers
 
@@ -339,7 +348,7 @@ text already in its prompt. The subagents do no I/O of their own — that is wha
 large fan-out safe.
 
 Dispatch every paper in a single `Promise.all`, not in successive batches. A corpus of
-100–200 papers means 100–200 subagents, and that is fine and expected — they run
+100-200 papers means 100-200 subagents, and that is fine and expected — they run
 concurrently and each one is small. Splitting the fan-out across several `eval` calls
 just adds a slow round trip through the orchestrator for no benefit.
 
