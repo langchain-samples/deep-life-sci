@@ -33,10 +33,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Callable
 
 from deepagents.backends import LangSmithSandbox
+from deepagents.backends.protocol import ExecuteResponse
 from langsmith.sandbox import SandboxConnectionError
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,36 @@ logger = logging.getLogger(__name__)
 DEFAULT_ATTEMPTS = 4
 DEFAULT_BASE_DELAY = 0.5
 DEFAULT_MAX_DELAY = 4.0
+
+# `execute()`/`aexecute()` is the one place every shell command the model can issue
+# passes through (see class docstring), which makes it the only place a package
+# install can be blocked for good instead of "for as long as the model reads the
+# prompt telling it not to." Observed in trace 019fe937-1bf6-7d61-9ca8-658c53dfd8ae:
+# the model tried `pip install openpyxl`, hit PEP 668's externally-managed-environment
+# error, retried with `--break-system-packages`, and only then got what
+# `build_snapshot.py` was already supposed to have baked in. A stale or incomplete
+# snapshot should fail loudly and tell the model to say so — not send it down a
+# pip-install detour that burns a network round trip and can silently drift the
+# sandbox away from the pinned versions in `build_snapshot.py`.
+_INSTALL_COMMAND_RE = re.compile(
+    r"(?i)\b(pip3?\s+install|python3?\s+-m\s+pip\s+install|easy_install|"
+    r"conda\s+install|mamba\s+install|apt(?:-get)?\s+install)\b"
+)
+
+_INSTALL_BLOCKED_MESSAGE = (
+    "Blocked: installing packages at runtime is disabled. This sandbox is "
+    "pre-provisioned (numpy, pandas, scipy, matplotlib, openpyxl, python-docx, "
+    "python-pptx) by build_snapshot.py — use one of those instead of installing a "
+    "substitute. If the task genuinely needs something outside that list, say so "
+    "in your final answer rather than trying to install it."
+)
+
+
+def _blocked_execute_response() -> ExecuteResponse:
+    return ExecuteResponse(
+        output=f"{_INSTALL_BLOCKED_MESSAGE}\n\n[Command failed with exit code 1]",
+        exit_code=1,
+    )
 
 
 class ResilientSandbox(LangSmithSandbox):
@@ -128,8 +160,11 @@ class ResilientSandbox(LangSmithSandbox):
 
         This is the single choke point for the async filesystem tools — `als`,
         `aread`, `awrite` and `aedit` all delegate here — so wrapping it covers
-        every sandbox operation a subagent or the interpreter can reach.
+        every sandbox operation a subagent or the interpreter can reach. It is also
+        where package installs are blocked; see `_INSTALL_COMMAND_RE`.
         """
+        if _INSTALL_COMMAND_RE.search(command):
+            return _blocked_execute_response()
         delay = self._base_delay
         for attempt in range(1, self._attempts + 1):
             generation = self._rebind_generation
@@ -161,7 +196,13 @@ class ResilientSandbox(LangSmithSandbox):
         Used by `build_snapshot.py` and by provisioning, which run before there is
         an event loop. Re-acquire is deliberately not attempted here: the sync path
         runs at startup, where a failure is better surfaced loudly than papered over.
+
+        Note: `build_snapshot.py` and `agent.py:provision()` call `sandbox.run()` on
+        the raw (unwrapped) sandbox directly, not this method, so the install guard
+        below never blocks the provisioning step that's supposed to install packages.
         """
+        if _INSTALL_COMMAND_RE.search(command):
+            return _blocked_execute_response()
         delay = self._base_delay
         for attempt in range(1, self._attempts + 1):
             try:

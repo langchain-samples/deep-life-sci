@@ -71,7 +71,7 @@ To **broaden**: drop the narrowest AND clause, widen the dates, add synonyms wit
 move from `[tiab]` to unrestricted terms.
 
 Iterate until `count` is appropriate if you are planning to actually fan out subagents 
-to read the papers (10 max) or their abstracts (200 max). Multiple probes is normal if 
+to read the papers (10 max) or their abstracts (300 max). Multiple probes is normal if 
 necessary — they cost almost nothing. If a query cannot get to the appropriate number without
 cutting something the user asked for, stop and say so, then proceed with the most defensible 
 narrowing and tell the user exactly what you excluded and how many papers matched in total.
@@ -91,9 +91,8 @@ records as a file, write them yourself with `tools.writeFile`.
 **Check `res.warnings` before you trust anything.** PubMed does not reject malformed
 queries — it silently rewrites them and returns a large, confident, wrong result set. A
 mistyped field tag is dropped and the search runs across every field, which can return
-millions of irrelevant hits that look exactly like a successful search. `warnings` also
-tells you when the result set is over target. If it is non-empty, fix the query and
-search again rather than reporting the results.
+millions of irrelevant hits that look exactly like a successful search. If it is non-empty, 
+fix the query and search again rather than reporting the results.
 
 `res.query_translation` is what PubMed actually searched, including its MeSH expansion
 (`IL-6` becomes `"interleukin 6"[Supplementary Concept] OR ...`). Show it to the user
@@ -200,7 +199,7 @@ const answers = await Promise.all(Object.values(full).map(async (r) => ({
 answers;
 ```
 
-Never fan out more than 200 subagents concurrently to read abstracts or more than 10
+Never fan out more than 300 subagents concurrently to read abstracts or more than 10
 concurrently to read papers--this becomes prohibitively expensive.
 
 ### Figures
@@ -255,11 +254,19 @@ of its own — everything reaches outside through `tools.*`. Every PubMed workfl
 starts here.
 
 `tools.execute({ command })` is a shell in a Linux sandbox with real Python 3 and numpy,
-pandas, scipy and matplotlib already installed. Use it for statistics, aggregation over
-more rows than you want to reason about by hand, and plots. It returns the command's
+pandas, scipy, matplotlib, openpyxl, python-docx and python-pptx already installed. Use
+it for statistics, aggregation over more rows than you want to reason about by hand,
+plots, and any spreadsheet/Word/PowerPoint deliverable. It returns the command's
 combined output as a **string**, ending in a line like
 `[Command succeeded with exit code 0]` — check that line, a failed script still returns
 a string rather than throwing.
+
+**`pip install` is blocked, not just discouraged** — the sandbox rejects it before it
+ever reaches the network. A missing-module error means you reached for a library that
+isn't on the pre-provisioned list above, not that you need to install one. Build the
+deliverable with what's there (openpyxl/pandas for `.xlsx`, python-docx for `.docx`,
+python-pptx for `.pptx`) instead. If a task genuinely needs something outside that list,
+say so in your final answer rather than trying to install it.
 
 `tools.readFile`, `tools.writeFile`, `tools.ls` and `tools.glob` operate on *that same*
 filesystem, so a file you write in JS is a file Python can open.
@@ -341,6 +348,25 @@ df.to_excel("/workspace/out/papers-by-year.xlsx", index=False)
 Both preview as a table, so pick by what the user will do with it. One row per paper
 with a `pmid` column is often the right shape.
 
+Word or PowerPoint, when that's the format asked for — python-docx and python-pptx are
+already installed, don't reach for anything else:
+
+```python
+from docx import Document
+doc = Document()
+doc.add_heading("Phase 3 GLP-1 Trials", level=1)
+doc.add_paragraph("43 trials found; see table below for details.")
+doc.save("/workspace/out/glp1-summary.docx")
+```
+
+```python
+from pptx import Presentation
+prs = Presentation()
+slide = prs.slides.add_slide(prs.slide_layouts[1])
+slide.shapes.title.text = "GLP-1 Trial Landscape"
+prs.save("/workspace/out/glp1-summary.pptx")
+```
+
 ## Asking a question of many papers
 
 Fetch first, then dispatch one `abstract-analyst` subagent per paper with the abstract
@@ -348,7 +374,7 @@ text already in its prompt. The subagents do no I/O of their own — that is wha
 large fan-out safe.
 
 Dispatch every paper in a single `Promise.all`, not in successive batches. A corpus of
-100-200 papers means 100-200 subagents, and that is fine and expected — they run
+100-300 papers means 100-300 subagents, and that is fine and expected — they run
 concurrently and each one is small. Splitting the fan-out across several `eval` calls
 just adds a slow round trip through the orchestrator for no benefit.
 
@@ -373,6 +399,11 @@ const answers = await Promise.all(
 );
 answers; // returned to you for synthesis
 ```
+
+If you pass a `responseSchema` to `task`, every `type` must be a single JSON Schema type
+string. Union types like `["string", "null"]` are rejected and abort the whole fan-out —
+for a field that may not apply, use `type: "string"` and tell the subagent to answer
+`"none"`.
 
 Keep the `pmid` alongside each answer as above, so citations can't drift. Then
 synthesize: group the answers, note where the abstracts disagree or are silent, and

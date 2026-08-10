@@ -46,6 +46,29 @@ PROFILES = {
 }
 DEFAULT_PROFILE = "anthropic"
 
+# Wall-clock ceiling on a single analyst request. Nothing else imposes one.
+#
+# langchain-anthropic treats an unset timeout as a *meaningful* None and forwards it
+# (chat_models.py:1269), so the client ends up as `httpx.Timeout(timeout=None)` — no
+# connect, read, write or pool deadline at any layer. The Anthropic SDK's own 10-minute
+# DEFAULT_TIMEOUT never applies either: messages.py:1030 only computes a request timeout
+# when `client.timeout == DEFAULT_TIMEOUT`, and ours is None. A socket that stalls is
+# then waited on forever. In trace 019fe907-abed-70c0-b589-2cfcb3ef5d2b one
+# abstract-analyst's ChatAnthropic call hung with 13 runs blocked behind it and was
+# still pending 40+ minutes later; CodeInterpreterMiddleware(timeout=900) did not free
+# it, because the eval was inside the same stuck await.
+#
+# 30s is chosen against the measured distribution, not by feel: warm fan-out waves run
+# ~1.2-4.0s per call, and the first wave of a run pays a flat ~15s tax at the origin
+# (the gateway reports it as `server-timing: x-originResponse;dur=16616`), with the
+# slowest first-wave call observed at 18.86s. That leaves ~11s of headroom over the
+# worst legitimate case. Anything slower is the pathology this is here to kill.
+#
+# max_retries stays at its default of 2, which is what makes this safe: a timeout is a
+# retryable failure, so a single stalled socket costs one analyst ~30s and a retry
+# rather than the whole run. Raise this if a profile's subagent legitimately runs longer.
+SUBAGENT_TIMEOUT_SECONDS = 30.0
+
 
 def active_profile() -> str:
     name = os.environ.get("MODEL_PROFILE", DEFAULT_PROFILE).strip().lower()
@@ -102,7 +125,13 @@ def root_model(**kwargs):
 
 
 def subagent_model(**kwargs):
-    """The per-abstract analyst's model — the cheaper one of the pair."""
+    """The per-abstract analyst's model — the cheaper one of the pair.
+
+    Timed out by default; see SUBAGENT_TIMEOUT_SECONDS for why one is mandatory here.
+    `timeout` is the constructor alias on both ChatAnthropic and ChatOpenAI, so this
+    works on either profile, and an explicit `timeout=` from a caller still wins.
+    """
+    kwargs.setdefault("timeout", SUBAGENT_TIMEOUT_SECONDS)
     return _build(PROFILES[active_profile()]["subagent"], **kwargs)
 
 

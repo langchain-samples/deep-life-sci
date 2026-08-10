@@ -32,6 +32,11 @@ PACKAGES = [
     # pandas' .to_excel() engine. Without it every xlsx write raises ImportError at
     # the end of an otherwise successful analysis, which is the worst possible time.
     "openpyxl==3.1.5",
+    # Office deliverables beyond spreadsheets. The agent must never pip install its
+    # own packages mid-run (see prompts.py) — anything it might need to hand back to
+    # the user has to already be here.
+    "python-docx==1.2.0",
+    "python-pptx==1.0.2",
 ]
 
 # The workspace is baked in so the agent never has to create it, and so a prompt that
@@ -42,14 +47,20 @@ BUILD = (
 )
 
 VERIFY = (
-    'python3 -c "import numpy, pandas, scipy, matplotlib, openpyxl; '
+    'python3 -c "import numpy, pandas, scipy, matplotlib, openpyxl, docx, pptx; '
     "matplotlib.use('Agg'); import matplotlib.pyplot as plt; "
     "plt.plot([1, 2, 3]); plt.savefig('/workspace/out/_smoke.png'); "
     # Exercise the xlsx path rather than just importing openpyxl: the failure mode
     # worth catching is pandas not finding the engine, which an import can't see.
     "pandas.DataFrame({'a': [1]}).to_excel('/workspace/out/_smoke.xlsx', index=False); "
+    # Same logic for docx/pptx: importing the module proves nothing about whether it
+    # can actually write a file into this sandbox.
+    "d = docx.Document(); d.add_paragraph('smoke'); d.save('/workspace/out/_smoke.docx'); "
+    "p = pptx.Presentation(); p.slides.add_slide(p.slide_layouts[0]); "
+    "p.save('/workspace/out/_smoke.pptx'); "
     "print(numpy.__version__, pandas.__version__, scipy.__version__, "
-    'matplotlib.__version__, openpyxl.__version__)"'
+    "matplotlib.__version__, openpyxl.__version__, docx.__version__, "
+    'pptx.__version__)"'
 )
 
 

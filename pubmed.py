@@ -42,11 +42,6 @@ SUMMARY_CHUNK = 200
 FETCH_CHUNK = 200
 # esearch silently clamps retmax to this; clamp explicitly so the caller knows.
 MAX_RETMAX = 9999
-# The corpus the agent should be aiming a query at. Not a hard cap — the point is to
-# make the agent narrow the *query* until the result set is genuinely this size, rather
-# than let it truncate a million-hit search to an arbitrary first-N and call that "the
-# most relevant papers".
-TARGET_MAX_RESULTS = 200
 # Above this many records, also write the full list to disk for the user's convenience.
 DUMP_THRESHOLD = 50
 
@@ -314,9 +309,7 @@ async def pubmed_search(
         count: total matches in PubMed (may be far larger than the records returned)
         returned: how many records are in this response
         query_translation: what PubMed ACTUALLY searched, with MeSH expansion
-        warnings: list of ways PubMed altered the query, plus a notice when `count`
-            exceeds the 200-paper target. Empty means the query ran as written and the
-            result set is a workable size.
+        warnings: list of ways PubMed altered the query. Empty means the query ran as written
         records: list of {pmid, title, first_author, last_author, year, journal, doi}
         saved_to_host: host filesystem path to a JSON dump when the result set is
             large, else None. This is an operator-side archive — it is not reachable
@@ -340,17 +333,6 @@ async def pubmed_search(
     # response, so _collect_warnings alone cannot see it.
     warnings = check_field_tags(term) + _collect_warnings(result)
     count = int(result.get("count", 0) or 0)
-
-    # Surface an oversized result set the same way as a mangled query: as something the
-    # agent must act on, not a number it can quietly slice.
-    if count > TARGET_MAX_RESULTS:
-        warnings.append(
-            f"this query matches {count:,} papers, well over the {TARGET_MAX_RESULTS} "
-            f"target. Narrow it — add field tags ([tiab], [majr]), tighten the date "
-            f"range, AND in a more specific concept, or exclude with NOT — and search "
-            f"again. Do NOT just take the first N of this set: they are the top hits "
-            f"for an over-broad query, not the most relevant papers for the question."
-        )
 
     pmids = result.get("idlist", [])
     records = []

@@ -66,7 +66,17 @@ fi
 if listening 2024; then
   echo "[dev] :2024 already serving — reusing it"
 else
-  start agent "$ROOT" uv run --group dev langgraph dev --no-browser
+  # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies the
+  # only worker and every later run queues behind it. That bites hardest across restarts:
+  # the server persists its queue to .langgraph_api/, so a run abandoned by a Ctrl-C is
+  # resumed on the next boot, takes the worker, and starves the query you just typed —
+  # which sits `pending` forever, produces no LangSmith trace, and looks like a hang while
+  # the console streams the *old* run's progress. Raising it lets a stale run finish
+  # alongside a new one instead of blocking it.
+  #
+  # This makes the asyncio.to_thread rule in cache_io.py load-bearing rather than
+  # theoretical: runs now share one event loop, so a blocking call stalls its neighbours.
+  start agent "$ROOT" uv run --group dev langgraph dev --no-browser --n-jobs-per-worker 5
 fi
 
 if listening 3000; then

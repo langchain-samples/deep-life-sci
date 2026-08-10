@@ -72,7 +72,7 @@ SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py")
 PROVISION = (
     f"mkdir -p {WORKSPACE}/out && "
     "pip install --break-system-packages --quiet "
-    "numpy pandas scipy matplotlib openpyxl 2>&1 | tail -2"
+    "numpy pandas scipy matplotlib openpyxl python-docx python-pptx 2>&1 | tail -2"
 )
 
 
@@ -108,37 +108,57 @@ def build_agent(backend):
     fetch_figures, fetch_supplementary = make_sandbox_tools(backend)
 
     # Subagents inherit the parent's tools unless they declare their own, so every leaf
-    # sets `tools: []` explicitly. Without it each analyst would get the PubMed tools and
-    # a shell into the shared sandbox — contradicting its own description and the no-I/O
-    # promise that makes a 100-way fan-out safe.
+    # sets `tools: []` explicitly. That governs the *parent's* tools — the PubMed ones —
+    # and is necessary but not sufficient.
     #
-    # The two leaves differ in whether they get a filesystem at all, and that difference
-    # is load-bearing:
+    # `middleware: []` does NOT mean "no middleware". deepagents unconditionally prepends
+    # FilesystemMiddleware + summarization + PatchToolCalls + prompt caching to whatever
+    # a spec declares (graph.py:667), so a leaf built with `middleware: []` still ends up
+    # holding the default filesystem toolset:
+    #
+    #     ['delete', 'edit_file', 'execute', 'glob', 'grep', 'ls', 'read_file',
+    #      'write_file']
+    #
+    # — `execute` included, i.e. a shell into the shared sandbox. The documented way to
+    # narrow it is to pass a *configured FilesystemMiddleware instance*, which deepagents
+    # substitutes for the default one instead of stacking on top. Both leaf kinds do that.
 
     def text_leaf(spec: dict) -> dict:
-        """An analyst whose payload arrives in its prompt. Genuinely no tools.
+        """An analyst whose payload arrives in its prompt. Nothing it needs is on disk.
 
-        Their prompts say "you have no tools and cannot retrieve anything". Handing them
-        `read_file` anyway made that false, and the models used it: in trace
-        019fde70-69b6-7190-a969-a6a60e52894d, three of nine abstract-analysts called
-        `read_file` on paths they invented — `/dev/null` twice, and
+        Their prompts say "you have no tools and cannot retrieve anything". `tools: []`
+        alone did not make that true — see the note above — so this narrows the default
+        filesystem to the single tool FilesystemMiddleware refuses to drop
+        (filesystem.py:1648 requires `read_file`). One tool the leaf has no use for is
+        the floor; the point is that `execute`, `grep`, `write_file` and the rest are
+        gone.
+
+        The cost of a leaf that can reach the filesystem is measured, not hypothetical.
+        In trace 019fde70-69b6-7190-a969-a6a60e52894d three of nine abstract-analysts
+        called `read_file` on paths they invented — `/dev/null` twice, and
         `/tmp/pubmed_abstract.txt` — looking for an abstract that was already in the
         prompt. Each error bought a second model turn, and those three were the slowest
-        analysts in the fan-out (21.0s, 21.5s, 24.0s against 17.3s for the clean ones),
-        so they set the critical path the whole `eval` waited on.
+        analysts in the fan-out (21.0s, 21.5s, 24.0s against 17.3s for the clean ones).
+        In 019fe907-abed-70c0-b589-2cfcb3ef5d2b, with the full default toolset in hand,
+        6 of 30 analysts called tools and one spent 36.1s in a single `grep` — a 57.0s
+        task against a 16.1s median, setting the critical path the whole `eval` waited on.
 
-        Every one of those calls also opened a sandbox WebSocket, which is the same
-        connection that returned HTTP 502 and destroyed a completed 18-way fan-out
-        (see resilience.py). Removing the tool removes both costs.
+        Every such call also opens a sandbox WebSocket, which is the same connection that
+        returned HTTP 502 and destroyed a completed 18-way fan-out (see resilience.py).
         """
-        return {**spec, "model": subagent_model(), "tools": [], "middleware": []}
+        return {
+            **spec,
+            "model": subagent_model(),
+            "tools": [],
+            "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
+        }
 
     def image_leaf(spec: dict) -> dict:
         """An analyst that must open a file to do its job.
 
-        figure-analyst is handed a sandbox path, not an image: `read_file` on that path
-        is what turns it into something the model can actually see. read_file is also
-        the floor here — FilesystemMiddleware rejects a tools list that omits it.
+        Same restriction as text_leaf, for the opposite reason: figure-analyst is handed
+        a sandbox path, not an image, and `read_file` on that path is what turns it into
+        something the model can actually see.
         """
         return {
             **spec,

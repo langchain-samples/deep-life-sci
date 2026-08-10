@@ -147,3 +147,8 @@ server-side automatically.
 - **Prompt changes are the main tuning lever.** One line telling the model to print
   numbers instead of reading its plot back cut root context from 115k to 31k chars. Treat
   `prompts.py` as production code.
+
+
+## Writing prompts
+
+Agent prompts should be as concise and general as possible. Avoid 
