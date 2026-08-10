@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -128,6 +129,14 @@ def _min_interval() -> float:
     return 0.11 if os.environ.get("NCBI_API_KEY") else 0.34
 
 
+# _throttle only paces *this* process; NCBI counts per api_key/IP, so a 429 still
+# arrives whenever something else is sharing the quota. One fixed 1.5s retry was not
+# enough — a 429 mid-fan-out propagated out of the PTC bridge and killed a whole run.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+RETRY_ATTEMPTS = 4
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 30.0
+
 _rate_lock = asyncio.Lock()
 _last_call = 0.0
 
@@ -141,8 +150,36 @@ async def _throttle() -> None:
         _last_call = time.monotonic()
 
 
+def _retry_after(resp: httpx.Response) -> float | None:
+    """Seconds from a Retry-After header, if it carries a usable delta-seconds value."""
+    raw = resp.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw.strip()))
+    except ValueError:
+        # The HTTP-date form is legal too; not worth parsing for a delay we already
+        # have a sane default for.
+        return None
+
+
+def _backoff_delay(attempt: int, resp: httpx.Response) -> float:
+    """Seconds to wait before retry `attempt` + 1. Server's Retry-After wins if sent."""
+    after = _retry_after(resp)
+    if after is not None:
+        return min(after, RETRY_MAX_DELAY)
+    ceiling = min(RETRY_BASE_DELAY * 2 ** (attempt - 1), RETRY_MAX_DELAY)
+    # Jitter, because the callers that trip a 429 are concurrent by construction: a
+    # fan-out's searches would otherwise back off in lockstep and collide again.
+    return random.uniform(ceiling / 2, ceiling)
+
+
 async def _request(util: str, **params: Any) -> httpx.Response:
-    """Call an E-utility, retrying once on 429/5xx. Raises on non-200."""
+    """Call an E-utility, retrying 429/5xx with jittered backoff. Raises on non-200.
+
+    Retries are safe because every E-utility call here is a read; the POST branch below
+    is only a workaround for URL length, not a mutation.
+    """
     payload = {**_common_params(), **{k: v for k, v in params.items() if v is not None}}
     url = f"{BASE_URL}{util}.fcgi"
     # Long id lists must go in the body — GET dies at ~3.3k chars of URL with a 414
@@ -150,7 +187,7 @@ async def _request(util: str, **params: Any) -> httpx.Response:
     use_post = len(str(payload.get("id", ""))) > POST_THRESHOLD * 9
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        for attempt in (1, 2):
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
             await _throttle()
             if use_post:
                 resp = await client.post(url, data=payload)
@@ -158,14 +195,16 @@ async def _request(util: str, **params: Any) -> httpx.Response:
                 resp = await client.get(url, params=payload)
             if resp.status_code == 200:
                 return resp
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt == 1:
-                await asyncio.sleep(1.5)
+            retryable = resp.status_code in RETRY_STATUSES
+            if retryable and attempt < RETRY_ATTEMPTS:
+                await asyncio.sleep(_backoff_delay(attempt, resp))
                 continue
             raise PubMedError(
                 f"{util} returned HTTP {resp.status_code}"
+                + (f" on all {attempt} attempts" if retryable else "")
                 + (" (id list too long for GET)" if resp.status_code == 414 else "")
             )
-    raise PubMedError(f"{util} failed after retry")
+    raise PubMedError(f"{util} exhausted {RETRY_ATTEMPTS} attempts")
 
 
 def validate_pmids(pmids: list[str]) -> tuple[list[str], list[str]]:
