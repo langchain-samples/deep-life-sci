@@ -409,6 +409,9 @@ Keep the `pmid` alongside each answer as above, so citations can't drift. Then
 synthesize: group the answers, note where the abstracts disagree or are silent, and
 report with PMIDs. Prefer one `eval` call that does search -> fetch -> fan out -> collect
 over several round trips.
+
+Take advantage of parallelism. Avoid reading over papers or abstracts yourself one-by-one
+whenever possible--delegate this task to parallel subagents.
 """
 
 

@@ -164,6 +164,32 @@ class ArtifactMiddleware(AgentMiddleware):
         # get no artifact at all.
         self._seen: dict[str, dict[str, str]] = {}
 
+    def _known(self, request: ToolCallRequest) -> dict[str, str]:
+        """Fingerprints already published on this thread: `{path: fingerprint}`.
+
+        In-memory alone is not enough. The server rebuilds the graph — and so this
+        middleware — once per run, while the sandbox is keyed to the thread and outlives
+        it. A fresh `_seen` therefore sees turn 1's chart still sitting in `out/`, calls
+        it new, and republishes it under turn 2's answer, which is how a chart reappears
+        above a CSV the user asked for afterwards.
+
+        The `ui` channel is checkpointed with the thread, so the artifacts already
+        published are the durable record of what has been seen. In-memory entries are
+        the fresher of the two (state lags within a turn) and win.
+        """
+        seen = self._seen.setdefault(self._thread_key(request), {})
+        for ui_message in (request.state or {}).get("ui") or []:
+            # `ui` also carries removal records and, in principle, entries pushed by
+            # anything else; only well-formed artifact metadata counts.
+            metadata = getattr(ui_message, "get", lambda _k: None)("metadata") or {}
+            if not isinstance(metadata, dict):
+                continue
+            path = metadata.get("artifact_path")
+            fingerprint = metadata.get("artifact_fingerprint")
+            if path and fingerprint:
+                seen.setdefault(path, fingerprint)
+        return seen
+
     async def awrap_tool_call(self, request: ToolCallRequest, handler):  # noqa: ANN001
         result = await handler(request)
 
@@ -209,9 +235,9 @@ class ArtifactMiddleware(AgentMiddleware):
         if not listing:
             return
 
-        seen = self._seen.setdefault(self._thread_key(request), {})
+        seen = self._known(request)
 
-        fresh: list[tuple[str, int]] = []
+        fresh: list[tuple[str, int, str]] = []
         for info in listing:
             path = info.get("path")
             if not path:
@@ -225,7 +251,7 @@ class ArtifactMiddleware(AgentMiddleware):
             if seen.get(path) == fingerprint:
                 continue
             seen[path] = fingerprint
-            fresh.append((path, size))
+            fresh.append((path, size, fingerprint))
 
         if not fresh:
             return
@@ -234,20 +260,29 @@ class ArtifactMiddleware(AgentMiddleware):
 
         # Announce oversized files without downloading them at all — the point of the
         # cap is to not move the bytes.
-        inline = [(p, s) for p, s in fresh if s <= self.max_inline_bytes]
-        for path, size in fresh:
+        inline = [(p, s, f) for p, s, f in fresh if s <= self.max_inline_bytes]
+        for path, size, fingerprint in fresh:
             if size > self.max_inline_bytes:
-                self._push(path, size, data=None, message=message)
+                self._push(path, size, None, message, fingerprint)
 
         if not inline:
             return
 
-        downloads = await self.backend.adownload_files([p for p, _ in inline])
-        for (path, size), response in zip(inline, downloads):
+        downloads = await self.backend.adownload_files([p for p, _, _ in inline])
+        for (path, size, fingerprint), response in zip(inline, downloads):
             if response.error or response.content is None:
                 logger.warning("could not download %s: %s", path, response.error)
+                # Nothing was published, so the fingerprint must not stick — otherwise
+                # the retry on the next sweep is suppressed and the file never appears.
+                self._seen.get(self._thread_key(request), {}).pop(path, None)
                 continue
-            self._push(path, size or len(response.content), response.content, message)
+            self._push(
+                path,
+                size or len(response.content),
+                response.content,
+                message,
+                fingerprint,
+            )
 
     def _push(
         self,
@@ -255,6 +290,7 @@ class ArtifactMiddleware(AgentMiddleware):
         size: int,
         data: bytes | None,
         message: Any,
+        fingerprint: str,
     ) -> None:
         import base64
 
@@ -279,6 +315,9 @@ class ArtifactMiddleware(AgentMiddleware):
             # Stable per path, so a chart the agent regenerates replaces its previous
             # card instead of stacking a second copy under the same answer.
             id=f"artifact:{path}",
-            metadata={"artifact_path": path},
+            # The fingerprint rides along so the next turn — which gets a brand new
+            # middleware instance — can tell an already-published file from a new one
+            # by reading state alone. See `_known`.
+            metadata={"artifact_path": path, "artifact_fingerprint": fingerprint},
             message=message,
         )
