@@ -7,10 +7,11 @@ LANGSMITH_API_KEY stays dedicated to tracing.
 Pick a profile with MODEL_PROFILE in .env (or `MODEL_PROFILE=openai uv run agent.py`):
 
     anthropic  Sonnet 4.6 root  + Haiku 4.5 subagents   (default)
+    mixed      GPT-5.6 terra    + Haiku 4.5 subagents
     openai     GPT-5.6 terra    + GPT-5.6 luna
 
-The two profiles reach the gateway by different paths, and the difference is not
-cosmetic:
+A profile may mix providers, so the gateway path is chosen per *model* rather than per
+profile — see `_provider_for`. The two paths are not cosmetically different:
 
     /anthropic/v1/messages  (native)            prompt caching WORKS
     /v1/chat/completions    (OpenAI-compatible) prompt caching for Anthropic models
@@ -37,6 +38,14 @@ OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 PROFILES = {
     "anthropic": {
         "root": "claude-sonnet-4-6",
+        "subagent": "claude-haiku-4-5-20251001",
+    },
+    # terra root over Haiku leaves. The root swap is the measured win (README: 2 root
+    # turns vs 6, and root occupancy is where the latency lives); the leaves stay on
+    # Haiku because every sandbox-era measurement in this repo — the fan-out latency
+    # distribution behind SUBAGENT_TIMEOUT_SECONDS especially — was taken against it.
+    "mixed": {
+        "root": "openai/gpt-5.6-terra",
         "subagent": "claude-haiku-4-5-20251001",
     },
     "openai": {
@@ -96,10 +105,34 @@ def check_gateway_config() -> None:
         )
 
 
+def _provider_for(model: str) -> str:
+    """Which gateway path a model id belongs to.
+
+    The two paths take different id forms (see the module docstring), so the id itself
+    says which one it is: bare ids like `claude-sonnet-4-6` are the Anthropic-native
+    path, `provider/model` ids like `openai/gpt-5.6-terra` are the OpenAI-compatible
+    one. Deciding here rather than from the profile name is what lets one profile mix
+    providers, as `mixed` does.
+
+    An id that matches neither form is rejected rather than guessed at: sending a bare
+    OpenAI id down the native path returns a 501 from the gateway, which reads like an
+    outage rather than a typo.
+    """
+    if "/" in model:
+        return "openai"
+    if model.startswith("claude-"):
+        return "anthropic"
+    raise SystemExit(
+        f"Cannot tell which gateway path {model!r} needs. Anthropic-native ids are "
+        "bare ('claude-sonnet-4-6'); everything else must carry a provider prefix "
+        "('openai/gpt-5.6-terra')."
+    )
+
+
 def _build(model: str, **kwargs):
     check_gateway_config()
     key = os.environ["OPENAI_API_KEY"]
-    if active_profile() == "anthropic":
+    if _provider_for(model) == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
         return ChatAnthropic(
@@ -136,5 +169,14 @@ def subagent_model(**kwargs):
 
 
 def describe() -> str:
+    """One line naming the active pair and the path each half takes.
+
+    The path is worth printing, not just the model: it is what decides whether prompt
+    caching works, and a mixed profile sends its two halves different ways.
+    """
     p = active_profile()
-    return f"{p}: root={PROFILES[p]['root']} subagent={PROFILES[p]['subagent']}"
+    parts = []
+    for role in ("root", "subagent"):
+        model = PROFILES[p][role]
+        parts.append(f"{role}={model} ({_provider_for(model)})")
+    return f"{p}: {' '.join(parts)}"

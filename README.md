@@ -29,10 +29,14 @@ question across many papers at once. See `concept.md` for the design rationale.
 
    ```bash
    uv run agent.py                        # anthropic: sonnet-4.6 + haiku-4.5 (default)
+   MODEL_PROFILE=mixed uv run agent.py    # mixed: gpt-5.6-terra + haiku-4.5
    MODEL_PROFILE=openai uv run agent.py   # openai: gpt-5.6-terra + gpt-5.6-luna
    ```
 
-   Add profiles in `models.py`. Each picks its own gateway path automatically.
+   Add profiles in `models.py`. The gateway path is chosen per **model id**, not per
+   profile, so a profile may mix providers — which is what `mixed` does: an OpenAI root
+   over Anthropic leaves. Bare ids (`claude-sonnet-4-6`) take the Anthropic-native path,
+   provider-prefixed ids (`openai/gpt-5.6-terra`) take the OpenAI-compatible one.
 
    For Anthropic models `models.py` uses the gateway's **Anthropic-native** path, not
    its OpenAI-compatible one, because **their prompt caching only survives on the native
@@ -183,9 +187,15 @@ for a later call to reuse. Measured: Haiku wrote 96,019 cache tokens and read **
 paying the cache-write premium for a cache that never hits. The root, by contrast, got
 76% of its input from cache and that's the whole saving.
 
-If you stay on `anthropic`, disable caching on the subagent model and keep it on the
-root. The `openai` profile sidesteps this — its caching is automatic and server-side, so
-the leaves benefit instead of being penalised.
+This is a property of the *leaves*, not the profile, so it applies to any profile with
+Anthropic subagents — `anthropic` and `mixed` both. On either, disable caching on the
+subagent model and keep it on the root. The `openai` profile sidesteps it entirely: its
+caching is automatic and server-side, so the leaves benefit instead of being penalised.
+
+Under `mixed` the root escapes the trap for a different reason — an OpenAI root gets
+server-side caching on `/v1` and `AnthropicPromptCachingMiddleware` no-ops for it
+(deepagents constructs it with `unsupported_model_behavior="ignore"`), so nothing needs
+configuring at the root either.
 
 The one-search/one-fetch count holds in both: subagents never touch the network, so a
 run costs two HTTP requests regardless of how many papers are analysed.

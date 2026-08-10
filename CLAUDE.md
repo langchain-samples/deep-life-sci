@@ -15,7 +15,7 @@ the architectural choices. Both are worth reading before changing the shape of t
 
 ```bash
 uv run agent.py                        # one-shot CLI, default `anthropic` profile
-MODEL_PROFILE=openai uv run agent.py   # switch model pair (see models.py PROFILES)
+MODEL_PROFILE=mixed uv run agent.py    # switch model pair (see models.py PROFILES)
 uv run build_snapshot.py               # one-off: bake numpy/pandas/scipy/matplotlib
                                        # into the sandbox snapshot (~35s)
 ./dev.sh                               # both halves of the chat stack, Ctrl-C stops both
@@ -106,18 +106,21 @@ The auto-added `general-purpose` subagent *does* inherit the PubMed tools and an
 unrestricted filesystem including `execute`. Nothing routes work to it, but don't start.
 
 Root runs the larger model, leaves the cheaper one (`models.py:root_model` /
-`subagent_model`). Under the `anthropic` profile, subagent prompt caching is a net loss —
-each leaf is a fresh single-turn agent with a unique payload, so it pays cache-write
-premium for reads that never happen.
+`subagent_model`). Whenever the leaves are Anthropic (the default `anthropic`, and
+`mixed`), subagent prompt caching is a net loss — each leaf is a fresh single-turn agent
+with a unique payload, so it pays cache-write premium for reads that never happen.
 
 ### Model gateway
 
-`models.py` picks the gateway path per profile, and the difference is not cosmetic:
+`models.py` picks the gateway path per **model id**, not per profile — that's what lets
+`mixed` run a GPT-5.6 terra root over Haiku 4.5 leaves. The difference is not cosmetic:
 Anthropic models must use the **native** `/anthropic/v1/messages` path or prompt caching
 silently stops working (the OpenAI-compatible shim drops `cache_control`). On the native
 path the base URL must **not** end in `/v1` (the SDK appends it) and model ids are bare
 (`claude-sonnet-4-6`, not `anthropic/...`). OpenAI models use `/v1` and cache
-server-side automatically.
+server-side automatically. `_provider_for` reads the path off the id form — bare means
+native, prefixed means `/v1` — and rejects anything matching neither rather than sending
+it down the wrong path, which the gateway answers with a 501 that looks like an outage.
 
 ## Invariants worth preserving
 
