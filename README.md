@@ -1,8 +1,9 @@
 # PubMed research assistant
 
 A [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) demo for life
-sciences: searches PubMed, retrieves abstracts, and fans out subagents to answer a
-question across many papers at once. See `concept.md` for the design rationale.
+sciences: searches PubMed, retrieves abstracts and PMC full text, fans out subagents to
+answer a question across many papers at once, and computes and plots in a sandboxed
+Python container. See `docs/concept.md` for the design rationale.
 
 ## Setup
 
@@ -28,17 +29,17 @@ question across many papers at once. See `concept.md` for the design rationale.
    **Switching model profiles** — `MODEL_PROFILE` selects the pair:
 
    ```bash
-   uv run agent.py                        # anthropic: sonnet-4.6 + haiku-4.5 (default)
-   MODEL_PROFILE=mixed uv run agent.py    # mixed: gpt-5.6-terra + haiku-4.5
-   MODEL_PROFILE=openai uv run agent.py   # openai: gpt-5.6-terra + gpt-5.6-luna
+   uv run agent                        # anthropic: sonnet-4.6 + haiku-4.5 (default)
+   MODEL_PROFILE=mixed uv run agent    # mixed: gpt-5.6-terra + haiku-4.5
+   MODEL_PROFILE=openai uv run agent   # openai: gpt-5.6-terra + gpt-5.6-luna
    ```
 
-   Add profiles in `models.py`. The gateway path is chosen per **model id**, not per
+   Add profiles in `research_agent/models.py`. The gateway path is chosen per **model id**, not per
    profile, so a profile may mix providers — which is what `mixed` does: an OpenAI root
    over Anthropic leaves. Bare ids (`claude-sonnet-4-6`) take the Anthropic-native path,
    provider-prefixed ids (`openai/gpt-5.6-terra`) take the OpenAI-compatible one.
 
-   For Anthropic models `models.py` uses the gateway's **Anthropic-native** path, not
+   For Anthropic models `research_agent/models.py` uses the gateway's **Anthropic-native** path, not
    its OpenAI-compatible one, because **their prompt caching only survives on the native
    path** — verified against the live gateway:
 
@@ -55,14 +56,15 @@ question across many papers at once. See `concept.md` for the design rationale.
    OpenAI models on `/v1` cache automatically and server-side — the `openai` profile
    measured 103k cache reads with no configuration at all.
 
-   `agent.py` calls `load_dotenv(override=True)` deliberately — without it, a
+   `research_agent/cli.py` calls `load_dotenv(override=True)` deliberately — without it, a
    `LANGSMITH_PROJECT` already exported in your shell silently captures this project's
    traces.
 
 2. Run it:
 
    ```bash
-   uv run agent.py
+   uv run agent            # one-shot CLI
+   ./scripts/dev.sh        # or the chat stack: graph server + UI
    ```
 
 ## How it works
@@ -105,25 +107,40 @@ Booting a bare sandbox and `pip install`ing the stack costs ~30s per run. Bake i
 snapshot once instead:
 
 ```bash
-uv run build_snapshot.py     # ~35s, once
+uv run scripts/build_snapshot.py     # ~35s, once
 ```
 
 That freezes a sandbox with the libraries and `/workspace/out/` already in place; runs
-then start in ~1-3s. `agent.py` looks for the snapshot named by `SANDBOX_SNAPSHOT_NAME`
+then start in ~1-3s. `research_agent/sandbox.py` looks for the snapshot named by
+`SANDBOX_SNAPSHOT_NAME`
 (default `pubmed-py`) and falls back to installing at runtime if it isn't there, so a
 fresh clone works without the build step — just slower.
 
 ## Files
 
-| | |
-|---|---|
-| `agent.py` | assembles the agent, owns the sandbox lifecycle; `__main__` runs a demo question |
-| `build_snapshot.py` | one-off: bakes the Python stack into a named sandbox snapshot |
-| `pubmed.py` | E-utilities client + the two tools |
-| `prompts.py` | system prompt with reference JS snippets, and the subagent definition |
-| `models.py` | gateway-backed model construction |
-| `pubmed_api_notes/` | per-endpoint API notes (gitignored) |
-| `data/` | abstract cache and search dumps (gitignored) — **host-side only, the agent never sees it** |
+```
+research_agent/          the agent itself
+├── agent.py             assembles it: tools, subagents, middleware
+├── cli.py               one-shot CLI entry point (`uv run agent`)
+├── graph.py             LangGraph server entry point, sandbox keyed to thread_id
+├── runner.py            one question -> one RunResult; the seam evals score against
+├── sandbox.py           sandbox lifecycle + WebSocket retry wrapper
+├── models.py            gateway-backed model construction, per-id provider routing
+├── paths.py             every host-side path, anchored to the repo root
+├── prompts/             system.py (root prompt + JS snippets), subagents.py (the leaves)
+├── sources/             pubmed.py, pmc.py (API clients + tools), cache_io.py
+└── middleware/          artifacts.py (sweeps /workspace/out), perf.py (event-loop lag)
+
+evals/                   LangSmith datasets + evaluators
+scripts/                 dev.sh, build_snapshot.py
+ui/                      ui.tsx artifact components, rendered by the chat frontend
+docs/                    design notes, demo questions, per-endpoint API notes
+data/                    abstract/search/PMC cache (gitignored)
+```
+
+`data/` is **host-side only — the agent never sees it.** The sandbox starts empty and the
+agent writes what it needs there with `tools.writeFile`. Override its location with
+`RESEARCH_AGENT_DATA_DIR`.
 
 Root model is Sonnet; the per-abstract analyst subagent runs on Haiku. The fan-out is
 where the token volume is, so that split is most of the cost story.
@@ -250,7 +267,20 @@ agent's sandbox cannot open.
 under `data/abstracts/`. Returns `records/missing/invalid/from_cache`. Structured
 abstracts keep their section labels; retracted papers are flagged.
 
-## A note on the guards in `pubmed.py`
+**`pmc_locate(pmcids)`** — the cheap triage step, and the one to call before any full-text
+retrieval. Reports which papers are in PMC's open-access bucket and what each contains —
+section titles, figure labels and captions, table captions, supplementary file names —
+plus the character cost of the body text, *without* returning the body text.
+
+**`fetch_full_text(pmcids, sections, include_captions, include_tables)`** — the body text,
+optionally narrowed to named sections. The median paper is ~40k characters, so this is
+meant to be handed to a `full-text-analyst` subagent, never read by the root model.
+
+**`fetch_figures(pmcid, files)`** / **`fetch_supplementary(pmcid, files)`** — download into
+the sandbox and return paths. These are built per run against the live backend, because
+an image has to exist as a real file before `figure-analyst` can `read_file` it and see it.
+
+## A note on the guards in `sources/pubmed.py`
 
 The defensive code there isn't boilerplate — the PubMed API has three failure modes that
 produce **wrong answers rather than errors**, all verified against the live API:
@@ -266,12 +296,12 @@ produce **wrong answers rather than errors**, all verified against the live API:
    `error` key and no `result` block, so a naive read looks like zero hits. Requests are
    chunked and the error key is checked first.
 
-`pubmed_api_notes/` has the full writeup including the probe results behind each claim.
+`docs/pubmed_api_notes/` has the full writeup including the probe results behind each claim.
 
 ## Not included
 
-Abstracts only — no full text or PMC retrieval. No skills (`skills/example-skill/` is
-still the placeholder). No web search beyond PubMed. No UI.
+No web search beyond PubMed, and no literature source beyond it — full text comes from
+PMC's open-access subset only, so paywalled papers stop at the abstract. No skills.
 
 The sandbox is Python plus the standard scientific stack only — no genomics binaries
 (PLINK, bcftools) and no data sources beyond PubMed. Nothing persists between runs.

@@ -1,4 +1,16 @@
-"""Retry sandbox transport failures below the tool boundary.
+"""The sandbox: getting one, and keeping it alive under a flaky socket.
+
+Two concerns, deliberately in one module because they are two halves of one question —
+"is there a working container behind this handle?"
+
+1. **Lifecycle** (`find_snapshot`, `provision`, `sandbox_session`). Three callers need a
+   sandbox and each needs it differently: `cli.py` owns one for a `with` block,
+   `graph.py` keys one to a `thread_id` and reuses it across turns, and `evals/` wants a
+   disposable one per example. That used to live in `agent.py`, which meant the server
+   imported the CLI to boot a container. It lives here now so all three import the same
+   thing and nobody imports an entry point.
+2. **Resilience** (`ResilientSandbox`). Retrying transport failures below the tool
+   boundary, for the reasons the next paragraphs give.
 
 Every async filesystem operation in `deepagents` — `read_file`, `ls`, `write_file`,
 `edit_file` — funnels through `LangSmithSandbox.aexecute`, which opens a WebSocket to
@@ -33,15 +45,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
+from contextlib import asynccontextmanager
 from typing import Any, Callable
 
 from deepagents.backends import LangSmithSandbox
 from deepagents.backends.protocol import ExecuteResponse
-from langsmith.sandbox import SandboxConnectionError
+from langsmith.sandbox import SandboxClient, SandboxConnectionError
+
+from research_agent.paths import WORKSPACE
 
 logger = logging.getLogger(__name__)
+
+# The sandbox is deleted on context exit, but a `finally` doesn't survive SIGKILL — and
+# billing doesn't care why the process died. This is the server-side backstop.
+IDLE_TTL_SECONDS = 600
+
+# The default sandbox image is bare Python 3.12 — no numpy/pandas/scipy/matplotlib —
+# and installing them costs ~30s. `scripts/build_snapshot.py` bakes them into a named
+# snapshot instead; booting from it takes ~1s. Run that once, then every run starts warm.
+SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py")
+
+# Fallback for a clone that hasn't built the snapshot yet. Same package set, paid per run.
+PROVISION = (
+    f"mkdir -p {WORKSPACE}/out && "
+    "pip install --break-system-packages --quiet "
+    "numpy pandas scipy matplotlib openpyxl python-docx python-pptx 2>&1 | tail -2"
+)
 
 # Four attempts over ~7s of backoff. A dataplane that is recycling comes back inside
 # that window; one that is genuinely gone will not come back in any window worth
@@ -197,8 +229,8 @@ class ResilientSandbox(LangSmithSandbox):
         an event loop. Re-acquire is deliberately not attempted here: the sync path
         runs at startup, where a failure is better surfaced loudly than papered over.
 
-        Note: `build_snapshot.py` and `agent.py:provision()` call `sandbox.run()` on
-        the raw (unwrapped) sandbox directly, not this method, so the install guard
+        Note: `scripts/build_snapshot.py` and `provision()` below call `sandbox.run()`
+        on the raw (unwrapped) sandbox directly, not this method, so the install guard
         below never blocks the provisioning step that's supposed to install packages.
         """
         if _INSTALL_COMMAND_RE.search(command):
@@ -220,3 +252,78 @@ class ResilientSandbox(LangSmithSandbox):
                 time.sleep(delay)
                 delay = min(delay * 2, self._max_delay)
         raise AssertionError("execute retry loop exited without result")
+
+
+def find_snapshot(client: SandboxClient) -> str | None:
+    """Return SNAPSHOT_NAME if that snapshot exists, else None.
+
+    A failed lookup falls back to installing at runtime rather than killing the run.
+    """
+    try:
+        snapshots = client.list_snapshots(name_contains=SNAPSHOT_NAME)
+    except Exception as exc:  # noqa: BLE001 - a missing snapshot is not a fatal error
+        print(f"[sandbox] snapshot lookup failed ({exc}); will install at runtime")
+        return None
+    return next((s.name for s in snapshots if s.name == SNAPSHOT_NAME), None)
+
+
+def provision(sandbox: Any) -> None:
+    """Install the scientific Python stack into a sandbox that didn't ship with it."""
+    t0 = time.monotonic()
+    result = sandbox.run(PROVISION, timeout=600)
+    if result.exit_code != 0:
+        msg = f"sandbox provisioning failed (exit {result.exit_code}): {result.stderr}"
+        raise RuntimeError(msg)
+    print(f"[sandbox] python ready in {time.monotonic() - t0:.1f}s")
+
+
+@asynccontextmanager
+async def sandbox_session(*, quiet: bool = False):
+    """Yield a `ResilientSandbox` for the life of the block, then delete the container.
+
+    This is the single-owner case: one caller, one sandbox, torn down on exit. `cli.py`
+    uses it for a run, and `evals/` uses it per example — an evaluator scoring twenty
+    questions must not let question three's leftover `/workspace/out` files be swept and
+    published during question four, which is exactly what sharing one container does.
+
+    `graph.py` does *not* use this. A server thread outlives any block: the user comes
+    back to it and the second turn has to see the first turn's files, so there the
+    sandbox is keyed to `thread_id` and reaped by `idle_ttl_seconds` instead.
+
+    No `reacquire` is wired here for the same reason: a single-owner caller has nothing
+    to hand back a fresh container to mid-block. Retries still cover a blinking socket,
+    which is the common case.
+
+    Async because closing is: `ainvoke` lazily builds a cached async client with its own
+    connection pool, and `aclose()` is the only thing that closes it. Making that the
+    context manager's job rather than every caller's is the point — the CLI got it right
+    by hand, and an eval loop that leaked one pool per example would not have.
+
+    Acquiring and deleting the container are blocking HTTP, done here on the calling
+    thread. That is fine for the standalone processes this serves and is why `graph.py`,
+    which runs inside an ASGI loop that blockbuster polices, goes through
+    `asyncio.to_thread` instead of using this.
+
+    Args:
+        quiet: Suppress the boot/provision progress lines. Evals run many of these and
+            the per-example noise buries the scores.
+    """
+    client = SandboxClient()
+    snapshot = find_snapshot(client)
+    if snapshot is None and not quiet:
+        print(
+            f"[sandbox] no snapshot named {SNAPSHOT_NAME!r} — installing at runtime "
+            "(~30s). Run `uv run scripts/build_snapshot.py` once to skip this."
+        )
+
+    t0 = time.monotonic()
+    with client.sandbox(snapshot_name=snapshot, idle_ttl_seconds=IDLE_TTL_SECONDS) as sandbox:
+        if not quiet:
+            print(f"[sandbox] up in {time.monotonic() - t0:.1f}s ({snapshot or 'base image'})")
+        if snapshot is None:
+            provision(sandbox)
+        backend = ResilientSandbox(sandbox=sandbox)
+        try:
+            yield backend
+        finally:
+            await backend.aclose()

@@ -52,13 +52,13 @@ from langchain_core.tools import tool
 
 # `normalize_pmcid` lives in pubmed.py alongside `validate_pmids`, because that's where
 # the "never coerce an identifier" rule is established and it's what produces PMCIDs.
-import cache_io
-from pubmed import DATA_DIR, normalize_pmcid
+from research_agent.paths import PMC_CACHE
+from research_agent.sources import cache_io
+from research_agent.sources.pubmed import normalize_pmcid
 
 # The current PMC Cloud Service layout. Flat, one prefix per article *version*.
 BUCKET = "https://pmc-oa-opendata.s3.amazonaws.com"
 
-PMC_CACHE = DATA_DIR / "pmc"
 # Resolved listings live outside the versioned dirs because the version is what they
 # resolve — we don't know which directory to look in until after this lookup.
 RESOLVED_CACHE = PMC_CACHE / "_resolved"
@@ -330,7 +330,6 @@ _SECTION_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("conclusion", ("conclusion", "summary", "perspective", "outlook")),
     ("intro", ("introduction", "background")),
 )
-CANONICAL_SECTIONS = tuple(name for name, _ in _SECTION_ALIASES)
 
 
 def canonical_section(title: str | None) -> str | None:

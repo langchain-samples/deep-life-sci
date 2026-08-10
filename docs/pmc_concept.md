@@ -33,7 +33,7 @@ answer the agent reports, not a gap it papers over.
 **3. Multimodal data is not in the E-utilities API at all.** JATS gives you
 `<graphic xlink:href="fendo-09-00124-g001.jpg"/>` — a bare filename. Every documented way
 to resolve it to a URL 404s, and the one service that did resolve it is **withdrawn on or
-after 2026-08-24, seventeen days from now**.
+after 2026-08-24** (this was written 2026-08-07, when that was still seventeen days out).
 
 ## Recommendation 1: don't add a second E-utilities call — use the S3 bucket
 

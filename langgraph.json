@@ -1,10 +1,10 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "agent": "./graph.py:make_graph"
+    "agent": "./research_agent/graph.py:make_graph"
   },
   "ui": {
-    "agent": "./ui.tsx"
+    "agent": "./ui/ui.tsx"
   },
   "env": ".env"
 }

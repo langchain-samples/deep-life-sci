@@ -4,7 +4,7 @@ Follows the intro-to-langsmith pattern: gateway compute is authenticated by
 OPENAI_API_KEY (the `lsv2_sk_...` gateway service key, not an OpenAI key), while
 LANGSMITH_API_KEY stays dedicated to tracing.
 
-Pick a profile with MODEL_PROFILE in .env (or `MODEL_PROFILE=openai uv run agent.py`):
+Pick a profile with MODEL_PROFILE in .env (or `MODEL_PROFILE=openai uv run agent`):
 
     anthropic  Sonnet 4.6 root  + Haiku 4.5 subagents   (default)
     mixed      GPT-5.6 terra    + Haiku 4.5 subagents

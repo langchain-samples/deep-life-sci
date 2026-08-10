@@ -31,10 +31,10 @@ from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain.agents.middleware.types import ToolCallRequest
 from langgraph.graph.ui import AnyUIMessage, push_ui_message, ui_message_reducer
 
-logger = logging.getLogger(__name__)
+# Mirrored in the system prompt and baked into the snapshot by scripts/build_snapshot.py.
+from research_agent.paths import OUT_DIR
 
-# Mirrored in the system prompt and baked into the snapshot by build_snapshot.py.
-OUT_DIR = "/workspace/out"
+logger = logging.getLogger(__name__)
 
 # Artifacts ride in graph state, which is checkpointed on every write. A 50 MB xlsx
 # would be re-serialised into every subsequent checkpoint on the thread and make the

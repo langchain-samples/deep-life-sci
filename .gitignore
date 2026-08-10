@@ -1,16 +1,23 @@
 __pycache__/
 *.py[oc]
-node_modules/
-package-lock.json
-.langgraph_api/
 build/
 dist/
 wheels/
 *.egg-info
 .venv
 .env
-uv.lock
-data
-pubmed_api_notes/
-pmc_api_notes/
-demo_questions.md
+.ruff_cache/
+.pytest_cache/
+.langgraph_api/
+
+# Node modules for the artifact components in ui/. The lockfile beside them IS tracked:
+# langgraph.json bundles ui/ui.tsx at build time, and when that bundle is wrong the
+# failure is silent — LoadExternalComponent paints an empty div, no console error, the
+# run looks fine and the chart is just absent.
+ui/node_modules/
+
+# Host-side caches and probe notes. Not deliverables, and `data/` is 20M+ of fetched
+# abstracts that anyone can re-fetch.
+data/
+docs/pubmed_api_notes/
+docs/pmc_api_notes/

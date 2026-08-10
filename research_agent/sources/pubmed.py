@@ -24,17 +24,16 @@ import random
 import re
 import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any
 
 import httpx
 from langchain_core.tools import tool
 
-BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+# Anchored to the repo root, not to this file — see the note in paths.py about why
+# getting that wrong starts a second empty cache instead of failing.
+from research_agent.paths import ABSTRACT_CACHE, SEARCH_DUMPS
 
-DATA_DIR = Path(__file__).parent / "data"
-ABSTRACT_CACHE = DATA_DIR / "abstracts"
-SEARCH_DUMPS = DATA_DIR / "searches"
+BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 
 # GET breaks at ~361 ids (HTTP 414); POST above this and there is no measured downside.
 POST_THRESHOLD = 200

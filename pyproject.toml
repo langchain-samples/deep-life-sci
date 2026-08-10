@@ -6,7 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.4",
-    # NCBI E-utilities and PMC OA are plain HTTP; pubmed.py/pmc.py drive them directly.
+    # NCBI E-utilities and PMC OA are plain HTTP; sources/pubmed.py and sources/pmc.py
+    # drive them directly.
     "httpx>=0.28.1",
     # Both halves of the model pair, one per MODEL_PROFILE in models.py. Anthropic goes
     # over the native gateway path, OpenAI over the /v1 shim — see models.py.
@@ -17,9 +18,9 @@ dependencies = [
     "langchain-quickjs>=0.3.5",
     # The four below arrive transitively via deepagents, but this package imports them
     # directly, so they are pinned here rather than inherited:
-    #   langchain      -> AgentMiddleware/AgentState (artifacts.py)
-    #   langchain-core -> @tool, message and runnable types (pubmed.py, pmc.py, graph.py)
-    #   langgraph      -> push_ui_message and the `ui` state reducer (artifacts.py)
+    #   langchain      -> AgentMiddleware/AgentState (middleware/artifacts.py)
+    #   langchain-core -> @tool, message and runnable types (sources/, graph.py)
+    #   langgraph      -> push_ui_message and the `ui` state reducer (middleware/artifacts.py)
     #   langsmith      -> SandboxClient, the container every `execute` call lands in
     "langchain>=1.3.14",
     "langchain-core>=1.5.3",
@@ -30,10 +31,69 @@ dependencies = [
     "python-dotenv>=1.2.2",
 ]
 
+[project.scripts]
+# A named entry point rather than a script path: the CLI now lives inside a package, and
+# `uv run research_agent/cli.py` would execute it as a top-level script with no package
+# context, so every `research_agent.*` import would fail.
+#
+# `scripts/build_snapshot.py` deliberately gets no entry point. It imports nothing from
+# this package, so `uv run scripts/build_snapshot.py` works as-is — and giving it one
+# would mean installing a top-level package literally named `scripts` into site-packages.
+agent = "research_agent.cli:run"
+
 [dependency-groups]
 # `langgraph dev` serves graph.py so a chat UI can connect. The CLI is only needed for
-# that path — `uv run agent.py` doesn't touch it. [inmem] is the in-process server;
+# that path — `uv run agent` doesn't touch it. [inmem] is the in-process server;
 # without that extra the `dev` subcommand isn't registered at all.
 dev = [
     "langgraph-cli[inmem]>=0.4.7",
+    "ruff>=0.14.4",
 ]
+# Evaluation harness. Kept out of the default install because a demo run shouldn't pull
+# a test framework, and `langsmith` itself is already a runtime dependency — only the
+# pytest integration is extra.
+evals = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.4.0",
+]
+
+# Explicit rather than inferred. Without this, setuptools' flat-layout auto-discovery
+# decides what a "package" is by scanning the repo root, which now contains `evals/`,
+# `scripts/`, `ui/` and `docs/` — it would either ship them or refuse to build, and
+# `langgraph.json`'s `"dependencies": ["."]` is what installs this at deploy time.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "research_agent",
+    "research_agent.middleware",
+    "research_agent.prompts",
+    "research_agent.sources",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Deliberately not the default set. These are the rules that catch the failure modes
+# this codebase actually has — unused imports after a move, blocking calls, bare excepts
+# that swallow a sandbox error — without flagging the long explanatory comments that
+# carry most of the repo's reasoning.
+select = ["ASYNC", "B", "BLE", "E", "F", "I", "RUF", "SIM", "UP", "W"]
+
+# This repo's prose deliberately uses en dashes, multiplication signs and arrows, in
+# comments and in prompt text alike. Flagging them as "ambiguous" is noise here.
+ignore = ["RUF001", "RUF002"]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompt strings are the one place where whitespace and wrapping are semantic — they are
+# what the model reads, and reflowing them to a line limit or stripping a trailing space
+# that ends a markdown line changes the input. Never let a formatter near this file.
+"research_agent/prompts/*.py" = ["E501", "W291"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["evals"]

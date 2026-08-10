@@ -191,12 +191,4 @@ def install_logging() -> None:
         logger.propagate = False
 
 
-def summarize_gateway_baseline() -> str:
-    """The numbers to compare a `[perf]` line against, kept next to the probe."""
-    return (
-        "gateway baseline: Haiku 4.5 ~100 output tok/s at 1, 9 and 18 concurrency; "
-        "Sonnet 4.6 ~48-60 tok/s, 1.6s TTFT streaming"
-    )
-
-
-__all__ = ["LoopLagProbe", "enabled", "install_logging", "summarize_gateway_baseline"]
+__all__ = ["LoopLagProbe", "enabled", "install_logging"]

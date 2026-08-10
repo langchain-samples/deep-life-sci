@@ -1,6 +1,6 @@
-"""Server entry point: the same agent as `agent.py`, exposed over LangGraph.
+"""Server entry point: the same agent as `cli.py`, exposed over LangGraph.
 
-`agent.py` runs one question and exits, so it can own a sandbox for the length of a
+`cli.py` runs one question and exits, so it can own a sandbox for the length of a
 `with` block. A server can't — a thread is a conversation, the user comes back to it,
 and the second turn has to see the files the first turn wrote. So the sandbox is keyed
 to the thread and reused across turns.
@@ -10,7 +10,7 @@ sandbox that has gone quiet, which is the only cleanup that survives the process
 killed. We never explicitly delete one, because "the user might come back to this
 thread" is true right up until it isn't.
 
-Point a chat UI at this — `./dev.sh` starts both halves, or by hand:
+Point a chat UI at this — `./scripts/dev.sh` starts both halves, or by hand:
 
     uv run langgraph dev                     # this graph, on :2024
     cd ../agent-chat-ui && pnpm dev          # UI, on :3000 -> http://localhost:2024
@@ -36,9 +36,15 @@ import re
 from langchain_core.runnables import RunnableConfig
 from langsmith.sandbox import SandboxClient
 
-from agent import IDLE_TTL_SECONDS, SNAPSHOT_NAME, build_agent, find_snapshot, provision
-from perf import install_logging
-from resilience import ResilientSandbox
+from research_agent.agent import build_agent
+from research_agent.middleware.perf import install_logging
+from research_agent.sandbox import (
+    IDLE_TTL_SECONDS,
+    SNAPSHOT_NAME,
+    ResilientSandbox,
+    find_snapshot,
+    provision,
+)
 
 install_logging()
 
@@ -76,7 +82,7 @@ def _acquire(thread_id: str):
             # No snapshot: pay the ~30s install once for this thread's sandbox.
             print(
                 f"[sandbox] no snapshot named {SNAPSHOT_NAME!r} — installing at "
-                "runtime. Run `uv run build_snapshot.py` once to skip this."
+                "runtime. Run `uv run scripts/build_snapshot.py` once to skip this."
             )
             provision(sandbox)
 

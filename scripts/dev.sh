@@ -11,12 +11,14 @@
 # alongside a `langgraph dev` you started yourself. Only what this script starts is what
 # it stops.
 #
-#   ./dev.sh                            # both, logs interleaved and prefixed
-#   AGENT_CHAT_UI=~/src/acu ./dev.sh    # UI checkout somewhere other than ../agent-chat-ui
+#   ./scripts/dev.sh                            # both, logs interleaved and prefixed
+#   AGENT_CHAT_UI=~/src/acu ./scripts/dev.sh    # UI checkout elsewhere than ../agent-chat-ui
 #
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ../ because this script lives in scripts/ but both servers must start from the repo
+# root — `langgraph dev` resolves langgraph.json relative to its working directory.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UI_DIR="${AGENT_CHAT_UI:-$(dirname "$ROOT")/agent-chat-ui}"
 
 PIDS=()
@@ -74,8 +76,8 @@ else
   # the console streams the *old* run's progress. Raising it lets a stale run finish
   # alongside a new one instead of blocking it.
   #
-  # This makes the asyncio.to_thread rule in cache_io.py load-bearing rather than
-  # theoretical: runs now share one event loop, so a blocking call stalls its neighbours.
+  # This makes the asyncio.to_thread rule in sources/cache_io.py load-bearing rather
+  # than theoretical: runs share one event loop, so a blocking call stalls its neighbours.
   start agent "$ROOT" uv run --group dev langgraph dev --no-browser --n-jobs-per-worker 5
 fi
 
