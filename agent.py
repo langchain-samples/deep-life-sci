@@ -198,6 +198,12 @@ def build_agent(backend):
                     "execute",
                     "read_file",
                     "write_file",
+                    # Without this, the only way to change one line of a Python script
+                    # written from JS is to re-emit the whole script. In thread
+                    # 019fe982-9296-7a23-836a-bd3ae24605a1 a single bad `RandomState`
+                    # seed cost 1,845 output tokens and 26s of retyping a 4.5k-char
+                    # matplotlib script that was already on disk.
+                    "edit_file",
                     "ls",
                     "glob",
                 ],
