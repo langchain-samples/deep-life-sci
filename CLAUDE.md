@@ -34,9 +34,15 @@ fighting it for the port. `AGENT_CHAT_UI=<path>` overrides where it looks for th
 frontend.
 
 The chat UI is a local clone of `langchain-ai/agent-chat-ui` living *outside* this repo
-(`../agent-chat-ui`), with **one required patch**: a `/ui/:path*` rewrite in
-`next.config.mjs` pointing at `:2024`. Without it the artifact components silently never
-render — see the invariant below.
+(`../agent-chat-ui`), with **two local patches**:
+
+1. A `/ui/:path*` rewrite in `next.config.mjs` pointing at `:2024`. Required — without
+   it the artifact components silently never render (see the invariant below).
+2. An empty-message early return in `src/components/thread/messages/ai.tsx`. Upstream
+   only skips *tool results* when "Hide Tool Calls" is on; an AI turn that is pure
+   `thinking` + `tool_use` still renders its `opacity-0` hover CommandBar, costing 24px
+   plus the parent `gap-4`. Our runs are dozens of such turns, so unpatched the first
+   visible output sits ~900px of whitespace below the question.
 
 There is no test suite. Ruff is configured in `pyproject.toml` and available in the
 `dev` dependency group; `evals/` is the closest thing to a regression check.
