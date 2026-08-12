@@ -1,0 +1,3 @@
+{"id": "semaglutide-weightloss-boxplot", "question": "Make a box plot of the effect sizes for weight loss in all phase 3 studies of semaglutide", "expects_artifact": ["image"]}
+{"id": "nishikubo-cdtb-nls", "question": "What NLS did Nishikubo identify in CdtB?", "expects_artifact": [], "rubric": "Nishikubo et. al. mapped the NLS to residues 48–124 in the N-terminal region of CdtB"}
+{"id": "cunningham-druggability-subnetwork", "question": "What was the best performing subnetwork in cunningham's paper on druggability?", "expects_artifact": [], "rubric": "The best performing subnetwork was Biological Function"}

@@ -25,18 +25,15 @@ in place, because removing it would orphan every experiment that scored it.
 |---|---|---|
 | `citations_exist` | answer text + `data/abstracts/` | invented PMIDs |
 | `produced_expected_artifacts` | `ui` state key | "plot the distribution" answered in prose |
-| `used_code_orchestration` | root tool calls | the agent stopped fanning out through `eval` |
-| `within_turn_budget` | root turn count | turn-count creep, where the latency lives |
-| `root_context_budget` | root transcript size | payload leaking into root context |
 | `rubric_judge` | answer text | confident, fluent, wrong — missing denominators, silent omissions |
 
-The first five are deterministic and free. Only `rubric_judge` costs a model call, and it
+The first two are deterministic and free. Only `rubric_judge` costs a model call, and it
 runs on the cheap half of the model pair. `--structural` drops it.
 
-**The three middle evaluators are why `runner.py` exists.** Trajectory, artifacts and
-context size are not recoverable from the answer text, and they are where this agent's
-regressions actually show up — a run that quietly stops fanning out still produces a good
-answer, slowly and expensively, and says nothing about it.
+**`produced_expected_artifacts` is why `runner.py` exists.** Artifact names are not
+recoverable from the answer text, and that's where this agent's regressions actually
+show up — a run that quietly stops producing a chart still gives a good answer and says
+nothing about it.
 
 ## Scoring conventions
 
@@ -45,10 +42,6 @@ an answer that legitimately cites no papers, is excluded from that evaluator's a
 rather than given a free 1.0 that inflates every experiment. The judge also returns `None`
 when its own output won't parse, because a judge failure and a bad answer must not look
 the same in the numbers.
-
-Budgets are per-example, in the seed file. A metadata-only question ("which journals
-publish the most cryo-EM work") should finish in far fewer turns and far less context than
-a 30-paper fan-out, and one global threshold would be wrong for both.
 
 ## Isolation and cost
 

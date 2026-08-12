@@ -21,3 +21,6 @@ ui/node_modules/
 data/
 docs/pubmed_api_notes/
 docs/pmc_api_notes/
+
+# Retired eval seed files kept on disk for reference, not synced or reviewed.
+evals/datasets/archive/

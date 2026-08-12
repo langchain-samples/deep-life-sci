@@ -64,10 +64,6 @@ def _split(row: dict) -> tuple[dict, dict, dict]:
     """
     inputs = {"question": row["question"]}
     outputs = {
-        # Per-example budgets. A global threshold would either be too loose for the
-        # metadata-only questions or too tight for the full fan-outs.
-        "max_root_turns": row.get("max_root_turns"),
-        "max_root_context_chars": row.get("max_root_context_chars"),
         "expects_artifact": row.get("expects_artifact", []),
         "rubric": row.get("rubric", ""),
     }
