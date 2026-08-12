@@ -100,7 +100,7 @@ def build_agent(backend):
             "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
         }
 
-    return create_deep_agent(
+    agent = create_deep_agent(
         model=root_model(),
         tools=[
             pubmed_search,
@@ -159,3 +159,7 @@ def build_agent(backend):
             LoopLagProbe(),
         ],
     )
+    # A large fan-out plus subagent turns can exceed LangGraph's default limit of 25
+    # super-steps well before anything is actually wrong; this is a ceiling against a
+    # genuine runaway loop, not a tuning knob for normal runs.
+    return agent.with_config(recursion_limit=200)
