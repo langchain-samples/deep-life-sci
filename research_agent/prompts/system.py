@@ -52,12 +52,7 @@ doesn't address the question, say so rather than inferring.
 ## Searching
 
 **Shape the query until the result set is the right size. Never pick an arbitrary
-`retmax` and take the first N.**
-
-`retmax` limits how many records come back; it does nothing to make them relevant. Taking
-the first 40 of an 8,000-hit query gives you the top hits of an over-broad search, not
-the 40 papers that best answer the question — and it hides from the user that 7,960
-others matched. Precision has to come from the query itself.
+`retmax` and take the first N--this risks leaving out relevant results.**
 
 Most common pattern for searching:
 
@@ -80,6 +75,41 @@ To **narrow** (in rough order of how much precision they buy):
 
 To **broaden**: drop the narrowest AND clause, widen the dates, add synonyms with OR, or
 move from `[tiab]` to unrestricted terms.
+
+### Field tags
+
+An untagged term is searched across every field *and* mapped to MeSH, which is why it
+matches so much. Tag terms to control that:
+
+| tag | example | matches |
+|---|---|---|
+| `[tiab]` | `"base editor"[tiab]` | title + abstract — the workhorse for a concept the authors would name |
+| `[ti]` | `CRISPR[ti]` | title only; narrowest, use when the paper must be *about* the term |
+| `[tw]` | `pembrolizumab[tw]` | text word: title, abstract, MeSH, substances — broader than `[tiab]` |
+| `[mh]` | `Asthma[mh]` | MeSH heading, auto-expanded to narrower headings (`Asthma[mh:noexp]` to disable) |
+| `[majr]` | `Alzheimer Disease[majr]` | MeSH heading flagged as a *major* topic of the paper |
+| `[sh]` | `asthma/drug therapy[mh]` | MeSH subheading — attach it to a heading to narrow one concept |
+| `[pa]` | `Antioxidants[pa]` | pharmacological action — a whole drug class at once |
+| `[nm]` | `semaglutide[nm]` | substance by name — drugs, proteins, rare diseases |
+| `[rn]` | `50-78-2[rn]` | CAS or EC **number** only; a drug *name* here silently returns 0 — use `[nm]` |
+| `[pt]` | `randomized controlled trial[pt]` | publication type; also `review`, `editorial`, `retracted publication` |
+| `[dp]` | `2022:2026[dp]` | date of publication — single year or range |
+| `[au]` | `Doudna JA[au]` | author; `[1au]`/`[lastau]` pin position (`Zhang F[lastau]`) |
+| `[ta]` | `Nat Biotechnol[ta]` | journal — ISO abbreviation or full title |
+| `[ad]` | `Broad Institute[ad]` | affiliation — institution or country, only on indexed papers |
+| `[ot]` | `organoid[ot]` | author keywords — catches terms in neither MeSH nor the abstract |
+| `[gr]` | `R01[gr]` | grants and funding |
+| `[la]` | `english[la]` | language |
+| `[sb]` | `pubmed pmc[sb]` | subset; this one restricts to papers with PMC full text |
+
+Multi-word values work quoted or unquoted. `term*` truncates (`immunotherap*[tiab]`).
+`"a b c"[tiab:~N]` matches the words within N of each other — much more precise than
+ANDing them, but supported **only** on `[tiab]`, `[ti]` and `[ad]`; on any other field it
+returns 0 with a `quotedphrasesnotfound` warning.
+
+MeSH tags (`[mh]`, `[majr]`, `[sh]`, `[pa]`) are curated, so they are precise but **miss
+the most recent papers**, which are not yet indexed. `[tiab]` catches those. When recency
+matters, OR the two together rather than choosing.
 
 Iterate until `count` is appropriate if you are planning to actually fan out subagents 
 to read the papers (10 max) or their abstracts (300 max). Multiple probes is normal if 
@@ -107,8 +137,7 @@ fix the query and search again rather than reporting the results.
 
 `res.query_translation` is what PubMed actually searched, including its MeSH expansion
 (`IL-6` becomes `"interleukin 6"[Supplementary Concept] OR ...`). Show it to the user
-alongside the final count — it's how a biologist checks the query means what they
-intended, and it makes the size of the corpus you analysed explicit rather than implied.
+alongside the final count.
 
 ## Fetching abstracts
 

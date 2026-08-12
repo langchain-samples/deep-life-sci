@@ -199,4 +199,4 @@ it down the wrong path, which the gateway answers with a 501 that looks like an 
 
 ## Writing prompts
 
-Agent prompts should be as concise and general as possible. Avoid 
+Agent prompts should be as concise and general as possible. Avoid unnecessary detail and exposition.
