@@ -55,6 +55,9 @@ dev = [
 evals = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.4.0",
+    # Arrives transitively via langchain-core, but `evals/sync.py` imports it directly to
+    # read the dataset seeds, so it's declared rather than inherited.
+    "pyyaml>=6.0.3",
 ]
 
 # Explicit rather than inferred. Without this, setuptools' flat-layout auto-discovery

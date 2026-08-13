@@ -23,7 +23,7 @@ uv run scripts/build_snapshot.py       # one-off: bake numpy/pandas/scipy/matplo
 uv run langgraph dev                   # just the graph, on :2024
 cd ../agent-chat-ui && pnpm dev        # just the UI, on :3000 -> http://localhost:2024
 
-uv run python -m evals.sync            # push evals/datasets/*.jsonl to LangSmith
+uv run python -m evals.sync            # push evals/datasets/*.yaml to LangSmith
 uv run python -m evals.run --structural --limit 3   # score, no judge model
 uvx ruff check .                       # config lives in pyproject.toml
 ```

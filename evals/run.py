@@ -32,8 +32,8 @@ from research_agent.runner import run_once  # noqa: E402
 
 DATASET = "pubmed-agent-default"
 
-# One container per example, each fanning out internally. Three at once is roughly where
-# a laptop's connection pool and NCBI's 10 req/sec stop being comfortable.
+# One container per example, each fanning out internally. One at a time is what a laptop's
+# connection pool and NCBI's 10 req/sec stay comfortable with; raise it with --concurrency.
 MAX_CONCURRENCY = 1
 
 

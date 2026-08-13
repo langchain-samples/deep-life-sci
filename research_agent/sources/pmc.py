@@ -332,11 +332,21 @@ _SECTION_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Checked before the alias table. 'Supplementary Material' contains 'material' and so
+# bucketed as `methods`, which on a Science article is the *only* section — so
+# `sections=['methods']` picked an empty back-matter stub and returned nothing, without
+# falling back. Matching is substring-based by design; this is the exclusion list that
+# keeps back matter out of the buckets.
+_NOT_CANONICAL = ("supplementary", "supporting information")
+
+
 def canonical_section(title: str | None) -> str | None:
     """Map a section heading to a canonical bucket, or None if it isn't one."""
     if not title:
         return None
     t = _SEC_NUM_RE.sub("", title).strip().lower()
+    if any(p in t for p in _NOT_CANONICAL):
+        return None
     for name, patterns in _SECTION_ALIASES:
         if any(p in t for p in patterns):
             return name
@@ -358,23 +368,57 @@ def _render_table(wrap: ET.Element) -> str:
     return "\n".join(lines)
 
 
+def _untitled_section(nodes: list[ET.Element], lead: str | None) -> dict | None:
+    """Flatten a run of section-less body children into one untitled section.
+
+    The nodes are re-parented into a throwaway <sec> purely so `_block_text` has a
+    single element to walk; ElementTree copies no state on append, so the real tree
+    is untouched.
+    """
+    holder = ET.Element("sec")
+    if lead and lead.strip():
+        holder.text = lead
+    holder.extend(nodes)
+    text = _block_text(holder)
+    return {"title": None, "canonical": None, "chars": len(text), "text": text} if text else None
+
+
 def _parse_sections(body: ET.Element) -> list[dict]:
     """Top-level sections, in document order.
 
-    A body with no <sec> children (common in short reports) still has content, so it
-    degrades to one implicit section rather than returning nothing.
-    """
-    secs = body.findall("./sec")
-    if not secs:
-        text = _block_text(body)
-        return [{"title": None, "canonical": None, "chars": len(text), "text": text}] if text else []
+    ⚠️ Body content outside a <sec> is content, and keying the fallback on "no <sec>
+    children at all" is not enough to catch it. Science research articles are deposited
+    as a run of bare <p> children followed by a single 'Supplementary Material' <sec>,
+    which is one <sec> — so the old `if not secs` fallback never fired and the whole
+    article body was dropped. Measured: PMC3030664 and PMC7164637 both reported
+    `body_chars: 0` against 12,791 and 10,339 characters of real body text, and nothing
+    in the response said so (`fell_back` stays False, because a section *was* returned).
+    Same silent-wrong-answer class as the efetch traps in pubmed.py.
 
-    out = []
-    for sec in secs:
-        title = _inline_text(sec.find("title")) if sec.find("title") is not None else None
+    So loose runs are emitted as untitled sections interleaved in document order, rather
+    than as a whole-body fallback. A body with no <sec> at all still collapses to the
+    single untitled section it always did.
+    """
+    out: list[dict] = []
+    loose: list[ET.Element] = []
+    # Text before the first child element — rare, but it is body text like any other.
+    lead: str | None = body.text
+
+    def flush() -> None:
+        nonlocal loose, lead
+        if (section := _untitled_section(loose, lead)) is not None:
+            out.append(section)
+        loose, lead = [], None
+
+    for child in body:
+        if child.tag != "sec":
+            loose.append(child)
+            continue
+        flush()
+        title = _inline_text(child.find("title")) if child.find("title") is not None else None
         # skip_first_title: the title is emitted as a heading by the caller, so leaving
         # it in the body too gives '## Introduction / IntroductionThe tumor...'.
-        text = _block_text(sec, skip_first_title=True)
+        text = _block_text(child, skip_first_title=True)
         out.append(
             {
                 "title": title or None,
@@ -383,6 +427,7 @@ def _parse_sections(body: ET.Element) -> list[dict]:
                 "text": text,
             }
         )
+    flush()
     return out
 
 
@@ -659,8 +704,10 @@ async def fetch_full_text(
             if (s["canonical"] and s["canonical"] in wanted)
             or any(w in (s["title"] or "").lower() for w in wanted)
         ]
-        # Degrade to the whole paper rather than returning nothing — but say so.
-        if not picked:
+        # Degrade to the whole paper rather than returning nothing — but say so. Keyed on
+        # the character count, not on `picked` being empty: back-matter stubs match a
+        # title and carry no text, so a match is not the same thing as an answer.
+        if not any(s["chars"] for s in picked):
             return parsed["sections"], True
         return picked, False
 

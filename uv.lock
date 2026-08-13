@@ -1334,6 +1334,7 @@ dev = [
 evals = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -1358,6 +1359,7 @@ dev = [
 evals = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [[package]]

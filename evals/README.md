@@ -3,21 +3,26 @@
 Scores the agent against LangSmith datasets. Two commands:
 
 ```bash
-uv run python -m evals.sync          # push datasets/*.jsonl to LangSmith (idempotent)
+uv run python -m evals.sync          # push datasets/*.yaml to LangSmith (idempotent)
 uv run python -m evals.run           # score the agent against them
 uv run python -m evals.run --structural --limit 3    # fast, no judge model
 ```
 
 ## Why the dataset lives in git
 
-`datasets/core.jsonl` is the source of truth; LangSmith is a mirror of it. A dataset
+`datasets/default.yaml` is the source of truth; LangSmith is a mirror of it. A dataset
 edited only in the web UI has no diff, no review, and no way to answer "what changed
 between the run that scored 0.8 and the run that scored 0.6". `sync.py` matches on the
 `id` field, so rewording a question updates that example rather than duplicating it and
 its scoring history stays attached.
 
-Nothing is ever deleted by sync — an example dropped from the JSONL is reported and left
-in place, because removing it would orphan every experiment that scored it.
+Nothing is ever deleted by sync — an example dropped from the seed file is reported and
+left in place, because removing it would orphan every experiment that scored it.
+
+YAML rather than JSONL because the rubrics are the part that actually gets revised, and
+they are paragraphs and tables. One JSON line per example put each rubric on a single
+unwrappable line, so a one-number correction showed up as a whole-line diff. Block
+scalars (`|-`) keep them readable in the file and byte-exact in what the judge is sent.
 
 ## What each evaluator is for
 
@@ -49,7 +54,7 @@ Every example gets its own sandbox. That is the expensive choice, taken because
 `produced_expected_artifacts` reads the artifact sweep — a shared container would let one
 example's leftover `/workspace/out` files be attributed to the next.
 
-Concurrency defaults to 3. Each example already fans out to dozens of subagents
+Concurrency defaults to 1. Each example already fans out to dozens of subagents
 internally, so raising it multiplies containers rather than throughput, and NCBI's rate
 limit is shared across all of them.
 
