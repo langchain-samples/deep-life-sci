@@ -8,6 +8,7 @@
 # for a reader: state what the right answer contains, then what earns credit and what
 # fails outright.
 
+# Q1
 - id: semaglutide-weightloss-boxplot
   question: >-
     Identify all phase 3 studies of semaglutide for weight management in adults with
@@ -44,61 +45,46 @@
     percentage points are mixed on one axis, if SUSTAIN or PIONEER trials are included, or
     if any STEP or OASIS trials are omitted.
 
+# Q2
 - id: nishikubo-cdtb-nls
   question: What NLS did nishikubo identify in CdtB?
   expects_artifact: []
   rubric: >-
     Nishikubo et. al. mapped the NLS to residues 48–124 in the N-terminal region of CdtB
 
+# Q3
 - id: cunningham-druggability-subnetwork
   question: What was the best performing subnetwork in cunningham's paper on druggability?
   expects_artifact: []
   rubric: The best performing subnetwork was Biological Function
 
+# Q4
 - id: egan-ulk1-ampk-sites
   question: >-
     Which ULK1 sites did the Shaw lab report AMPK phosphorylates, in their 2011 paper on
     autophagy under energy stress?
   expects_artifact: []
   domain: D1 molecular and cell biology
-  notes: Ground truth in evals/taxonomy/q01_q03_ground_truth.md, Q01.
   rubric: |-
-    Ser467, Ser555, Thr574 and Ser637 — the four sites matching the optimal AMPK substrate
-    motif, from Egan et al., Science 2011;331(6016):456-61, PMID 21205641.
+    Ser467, Ser555, Thr574 and Ser637, from Egan et al., PMID 21205641.
 
-    Accept "Ser574" for the third position; the paper uses both spellings. Accept the three
-    MS-confirmed sites (Ser555, Thr574, Ser637) without Ser467, which no detected peptide
-    covered. Do not require a species qualifier — the paper never states one.
+    Accept "Ser574" for the third position, and accept the three MS-confirmed sites
+    (Ser555, Thr574, Ser637) without Ser467. No species qualifier required. Fail on
+    Ser317, Ser777 or Ser757.
 
-    The residues are not in the abstract, so an answer without them is a retrieval failure,
-    not a phrasing one. Fail if the answer gives Ser317/Ser777 or the mTOR site Ser757,
-    which are ULK1 sites from Kim et al., Nat Cell Biol 2011, PMID 21258367 — a different
-    lab, and the paper whose abstract does state its residues. Fail if the citation is the
-    Autophagy addendum PMID 21460621 rather than the primary paper.
-
+# Q5
 - id: wrapp-spike-ace2-affinity
   question: >-
     In Wrapp's 2020 cryo-EM structure of the prefusion SARS-CoV-2 spike, what affinity did
     they measure for ACE2 binding the spike ectodomain?
   expects_artifact: []
   domain: D5 microbiology and infectious disease
-  notes: Ground truth in evals/taxonomy/q01_q03_ground_truth.md, Q02.
   rubric: |-
-    ~15 nM by SPR, for ACE2 binding the prefusion-stabilised S-2P ectodomain trimer
-    (residues 1-1208, two proline substitutions) — Wrapp et al., Science
-    2020;367(6483):1260-63, PMID 32075877. Roughly 10- to 20-fold tighter than ACE2 binding
-    SARS-CoV S.
+    ~15 nM by SPR, for ACE2 binding to the prefusion-stabilised S-2P ectodomain trimer.
 
-    The body states only "~15 nM". The fitted KD is in fig. S7, which is not in the PMC OA
-    package, so ~15 nM is full credit and no further precision is available from the source.
+    Require the construct as well as the value: this is the ectodomain trimer, not the RBD. Fail on an RBD number.
 
-    Require the construct as well as the value: this is the ectodomain trimer, not the RBD.
-    Fail on an RBD number — Wrapp's own Fig. 4B RBD-SD1 measured by BLI, or 1.2 nM from
-    Walls et al. PMID 32155444. Fail on 94.6 nM (S1) or 133.3 nM (CTD) from Wang et al.
-    PMID 32275855. Fail on 11.3 nM / 13.3 nM from Hsieh et al. PMID 32703906, a second
-    McLellan-lab 2020 cryo-EM paper that remeasures the same S-2P construct. Fail if values
-    are averaged across papers.
-
+# Q6
 - id: iaccarino-gamma-amyloid
   question: >-
     In Tsai's 2016 Nature paper on 40 Hz gamma entrainment, how much did one hour of
@@ -106,19 +92,9 @@
     mice?
   expects_artifact: []
   domain: D6 neuroscience
-  notes: Ground truth in evals/taxonomy/q01_q03_ground_truth.md, Q03.
   rubric: |-
-    A reduction, by isoform: Abeta1-40 down 53.22% and Abeta1-42 down 44.62% (Fig. 1f,g,
-    ELISA, versus EYFP control) — Iaccarino et al., Nature 2016;540(7632):230-35, PMID
-    27929004. Tolerance +/-5 pp, both isoforms named. Credit the immunohistochemistry
-    measure (Abeta labelling intensity -39.5%, Fig. 2e,f) if reported alongside.
+    A reduction by ELISA: Abeta1-40 down 53.22% and Abeta1-42 down 44.62%, from Iaccarino
+    et al., PMID 27929004.
 
-    The abstract gives direction but no magnitude, so the numbers require full text.
-
-    Fail on a single pooled "amyloid" figure that does not name the isoform. Fail if the
-    answer reports plaque number or size, or any value from the 7-day chronic regime
-    (soluble -60.5%/-51.7%, insoluble -43.7%/-57.9%, plaque number -67.2%, plaque size
-    -63.7%) — one hour moves soluble Abeta only, and the paper shows that effect is
-    transient. The 40 Hz light-flicker results in visual cortex (-57.96%/-57.97%, Fig. 4c)
-    are a different paradigm from the one asked about; reporting them instead is a fail,
-    reporting them as a contrast is not.
+    Both isoforms named, tolerance +/-5 pp. Fail on a single pooled "amyloid" number, on
+    plaque number or size, or on the 7-day chronic values.
