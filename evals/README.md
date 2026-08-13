@@ -42,11 +42,24 @@ nothing about it.
 
 ## Scoring conventions
 
-`score: None` means *not applicable*, not zero. A question with no required artifact, or
-an answer that legitimately cites no papers, is excluded from that evaluator's aggregate
-rather than given a free 1.0 that inflates every experiment. The judge also returns `None`
-when its own output won't parse, because a judge failure and a bad answer must not look
-the same in the numbers.
+**All three evaluators are boolean.** They return `score: True`/`False`, which the
+LangSmith SDK preserves as boolean feedback (`SCORE_TYPE` puts `StrictBool` ahead of the
+numeric types), so each column aggregates as a pass rate rather than an average.
+
+Booleans because every fraction these could return was misleading. `citations_exist`
+requires *all* cited PMIDs to resolve: one invented citation in twenty is the whole point
+of the check, and 0.95 sorts next to a clean run while reading as a rounding error. The
+judge's rubrics are already written as pass/fail clauses, and a graded score let it split
+the difference — 0.75 on a four-clause rubric with no way to tell which clause failed.
+What used to be in the fraction is now in `comment`: the missing PMIDs, the absent
+artifact kinds, the rubric clause that decided the verdict.
+
+`score: None` still means *not applicable*, not `False`. A question with no required
+artifact, or an answer that legitimately cites no papers, is excluded from that
+evaluator's aggregate rather than given a free pass that inflates every experiment. The
+judge also returns `None` when its own output won't parse — including when it answers with
+a number instead of a verdict — because a judge failure and a bad answer must not look the
+same in the numbers.
 
 ## Isolation and cost
 

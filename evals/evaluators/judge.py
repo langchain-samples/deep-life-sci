@@ -13,6 +13,14 @@ specific, repeated shape that the rubrics encode:
 Those are the failure modes that produce a confident, fluent, wrong answer. Each seed row
 carries a one-line `rubric` naming the one that matters for it.
 
+The verdict is a boolean, matching how the rubrics are already written ("Pass if every
+year 2015-2025 is reported... Fail if activation is called converged"). A graded 0-1 score
+invited the judge to split the difference — a rubric with four clauses came back as 0.75
+with no way to tell which clause was the one that failed, and a fluent answer that missed
+the single thing the rubric asked for still cleared 0.6. Forcing the choice puts that
+information in `comment`, where it names the failing clause, and makes the aggregate a
+pass rate rather than an average of soft judgements.
+
 The judge runs on the *subagent* model, not the root one. It is a single-turn call over a
 short payload, which is the same shape the leaves have, and using the cheap half of the
 pair keeps a full sweep affordable enough to run on every prompt change.
@@ -44,8 +52,26 @@ An answer that honestly reports a limitation — "only 6 of 22 abstracts stated 
 that states a figure with no denominator, or silently omits what it could not determine,
 is failing it however well written it is.
 
-Reply with JSON only: {{"score": <0.0-1.0>, "reason": "<one sentence>"}}
+The verdict is pass or fail, with no partial credit: an answer that misses any part of the
+standard fails. Name the deciding clause in your reason.
+
+Reply with JSON only: {{"pass": true|false, "reason": "<one sentence>"}}
 """
+
+
+def _as_bool(value) -> bool:
+    """Coerce the judge's verdict, rejecting anything that isn't unambiguously a verdict.
+
+    Only a real bool or the two string spellings of one are accepted. A number is not:
+    `0.75` from a judge still reaching for partial credit must land in the unparseable
+    branch below, because silently reading it as `True` would restore exactly the
+    split-the-difference grading this evaluator is boolean to avoid.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"not a boolean verdict: {value!r}")
 
 
 async def rubric_judge(run, example) -> dict:
@@ -57,7 +83,7 @@ async def rubric_judge(run, example) -> dict:
     if not rubric:
         return {"key": "rubric", "score": None, "comment": "no rubric for this example"}
     if not answer:
-        return {"key": "rubric", "score": 0.0, "comment": "run produced no answer"}
+        return {"key": "rubric", "score": False, "comment": "run produced no answer"}
 
     model = subagent_model()
     response = await model.ainvoke(
@@ -68,11 +94,11 @@ async def rubric_judge(run, example) -> dict:
         verdict = json.loads(response.text.strip().removeprefix("```json").removesuffix("```"))
         return {
             "key": "rubric",
-            "score": float(verdict["score"]),
+            "score": _as_bool(verdict["pass"]),
             "comment": str(verdict.get("reason", "")),
         }
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        # A judge that fails to parse must not silently score 0 — that is
+        # A judge that fails to parse must not silently score False — that is
         # indistinguishable from a genuinely bad answer and would corrupt the aggregate.
         return {
             "key": "rubric",

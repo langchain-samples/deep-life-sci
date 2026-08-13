@@ -27,7 +27,7 @@ def _published(outputs: dict) -> list[str]:
 
 
 def produced_expected_artifacts(run, example) -> dict:
-    """Score 1.0 when every expected artifact kind is present, 0.0 when any is absent."""
+    """True when every expected artifact kind is present, False when any is absent."""
     expected = (example.outputs or {}).get("expects_artifact") or []
     outputs = run.outputs or {}
 
@@ -48,7 +48,7 @@ def produced_expected_artifacts(run, example) -> dict:
 
     return {
         "key": "produced_expected_artifacts",
-        "score": 0.0 if missing else 1.0,
+        "score": not missing,
         "comment": (
             f"expected {expected}, published {names or '[]'}"
             + (f"; missing {missing}" if missing else "")

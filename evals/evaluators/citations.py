@@ -6,10 +6,15 @@ The cheapest useful grounding check in this repo, and it needs no judge model.
 never evicts. So a PMID the agent genuinely read is on disk, and one it hallucinated is
 not. That turns "is this citation real?" into a file-existence test.
 
+Boolean, and it takes *every* cited PMID resolving to pass. A fraction was worse than
+useless here: one invented citation in twenty is the failure this exists to catch, and
+0.95 sorts next to a clean run in the experiment table while reading as a rounding error.
+Either the answer's citations are all real or the answer can't be trusted.
+
 The known limit, stated rather than papered over: the cache is shared across every run
 ever made on this machine, so a PMID fetched by an *earlier* run also passes. This
 catches invention, not misattribution — an agent citing a real paper for a claim that
-paper doesn't make scores 1.0 here. `judge.py` is what covers that.
+paper doesn't make passes here. `judge.py` is what covers that.
 
 The prompt tells the model to cite PMIDs and to keep the `pmid` alongside each answer so
 citations can't drift, which is what makes a zero here a real signal rather than a
@@ -35,7 +40,7 @@ def cited_pmids(text: str) -> set[str]:
 
 
 def citations_exist(run, example) -> dict:
-    """Fraction of cited PMIDs that are present in the host-side abstract cache."""
+    """True when every cited PMID is present in the host-side abstract cache."""
     answer = (run.outputs or {}).get("answer", "")
     pmids = cited_pmids(answer)
 
@@ -53,7 +58,7 @@ def citations_exist(run, example) -> dict:
     missing = sorted(pmids - found)
     return {
         "key": "citations_exist",
-        "score": len(found) / len(pmids),
+        "score": not missing,
         "comment": (
             f"{len(found)}/{len(pmids)} cited PMIDs in the fetch cache"
             + (f"; unverifiable: {missing[:10]}" if missing else "")
