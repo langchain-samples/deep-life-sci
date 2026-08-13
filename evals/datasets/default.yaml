@@ -98,3 +98,50 @@
 
     Both isoforms named, tolerance +/-5 pp. Fail on a single pooled "amyloid" number, on
     plaque number or size, or on the 7-day chronic values.
+
+# Q7
+- id: tpd-publication-volume
+  question: >-
+    How has annual publication volume on targeted protein degradation changed from 2015
+    through 2025?
+  expects_artifact: [image]
+  domain: D2 chemistry and drug discovery
+  rubric: |-
+    Monotonic, roughly exponential growth. Pass if every year 2015-2025 is reported, 2015 is 30-40, 2025 is 1450-1600, and the
+    progression is roughly exponential.
+
+# Q8
+- id: fmt-cdiff-placebo-trials
+  question: >-
+    Among published randomised trials of faecal microbiota transplantation for recurrent
+    C diff infection, how many were placebo-controlled, and how many reported a cure at
+    8 weeks or later?
+  expects_artifact: []
+  domain: D3 clinical medicine and trials
+  rubric: |-
+    Seven of 21 randomised trials were placebo-controlled: SER-109 phase 2 (32255488),
+    ECOSPOR III (35045228), PUNCH CD2 (29617739), PUNCH CD3 (36287379), PRISM3/CP101
+    (39366468), VE303 CONSORTIUM (37060545), and Drekonja's capsule FMT trial (39271107).
+    All 21 reported cure at 8 weeks or later.
+
+    Accept 1 of 15 placebo-controlled if the answer restricts to conventional donor-stool
+    FMT and says so. Fail if the 8-week count is anything other than all of them, if
+    open-label single-arm studies are counted as trials, or if Kelly 2016 (27547925) is
+    called placebo-controlled without noting its control arm was autologous FMT.
+
+# Q9
+- id: base-editing-t-cells-convergence
+  question: >-
+    In recent papers base editing primary human T cells, has the field converged on one
+    editor format and delivery method? What hasn't converged?
+  expects_artifact: []
+  domain: D1 molecular and cell biology
+  rubric: |-
+    Converged: adenine base editors, overwhelmingly the ABE8e family, delivered as mRNA
+    by electroporation. Not converged: activation, where CD3/CD28 Dynabeads (bead:cell
+    1:1 to 3:1), Miltenyi TransAct and ImmunoCult CD3/CD28/CD2 are all in use, the
+    pre-editing window runs 48-72 h, and cytokine support splits between IL-2 alone and
+    IL-7 + IL-15.
+
+    Require at least two named activation reagents and per-paper PMIDs. Fail if
+    activation is called converged, or if the editor is reported as RNP or plasmid.
