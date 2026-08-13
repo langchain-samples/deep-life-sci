@@ -199,4 +199,4 @@ it down the wrong path, which the gateway answers with a 501 that looks like an 
 
 ## Writing prompts
 
-Agent prompts should be as concise and general as possible. Avoid unnecessary detail and exposition.
+Agent prompts should be as concise and general as possible. Avoid unnecessary detail and exposition. Unless critical, avoid giving the agent explicit instructions or step-by-step procedures; instead, simply document potential pitfalls or things it should know.

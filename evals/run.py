@@ -30,20 +30,31 @@ from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
 from research_agent.models import check_gateway_config, describe  # noqa: E402
 from research_agent.runner import run_once  # noqa: E402
 
-DATASET = "pubmed-agent-core"
+DATASET = "pubmed-agent-default"
 
 # One container per example, each fanning out internally. Three at once is roughly where
 # a laptop's connection pool and NCBI's 10 req/sec stop being comfortable.
-MAX_CONCURRENCY = 3
+MAX_CONCURRENCY = 1
 
 
 async def target(inputs: dict) -> dict:
     """The system under test, in the shape `aevaluate` expects.
 
-    Errors are returned rather than raised. A single example that dies on a transient
-    sandbox failure should score zero and let the sweep finish, not abort nineteen other
-    results — which is the same trade `ResilientSandbox` makes one layer down.
+    Agent errors are returned rather than raised. A single example that dies on a
+    transient sandbox failure should score zero and let the sweep finish, not abort
+    nineteen other results — which is the same trade `ResilientSandbox` makes one layer
+    down.
+
+    A malformed example is the other kind of failure and is raised, not returned: it
+    means the dataset holds something this target cannot score, and swallowing it hides a
+    bad example behind `error_rate: 0` and a silently missing score. `aevaluate` records
+    the raise against that example and carries on with the rest.
     """
+    if "question" not in inputs:
+        raise KeyError(
+            f"example has no 'question' input — got keys {sorted(inputs)}. "
+            f"Is it from another dataset?"
+        )
     try:
         result = await run_once(inputs["question"], quiet=True)
     except Exception as exc:  # noqa: BLE001 - one bad example must not kill the sweep
