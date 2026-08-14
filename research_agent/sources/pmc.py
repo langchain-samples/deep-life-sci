@@ -571,7 +571,7 @@ async def _gather(pmcids: list[str], fn) -> tuple[dict, list[str], list[str]]:
     records: dict[str, Any] = {}
     unavailable: list[str] = []
     async with httpx.AsyncClient(
-        timeout=180.0, follow_redirects=True, headers={"User-Agent": "deepagents_demo/0.1"}
+        timeout=180.0, follow_redirects=True, headers={"User-Agent": "pubmed_agent/0.1"}
     ) as client:
         results = await asyncio.gather(
             *(fn(client, p) for p in normalized), return_exceptions=True
@@ -776,7 +776,7 @@ def make_sandbox_tools(backend: Any) -> list:
 
         async with httpx.AsyncClient(
             timeout=300.0, follow_redirects=True,
-            headers={"User-Agent": "deepagents_demo/0.1"},
+            headers={"User-Agent": "pubmed_agent/0.1"},
         ) as client:
             for pmcid, name in pmcids_and_files:
                 package = await _resolve(client, pmcid)
@@ -853,7 +853,7 @@ def make_sandbox_tools(backend: Any) -> list:
         # article rather than making the model round-trip to get exact names.
         async with httpx.AsyncClient(
             timeout=180.0, follow_redirects=True,
-            headers={"User-Agent": "deepagents_demo/0.1"},
+            headers={"User-Agent": "pubmed_agent/0.1"},
         ) as client:
             loaded = await _load(client, normalized)
         if loaded is None:
@@ -930,7 +930,7 @@ def make_sandbox_tools(backend: Any) -> list:
 
         async with httpx.AsyncClient(
             timeout=180.0, follow_redirects=True,
-            headers={"User-Agent": "deepagents_demo/0.1"},
+            headers={"User-Agent": "pubmed_agent/0.1"},
         ) as client:
             loaded = await _load(client, normalized)
         if loaded is None:

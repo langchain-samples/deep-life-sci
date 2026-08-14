@@ -18,7 +18,7 @@ Python container. See `docs/concept.md` for the design rationale.
    LANGSMITH_PROJECT=science-agent
 
    NCBI_API_KEY=          # optional: raises the rate limit from 3 to 10 req/sec
-   NCBI_TOOL=deepagents_demo
+   NCBI_TOOL=pubmed_agent
    NCBI_EMAIL=you@example.com
    ```
 

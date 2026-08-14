@@ -115,7 +115,7 @@ class PubMedError(RuntimeError):
 
 def _common_params() -> dict[str, str]:
     params = {
-        "tool": os.environ.get("NCBI_TOOL", "deepagents_demo"),
+        "tool": os.environ.get("NCBI_TOOL", "pubmed_agent"),
         "email": os.environ.get("NCBI_EMAIL", ""),
     }
     if key := os.environ.get("NCBI_API_KEY"):
