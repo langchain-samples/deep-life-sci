@@ -42,9 +42,15 @@ nothing about it.
 
 ## Scoring conventions
 
-**All three evaluators are boolean.** They return `score: True`/`False`, which the
-LangSmith SDK preserves as boolean feedback (`SCORE_TYPE` puts `StrictBool` ahead of the
-numeric types), so each column aggregates as a pass rate rather than an average.
+**All three evaluators are boolean.** They return `score: True`/`False`. The SDK accepts
+that (`SCORE_TYPE` puts `StrictBool` ahead of the numeric types) but LangSmith's score
+column is numeric and coerces on ingestion — verified by writing `score=True` and reading
+back `1.0`. So the stored metric is a float that only ever takes 0.0 or 1.0, and its mean
+is exactly a pass rate. The boolean is the *decision*, not the storage type.
+
+`value:` is the categorical channel if a literal "pass"/"fail" label is ever wanted (it
+round-trips as a string), but it carries no number, so the per-column aggregate goes away.
+Not worth the trade here.
 
 Booleans because every fraction these could return was misleading. `citations_exist`
 requires *all* cited PMIDs to resolve: one invented citation in twenty is the whole point

@@ -9,6 +9,7 @@ wheels/
 .ruff_cache/
 .pytest_cache/
 .langgraph_api/
+.DS_Store
 
 # Node modules for the artifact components in ui/. The lockfile beside them IS tracked:
 # langgraph.json bundles ui/ui.tsx at build time, and when that bundle is wrong the

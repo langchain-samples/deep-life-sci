@@ -80,7 +80,7 @@
   expects_artifact: []
   domain: D5 microbiology and infectious disease
   rubric: |-
-    ~15 nM by SPR, for ACE2 binding to the prefusion-stabilised S-2P ectodomain trimer.
+    ~15 nM by SPR, for ACE2 binding to the spike ectodomain.
 
     Require the construct as well as the value: this is the ectodomain trimer, not the RBD. Fail on an RBD number.
 
