@@ -3,6 +3,7 @@
     uv run python -m evals.run                          # full sweep, default profile
     uv run python -m evals.run --structural             # no judge model, no model cost
     uv run python -m evals.run --limit 3                # smoke test on three examples
+    uv run python -m evals.run --seed-id tpd-publication-volume   # one example, by seed id
     MODEL_PROFILE=mixed uv run python -m evals.run      # score a different model pair
 
 Every run gets its own sandbox per example. That is the expensive choice and it is the
@@ -72,6 +73,12 @@ async def main() -> None:
     )
     parser.add_argument("--limit", type=int, help="score only the first N examples")
     parser.add_argument(
+        "--seed-id",
+        nargs="+",
+        metavar="ID",
+        help="score only these examples, by the `id` field in datasets/*.yaml",
+    )
+    parser.add_argument(
         "--concurrency", type=int, default=MAX_CONCURRENCY, help="examples in flight at once"
     )
     args = parser.parse_args()
@@ -85,11 +92,20 @@ async def main() -> None:
     print(f"[evals] {len(evaluators)} evaluators, dataset={args.dataset}")
 
     data = args.dataset
-    if args.limit:
+    if args.seed_id or args.limit:
         from langsmith import Client
 
         client = Client()
-        examples = list(client.list_examples(dataset_name=args.dataset, limit=args.limit))
+        examples = list(client.list_examples(dataset_name=args.dataset))
+        if args.seed_id:
+            wanted = set(args.seed_id)
+            examples = [ex for ex in examples if (ex.metadata or {}).get("seed_id") in wanted]
+            # A seed id matching nothing is a typo, not an empty result. Scoring whatever
+            # else matched would report a green sweep for a question that never ran.
+            if missing := wanted - {ex.metadata["seed_id"] for ex in examples}:
+                raise SystemExit(f"[evals] no example with seed_id in {sorted(missing)}")
+        if args.limit:
+            examples = examples[: args.limit]
         print(f"[evals] limited to {len(examples)} example(s)")
         data = examples
 

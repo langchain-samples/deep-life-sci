@@ -66,6 +66,11 @@ probe.query_translation;  // what PubMed ACTUALLY searched
 probe.warnings;           // must be empty before you trust the count
 ```
 
+When identifying search terms, be sure to consider alternative possible meanings of terms or acronyms to avoid 
+including extraneous papers. Examples:
+- AD can stand for Alzheimer's disease, atopic dermatitis, or autosomal dominant
+- Transformation can refer to genetic transformation or malignant transformation
+
 ### Field tags
 
 An untagged term is searched across every field *and* mapped to MeSH, which is why it
