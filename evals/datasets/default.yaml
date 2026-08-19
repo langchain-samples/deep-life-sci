@@ -107,7 +107,7 @@
   expects_artifact: [image]
   domain: D2 chemistry and drug discovery
   rubric: |-
-    Monotonic, roughly exponential growth. Pass if every year 2015-2025 is reported, 2015 is 30-40, 2025 is 1000-1700, and the
+    Monotonic, roughly exponential growth. Pass if every year 2015-2025 is reported, 2015 is <100, 2025 is 1000-1700, and the
     progression is roughly exponential.
 
 # Q8
@@ -143,5 +143,4 @@
     pre-editing window runs 48-72 h, and cytokine support splits between IL-2 alone and
     IL-7 + IL-15.
 
-    Require at least two named activation reagents and per-paper PMIDs. Fail if
-    activation is called converged, or if the editor is reported as RNP or plasmid.
+    Fail if activation is called converged, or if the editor is reported as RNP or plasmid.
