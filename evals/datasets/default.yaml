@@ -107,7 +107,7 @@
   expects_artifact: [image]
   domain: D2 chemistry and drug discovery
   rubric: |-
-    Monotonic, roughly exponential growth. Pass if every year 2015-2025 is reported, 2015 is 30-40, 2025 is 1450-1600, and the
+    Monotonic, roughly exponential growth. Pass if every year 2015-2025 is reported, 2015 is 30-40, 2025 is 1000-1700, and the
     progression is roughly exponential.
 
 # Q8

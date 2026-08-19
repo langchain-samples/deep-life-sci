@@ -78,6 +78,29 @@ DEFAULT_PROFILE = "anthropic"
 # rather than the whole run. Raise this if a profile's subagent legitimately runs longer.
 SUBAGENT_TIMEOUT_SECONDS = 30.0
 
+# The judge is pinned rather than following the active profile. A sweep exists to compare
+# profiles, so a judge that moved with the profile would shift the yardstick along with
+# the thing being measured — a score change could then be the root model, the leaves, or
+# the grader, with no way to tell which.
+#
+# Not Haiku 4.5, which was the obvious cheap pick: it has no effort scale at all, and the
+# gateway answers `reasoning_effort` with 400 "This model does not support the effort
+# parameter" (probed 2026-08-18). Its only thinking control is the deprecated
+# budget_tokens form. luna takes `low` directly.
+JUDGE_MODEL = "openai/gpt-5.6-luna"
+JUDGE_EFFORT = "low"
+
+# Deliberately longer than SUBAGENT_TIMEOUT_SECONDS. The judge is not on the fan-out
+# critical path — one grading call per example, after the answer already exists — and a
+# timeout here costs a missing score on an otherwise complete run, which is worse than
+# waiting.
+JUDGE_TIMEOUT_SECONDS = 60.0
+
+# Effort levels the gateway accepts on some model. Validated here only to catch a typo
+# before a sweep boots nine containers; whether a *given* model supports the level is the
+# API's call (Haiku 4.5 rejects the parameter outright, Sonnet 4.6 has no `xhigh`).
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 
 def active_profile() -> str:
     name = os.environ.get("MODEL_PROFILE", DEFAULT_PROFILE).strip().lower()
@@ -153,7 +176,25 @@ def _build(model: str, **kwargs):
 
 
 def root_model(**kwargs):
-    """The orchestrating agent's model."""
+    """The orchestrating agent's model.
+
+    ROOT_EFFORT sets reasoning effort on the root half only, so one profile can be scored
+    at two thinking levels without a second profile entry. It is an env var rather than a
+    profile field because it is a sweep axis, not a property of the pair.
+
+    On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
+    defaults `thinking` to adaptive whenever effort is set, it also turns thinking *on* —
+    unset is not "effort=high", it is no thinking at all. That difference is the whole
+    point of the axis, but it means summarized thinking lands in the root transcript, so
+    expect root_context_chars to move with it.
+    """
+    if effort := os.environ.get("ROOT_EFFORT", "").strip().lower():
+        if effort not in EFFORT_LEVELS:
+            raise SystemExit(
+                f"ROOT_EFFORT={effort!r} is not an effort level. "
+                f"Choose one of: {', '.join(EFFORT_LEVELS)}"
+            )
+        kwargs.setdefault("reasoning_effort", effort)
     return _build(PROFILES[active_profile()]["root"], **kwargs)
 
 
@@ -168,6 +209,17 @@ def subagent_model(**kwargs):
     return _build(PROFILES[active_profile()]["subagent"], **kwargs)
 
 
+def judge_model(**kwargs):
+    """The eval judge's model — configured independently of the profile under test.
+
+    See JUDGE_MODEL for why it is pinned. JUDGE_MODEL in the environment overrides it,
+    which is how you check whether a verdict is the answer's fault or the grader's.
+    """
+    kwargs.setdefault("timeout", JUDGE_TIMEOUT_SECONDS)
+    kwargs.setdefault("reasoning_effort", os.environ.get("JUDGE_EFFORT", JUDGE_EFFORT))
+    return _build(os.environ.get("JUDGE_MODEL", JUDGE_MODEL), **kwargs)
+
+
 def describe() -> str:
     """One line naming the active pair and the path each half takes.
 
@@ -179,4 +231,6 @@ def describe() -> str:
     for role in ("root", "subagent"):
         model = PROFILES[p][role]
         parts.append(f"{role}={model} ({_provider_for(model)})")
+    if effort := os.environ.get("ROOT_EFFORT", "").strip().lower():
+        parts.append(f"root_effort={effort}")
     return f"{p}: {' '.join(parts)}"

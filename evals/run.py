@@ -4,6 +4,7 @@
     uv run python -m evals.run --structural             # no judge model, no model cost
     uv run python -m evals.run --limit 3                # smoke test on three examples
     uv run python -m evals.run --seed-id tpd-publication-volume   # one example, by seed id
+    ROOT_EFFORT=low uv run python -m evals.run          # score the root at low effort
     MODEL_PROFILE=mixed uv run python -m evals.run      # score a different model pair
 
 Every run gets its own sandbox per example. That is the expensive choice and it is the
@@ -20,15 +21,29 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 
 from dotenv import load_dotenv
 
+# Same capture-and-restore dance as cli.py, and for the same reason: override=True is what
+# stops an exported LANGSMITH_PROJECT from capturing these traces, but it is too blunt for
+# the settings a sweep exists to vary. Without this, the `MODEL_PROFILE=mixed` in this
+# module's own docstring is silently overwritten by the MODEL_PROFILE in .env and the sweep
+# scores the default profile twice while reporting two different names.
+_ENV_OVERRIDES = {k: v for k in ("MODEL_PROFILE", "ROOT_EFFORT", "JUDGE_MODEL", "JUDGE_EFFORT")
+                  if (v := os.environ.get(k))}
 load_dotenv(override=True)
+os.environ.update(_ENV_OVERRIDES)
 
 from langsmith import aevaluate  # noqa: E402
 
 from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
-from research_agent.models import check_gateway_config, describe  # noqa: E402
+from research_agent.models import (  # noqa: E402
+    JUDGE_EFFORT,
+    JUDGE_MODEL,
+    check_gateway_config,
+    describe,
+)
 from research_agent.runner import run_once  # noqa: E402
 
 DATASET = "pubmed-agent-default"
@@ -65,7 +80,9 @@ async def target(inputs: dict) -> dict:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", default=DATASET, help=f"LangSmith dataset (default: {DATASET})")
+    parser.add_argument(
+        "--dataset", default=DATASET, help=f"LangSmith dataset (default: {DATASET})"
+    )
     parser.add_argument(
         "--structural",
         action="store_true",
@@ -90,6 +107,8 @@ async def main() -> None:
 
     evaluators = STRUCTURAL if args.structural else DEFAULT
     print(f"[evals] {len(evaluators)} evaluators, dataset={args.dataset}")
+    if not args.structural:
+        print(f"[evals] judge={JUDGE_MODEL} effort={JUDGE_EFFORT}")
 
     data = args.dataset
     if args.seed_id or args.limit:
@@ -119,7 +138,20 @@ async def main() -> None:
         max_concurrency=args.concurrency,
         metadata={"profile": profile, "judge": not args.structural},
     )
+    # A verdict per seed, on stdout. Everything here is also in LangSmith, which is where
+    # the answers, judge comments and trajectories are read from — this exists only so the
+    # shape of a sweep is legible without leaving the terminal.
+    rows = [
+        (
+            (row["example"].metadata or {}).get("seed_id"),
+            {r.key: r.score for r in row["evaluation_results"]["results"]},
+        )
+        async for row in results
+    ]
+
     print(f"\n[evals] {results}")
+    for seed_id, scores in sorted(rows, key=lambda r: r[0] or ""):
+        print(f"[evals] {seed_id:<34} " + " ".join(f"{k}={v}" for k, v in sorted(scores.items())))
 
 
 if __name__ == "__main__":

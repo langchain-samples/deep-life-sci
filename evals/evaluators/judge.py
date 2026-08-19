@@ -21,16 +21,18 @@ the single thing the rubric asked for still cleared 0.6. Forcing the choice puts
 information in `comment`, where it names the failing clause, and makes the aggregate a
 pass rate rather than an average of soft judgements.
 
-The judge runs on the *subagent* model, not the root one. It is a single-turn call over a
-short payload, which is the same shape the leaves have, and using the cheap half of the
-pair keeps a full sweep affordable enough to run on every prompt change.
+The judge has its own model (`models.py:judge_model`), configured independently of the
+profile under test. It is a single-turn call over a short payload, so a cheap model at low
+effort keeps a full sweep affordable enough to run on every prompt change — but the reason
+it is pinned rather than following the profile is that a sweep compares profiles, and a
+grader that changed with them would move the yardstick along with what it measures.
 """
 
 from __future__ import annotations
 
 import json
 
-from research_agent.models import subagent_model
+from research_agent.models import judge_model
 
 _PROMPT = """\
 You are grading one answer from a PubMed research assistant.
@@ -85,7 +87,7 @@ async def rubric_judge(run, example) -> dict:
     if not answer:
         return {"key": "rubric", "score": False, "comment": "run produced no answer"}
 
-    model = subagent_model()
+    model = judge_model()
     response = await model.ainvoke(
         _PROMPT.format(question=question, rubric=rubric, answer=answer)
     )
