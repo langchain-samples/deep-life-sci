@@ -6,7 +6,7 @@ Run this once (and again whenever you want to change the library set):
 
 It boots a plain sandbox, installs the scientific Python stack, and freezes the result
 as a named snapshot. `research_agent/sandbox.py` then boots from that snapshot, which
-turns a ~30s per-run `pip install` into a ~1s start.
+turns a ~95s per-run `pip install` into a ~1s start.
 
 Deliberately standalone — it imports nothing from `research_agent`, so it runs by path
 without the package being installed.

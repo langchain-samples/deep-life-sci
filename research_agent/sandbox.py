@@ -319,7 +319,7 @@ async def sandbox_session(*, quiet: bool = False):
     if snapshot is None and not quiet:
         print(
             f"[sandbox] no snapshot named {SNAPSHOT_NAME!r} — installing at runtime "
-            "(~30s). Run `uv run scripts/build_snapshot.py` once to skip this."
+            "(~95s). Run `uv run scripts/build_snapshot.py` once to skip this."
         )
 
     t0 = time.monotonic()

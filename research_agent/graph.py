@@ -80,7 +80,7 @@ def _acquire(thread_id: str):
             idle_ttl_seconds=IDLE_TTL_SECONDS,
         )
         if snapshot is None:
-            # No snapshot: pay the ~30s install once for this thread's sandbox.
+            # No snapshot: pay the ~95s install once for this thread's sandbox.
             print(
                 f"[sandbox] no snapshot named {SNAPSHOT_NAME!r} — installing at "
                 "runtime. Run `uv run scripts/build_snapshot.py` once to skip this."

@@ -127,4 +127,8 @@ Two things verified directly rather than assumed:
   shell into the shared container.
 
 Sandbox boot from the snapshot was 2.3-2.9s across these runs, against ~30s for a bare
-sandbox plus `pip install`.
+sandbox plus `pip install`. That ~30s was measured against the original package set
+(numpy/pandas/scipy/matplotlib and the Office writers); the current list adds rdkit and
+installs in ~95s, so the penalty for skipping the snapshot is now roughly 3x what is
+recorded here. The snapshot boot itself is unchanged — it does not depend on how much
+was baked in.
