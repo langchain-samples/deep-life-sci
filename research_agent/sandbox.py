@@ -55,13 +55,13 @@ from deepagents.backends import LangSmithSandbox
 from deepagents.backends.protocol import ExecuteResponse
 from langsmith.sandbox import SandboxClient, SandboxConnectionError
 
-from research_agent.paths import WORKSPACE
+from research_agent.paths import IDLE_TTL_SECONDS, WORKSPACE
 
 logger = logging.getLogger(__name__)
 
-# The sandbox is deleted on context exit, but a `finally` doesn't survive SIGKILL — and
-# billing doesn't care why the process died. This is the server-side backstop.
-IDLE_TTL_SECONDS = 600
+# `IDLE_TTL_SECONDS` is imported, not defined here: the host cache expires on the same
+# window (`sources/cache_io.py`) so that a returning thread finds its container and its
+# corpus gone together. See the note in `paths.py`.
 
 # The default sandbox image is bare Python 3.12 — no numpy/pandas/scipy/matplotlib —
 # and installing them costs ~30s. `scripts/build_snapshot.py` bakes them into a named

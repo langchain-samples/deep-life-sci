@@ -31,6 +31,7 @@ from langchain_core.messages import AIMessage
 
 from research_agent.agent import build_agent
 from research_agent.sandbox import sandbox_session
+from research_agent.sources import cache_io
 
 
 @dataclass
@@ -97,6 +98,9 @@ async def run_once(question: str, *, backend=None, quiet: bool = True) -> RunRes
         quiet: Suppress sandbox boot chatter. On by default because the caller here is
             usually a harness, not a person.
     """
+    # No-op under `evals/run.py`, which disables expiry outright — but `run_once` is a
+    # public seam and a caller who has not opted out should still get a bounded cache.
+    await cache_io.sweep_if_due()
     if backend is not None:
         return await _run(question, backend)
     async with sandbox_session(quiet=quiet) as owned:

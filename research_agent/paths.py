@@ -1,4 +1,4 @@
-"""Filesystem locations, resolved in one place.
+"""Filesystem locations and the lifetime that governs them, resolved in one place.
 
 Two different roots live here and they must not be confused:
 
@@ -18,6 +18,13 @@ picked, and a cache miss there costs real NCBI rate limit.
 
 Set `RESEARCH_AGENT_DATA_DIR` to point the cache somewhere else — a scratch disk, or a
 per-eval-run directory when you deliberately want cold-cache timings.
+
+`IDLE_TTL_SECONDS` is here rather than in `sandbox.py` because two layers now share it
+and neither may import the other: the sandbox's server-side reaper and the host cache's
+expiry (`sources/cache_io.py`). `sources/` must not depend on the sandbox layer — it is
+host-side data with no container in it — and `sandbox.py` reads env at import time, which
+`cli.py` orders around deliberately. A duplicated literal in both places would drift, and
+the whole point is that a thread's container and a thread's corpus go stale together.
 """
 
 from __future__ import annotations
@@ -31,8 +38,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("RESEARCH_AGENT_DATA_DIR") or REPO_ROOT / "data")
 
 ABSTRACT_CACHE = DATA_DIR / "abstracts"
-SEARCH_DUMPS = DATA_DIR / "searches"
 PMC_CACHE = DATA_DIR / "pmc"
+
+# Everything `cache_io.sweep` is allowed to delete from. Named explicitly rather than
+# walking DATA_DIR, because RESEARCH_AGENT_DATA_DIR can point anywhere and a sweep that
+# recurses into whatever else lives there is a footgun, not a cleanup.
+CACHE_ROOTS = (ABSTRACT_CACHE, PMC_CACHE)
+
+# How long an idle thing stays alive — both a sandbox container and a host cache entry.
+#
+# For the sandbox: it is deleted on context exit, but a `finally` doesn't survive SIGKILL
+# and billing doesn't care why the process died. This is the server-side backstop.
+#
+# For the cache: this is an *idle* TTL, refreshed on every hit (`cache_io`), so a thread
+# that keeps working keeps its corpus and a thread resumed tomorrow refetches. Tying the
+# two together is deliberate — past this window a returning thread finds neither its
+# container nor its cache, instead of a warm cache pointing into a container that is gone.
+IDLE_TTL_SECONDS = 600
 
 # Where the agent works inside the sandbox. Mirrored in the system prompt.
 WORKSPACE = "/workspace"
@@ -43,10 +65,11 @@ OUT_DIR = f"{WORKSPACE}/out"
 
 __all__ = [
     "ABSTRACT_CACHE",
+    "CACHE_ROOTS",
     "DATA_DIR",
+    "IDLE_TTL_SECONDS",
     "OUT_DIR",
     "PMC_CACHE",
     "REPO_ROOT",
-    "SEARCH_DUMPS",
     "WORKSPACE",
 ]

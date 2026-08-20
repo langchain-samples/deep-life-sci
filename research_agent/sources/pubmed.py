@@ -31,7 +31,8 @@ from langchain_core.tools import tool
 
 # Anchored to the repo root, not to this file — see the note in paths.py about why
 # getting that wrong starts a second empty cache instead of failing.
-from research_agent.paths import ABSTRACT_CACHE, SEARCH_DUMPS
+from research_agent.paths import ABSTRACT_CACHE
+from research_agent.sources import cache_io
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 
@@ -42,8 +43,6 @@ SUMMARY_CHUNK = 200
 FETCH_CHUNK = 200
 # esearch silently clamps retmax to this; clamp explicitly so the caller knows.
 MAX_RETMAX = 9999
-# Above this many records, also write the full list to disk for the user's convenience.
-DUMP_THRESHOLD = 50
 
 PMID_RE = re.compile(r"^\d+$")
 FIELD_TAG_RE = re.compile(r"\[([^\[\]]+)\]")
@@ -349,9 +348,6 @@ async def pubmed_search(
         query_translation: what PubMed ACTUALLY searched, with MeSH expansion
         warnings: list of ways PubMed altered the query. Empty means the query ran as written
         records: list of {pmid, title, first_author, last_author, year, journal, doi}
-        saved_to_host: host filesystem path to a JSON dump when the result set is
-            large, else None. This is an operator-side archive — it is not reachable
-            from the agent's sandbox.
     """
     probe_only = int(retmax) == 0
     retmax = 0 if probe_only else max(1, min(int(retmax), MAX_RETMAX))
@@ -381,15 +377,6 @@ async def pubmed_search(
             _summary_to_record(p, summaries[p]) for p in pmids if p in summaries
         ]
 
-    saved_to_host = None
-    if len(records) > DUMP_THRESHOLD:
-        # Off the event loop: this coroutine runs inside the ASGI server under
-        # `langgraph dev`, where a blocking write raises BlockingError. See cache_io.
-        # A real host path, deliberately. The agent works in a sandbox and cannot open
-        # this; the `_host` suffix and the absolute host path are what keep it from
-        # looking like something `read_file` could resolve.
-        saved_to_host = await asyncio.to_thread(_dump_search, term, records)
-
     return {
         "count": count,
         "returned": len(records),
@@ -400,7 +387,6 @@ async def pubmed_search(
         # so the agent can filter and slice all of them in code. Truncating here would
         # hide records from that code for no benefit.
         "records": records,
-        "saved_to_host": saved_to_host,
     }
 
 
@@ -486,15 +472,6 @@ def _parse_article(art: ET.Element) -> dict | None:
     }
 
 
-def _dump_search(term: str, records: list[dict]) -> str:
-    """Archive a large result set host-side. Blocking; call via `asyncio.to_thread`."""
-    SEARCH_DUMPS.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")[:60] or "search"
-    path = SEARCH_DUMPS / f"{slug}.json"
-    path.write_text(json.dumps(records, indent=2))
-    return str(path.resolve())
-
-
 def _scan_cache(valid: list[str]) -> tuple[dict[str, dict], list[str], list[str]]:
     """Partition PMIDs into cached records and ones still needing a fetch.
 
@@ -509,9 +486,16 @@ def _scan_cache(valid: list[str]) -> tuple[dict[str, dict], list[str], list[str]
     from_cache: list[str] = []
     to_fetch: list[str] = []
 
+    # One TTL lookup for the whole batch rather than per PMID, for the same reason this
+    # function takes a list at all: 200 identical env reads would be 200 more than needed.
+    ttl = cache_io.ttl_seconds()
+
     for pmid in valid:
         path = ABSTRACT_CACHE / f"{pmid}.json"
-        if path.exists():
+        # Reading these directly rather than through `cache_io.aread_json` is what the
+        # single-hop batching above buys; the freshness and touch semantics have to match
+        # it exactly, so they come from the same helpers.
+        if cache_io.is_fresh(path, ttl):
             try:
                 cached = json.loads(path.read_text())
                 # Schema migration: entries written before PMC support predate the
@@ -521,6 +505,9 @@ def _scan_cache(valid: list[str]) -> tuple[dict[str, dict], list[str], list[str]
                 if "pmcid" in cached:
                     records[pmid] = cached
                     from_cache.append(pmid)
+                    # Only a usable entry is kept alive: a stale-schema or corrupt file
+                    # keeps its mtime so the next sweep collects it.
+                    cache_io.touch(path)
                     continue
             except (OSError, json.JSONDecodeError):
                 pass  # corrupt cache entry, refetch

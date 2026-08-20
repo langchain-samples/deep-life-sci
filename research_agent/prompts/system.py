@@ -120,9 +120,7 @@ res.records; // [{ pmid, title, first_author, last_author, year, journal, doi }]
 ```
 
 All matching records come back, not a truncated head, so you can filter and sort them in
-code. `res.saved_to_host` is an archive path on the machine running this program — it is
-**not** in your sandbox and `tools.readFile` cannot open it. Ignore it. If you want the
-records as a file, write them yourself with `tools.writeFile`.
+code. If you want the records as a file, write them yourself with `tools.writeFile`.
 
 **Check `res.warnings` before you trust anything.** PubMed does not reject malformed
 queries — it silently rewrites them and returns a large, confident, wrong result set. A

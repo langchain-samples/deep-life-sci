@@ -131,17 +131,15 @@ between deepagents releases.
 PTC tool output is marshalled into the JS heap and never reaches the model's context.
 That's the core economy of the design:
 
-- Host-side `data/` (abstracts, searches, PMC) is the durable cache owned by
+- Host-side `data/` (abstracts, PMC) is the cache owned by
   `sources/pubmed.py`/`sources/pmc.py`. **The agent cannot see it** — the sandbox starts empty and the
-  agent writes what it needs there with `tools.writeFile`.
+  agent writes what it needs there with `tools.writeFile`. It is a within-run
+  optimisation, not a corpus: entries expire on an idle TTL (see below).
 - Abstract/full-text payloads go into *subagent prompts*, not the root transcript.
 - `pmc_locate` is the triage step before any full-text call: it reports section titles,
   figure and table captions, supplementary filenames and the body's character cost
   *without* the body. `fetch_full_text` returns ~40k chars for a median paper and is meant
   for a `full-text-analyst`, never for the root.
-- `pubmed_search` dumps large result sets to `data/searches/` and returns that path as
-  `saved_to_host` — an operator-side archive the agent's sandbox cannot open. It is the one
-  place the design hands the model a path it must not try to read.
 - `/workspace/out/` is the user deliverables folder; `ArtifactMiddleware` sweeps it after
   every tool call and pushes bytes through the `ui` state key (components in `ui/ui.tsx`).
   The prompt forbids `read_file` on anything in `out/` — reading a PNG back cost more
@@ -203,6 +201,17 @@ it down the wrong path, which the gateway answers with a 501 that looks like an 
   Don't simplify them away;
   `docs/pubmed_api_notes/` and `docs/pmc_api_notes/` (both gitignored) have the probe
   results.
+- **The host cache expires on the same window as the sandbox.** `IDLE_TTL_SECONDS`
+  lives in `paths.py` precisely so `sandbox.py` and `sources/cache_io.py` cannot drift
+  apart: past that window a returning thread finds neither its container nor its corpus,
+  rather than a warm cache pointing into a container that is gone. The TTL is *idle* — a
+  hit calls `cache_io.touch`, so a long run keeps its corpus for as long as it is
+  working. Expiry only stops a stale entry being used; `cache_io.sweep_if_due()` is what
+  bounds the disk, called at run start by each of the three entry points and self-gated
+  to once per TTL window (~11ms for 1800 files). `RESEARCH_AGENT_CACHE_TTL=off` restores
+  the old permanent cache, which is what `evals/run.py` sets — otherwise whether an
+  example refetches would depend on wall clock, and both latency and `from_cache` would
+  move for reasons unrelated to the agent.
 - **Blocking calls must go through `asyncio.to_thread`** (`sources/cache_io.py`). Under
   `langgraph dev`, blockbuster turns a blocking `read_text()` in a coroutine into a
   `BlockingError` that kills the run; in production it stalls every other run in the

@@ -30,10 +30,23 @@ from dotenv import load_dotenv
 # the settings a sweep exists to vary. Without this, the `MODEL_PROFILE=mixed` in this
 # module's own docstring is silently overwritten by the MODEL_PROFILE in .env and the sweep
 # scores the default profile twice while reporting two different names.
-_ENV_OVERRIDES = {k: v for k in ("MODEL_PROFILE", "ROOT_EFFORT", "JUDGE_MODEL", "JUDGE_EFFORT")
+_ENV_OVERRIDES = {k: v for k in ("MODEL_PROFILE", "ROOT_EFFORT", "JUDGE_MODEL",
+                                 "JUDGE_EFFORT", "RESEARCH_AGENT_CACHE_TTL")
                   if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_ENV_OVERRIDES)
+
+# Evals opt out of cache expiry. The agent's cache is normally an idle TTL tied to the
+# sandbox's, which is right for a demo and wrong here: whether a given example refetches
+# from NCBI would then depend on how long the sweep before it took, so latency and
+# `from_cache` counts would move between sweeps for reasons that have nothing to do with
+# the agent. A sweep is also shared state across a concurrent run, and one example's
+# expiry landing mid-fan-out of another is not a variable worth having.
+#
+# `setdefault`, so an explicit RESEARCH_AGENT_CACHE_TTL on the command line still wins
+# (captured above, restored after .env) — the deliberate cold-cache run stays possible.
+# For a fully cold corpus, point RESEARCH_AGENT_DATA_DIR at a fresh directory instead.
+os.environ.setdefault("RESEARCH_AGENT_CACHE_TTL", "off")
 
 from langsmith import aevaluate  # noqa: E402
 

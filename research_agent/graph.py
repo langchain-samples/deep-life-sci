@@ -38,13 +38,14 @@ from langsmith.sandbox import SandboxClient
 
 from research_agent.agent import build_agent
 from research_agent.middleware.perf import install_logging
+from research_agent.paths import IDLE_TTL_SECONDS
 from research_agent.sandbox import (
-    IDLE_TTL_SECONDS,
     SNAPSHOT_NAME,
     ResilientSandbox,
     find_snapshot,
     provision,
 )
+from research_agent.sources import cache_io
 
 install_logging()
 
@@ -123,6 +124,10 @@ async def make_graph(config: RunnableConfig):
         return build_agent(ResilientSandbox(sandbox=_UnboundSandbox()))
 
     key = str(thread_id)
+    # Self-gated to once per TTL window, so this is a no-op on all but one turn in ten
+    # minutes. This is the long-lived process of the three, and the only one where an
+    # unbounded cache would accumulate across many threads rather than one run.
+    await cache_io.sweep_if_due()
     sandbox = await asyncio.to_thread(_acquire, key)
     # `_acquire` is both the initial lookup and the recovery path: it re-creates the
     # sandbox under the same thread-derived name if the container is gone. Handing it to
