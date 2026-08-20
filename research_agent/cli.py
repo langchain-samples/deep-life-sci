@@ -1,8 +1,9 @@
-"""One-shot CLI: ask the demo question, stream the answer, exit.
+"""One-shot CLI: ask a question, stream the answer, exit.
 
-    uv run agent                                  # default pair (see models.py)
-    ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one half
-    ROOT_EFFORT=high uv run agent                 # same pair, more thinking
+    uv run agent                                   # the demo question, default pair
+    uv run agent "does X bind Y?"                  # your own question
+    ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one role; SUBAGENT_/JUDGE_ too
+    ROOT_EFFORT=high uv run agent                  # same pair, more thinking
 
 Traces export to LangSmith automatically when LANGSMITH_TRACING=true and
 LANGSMITH_API_KEY are set in .env.
@@ -10,6 +11,7 @@ LANGSMITH_API_KEY are set in .env.
 
 import asyncio
 import os
+import sys
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessageChunk
@@ -89,7 +91,7 @@ async def stream_answer(agent, question: str) -> None:
         print()
 
 
-async def main() -> None:
+async def main(question: str) -> None:
     # Fail on a bad model config before paying to boot a sandbox.
     check_gateway_config()
     install_logging()
@@ -104,12 +106,17 @@ async def main() -> None:
     # back, so no `reacquire` is wired; `sandbox_session` also does the `aclose()` that
     # releases the lazily-built async connection pool.
     async with sandbox_session() as backend:
-        await stream_answer(build_agent(backend), DEMO_QUESTION)
+        await stream_answer(build_agent(backend), question)
 
 
 def run() -> None:
-    """Console-script entry point (`uv run agent`)."""
-    asyncio.run(main())
+    """Console-script entry point (`uv run agent`).
+
+    Joined rather than taken as argv[1] so an unquoted question still works — the
+    shell has already split it into words by the time it arrives here, and the
+    alternative is a confusing "unexpected argument" for a natural way to type it.
+    """
+    asyncio.run(main(" ".join(sys.argv[1:]).strip() or DEMO_QUESTION))
 
 
 if __name__ == "__main__":
