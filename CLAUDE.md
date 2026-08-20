@@ -8,9 +8,9 @@ A Deep Agents demo: a PubMed/PMC research assistant for life scientists. The age
 searches PubMed, retrieves abstracts and PMC full text, fans out cheap subagents across
 many papers, and computes/plots in a sandboxed Python container.
 
-`docs/concept.md` holds the design rationale; `README.md` holds the measured numbers
-behind the architectural choices. Both are worth reading before changing the shape of
-the agent.
+`docs/concept.md` holds the design rationale; `docs/measurements.md` holds the measured
+numbers behind the architectural choices. Both are worth reading before changing the
+shape of the agent. `README.md` is setup only — human onboarding, not a reference.
 
 ## Commands
 
@@ -48,7 +48,9 @@ There is no test suite. Ruff is configured in `pyproject.toml` and available in 
 `dev` dependency group; `evals/` is the closest thing to a regression check.
 
 Skip `scripts/build_snapshot.py` and runs still work — they just pay a ~30s `pip install` each
-time, per sandbox.
+time, per sandbox. `sandbox.py` looks for the snapshot named by `SANDBOX_SNAPSHOT_NAME`
+(default `pubmed-py`) and falls back to installing at runtime when nothing matches, so a
+missing snapshot is slow rather than broken.
 
 ## Environment
 
@@ -90,7 +92,8 @@ Three entry points build the **same** agent via `agent.py:build_agent(backend)`.
 assembles — it owns no sandbox and no I/O, which is what lets all three share it:
 
 - `cli.py` — one-shot CLI. Takes a `sandbox_session()` for the life of a `with` block and
-  streams the answer.
+  streams the answer. The sandbox still gets an `idle_ttl_seconds` as a server-side
+  backstop: a `finally` does not survive `kill -9`.
 - `graph.py` — LangGraph server (`make_graph`). Sandbox is keyed to `thread_id` and
   reused across turns, so turn 2 sees turn 1's files. Cleanup is `idle_ttl_seconds`
   only; nothing is explicitly deleted. Studio inspection (no `thread_id`) gets
@@ -116,6 +119,13 @@ allowlist and writing a prompt segment for it in `prompts/system.py`** — the m
 way to discover it. The non-default `timeout=900`, `max_result_chars=40_000` and
 `max_ptc_calls=512` are all load-bearing; the 5s default timeout kills every real fan-out.
 
+`fetch_figures` and `fetch_supplementary` are the exception to module-level tools:
+`agent.py` builds them per run from `make_sandbox_tools(backend)`, because an image has to
+exist in the sandbox as a real file before `figure-analyst` can `read_file` it.
+
+`CodeInterpreterMiddleware` and dynamic subagents are both **beta** — their APIs may move
+between deepagents releases.
+
 ### Data flow, and what must never enter root context
 
 PTC tool output is marshalled into the JS heap and never reaches the model's context.
@@ -125,6 +135,13 @@ That's the core economy of the design:
   `sources/pubmed.py`/`sources/pmc.py`. **The agent cannot see it** — the sandbox starts empty and the
   agent writes what it needs there with `tools.writeFile`.
 - Abstract/full-text payloads go into *subagent prompts*, not the root transcript.
+- `pmc_locate` is the triage step before any full-text call: it reports section titles,
+  figure and table captions, supplementary filenames and the body's character cost
+  *without* the body. `fetch_full_text` returns ~40k chars for a median paper and is meant
+  for a `full-text-analyst`, never for the root.
+- `pubmed_search` dumps large result sets to `data/searches/` and returns that path as
+  `saved_to_host` — an operator-side archive the agent's sandbox cannot open. It is the one
+  place the design hands the model a path it must not try to read.
 - `/workspace/out/` is the user deliverables folder; `ArtifactMiddleware` sweeps it after
   every tool call and pushes bytes through the `ui` state key (components in `ui/ui.tsx`).
   The prompt forbids `read_file` on anything in `out/` — reading a PNG back cost more
@@ -152,12 +169,20 @@ unrestricted filesystem including `execute`. Nothing routes work to it, but don'
 Root runs the larger model, leaves the cheaper one (`models.py:root_model` /
 `subagent_model`). Whenever the leaves are Anthropic (the default `anthropic`, and
 `mixed`), subagent prompt caching is a net loss — each leaf is a fresh single-turn agent
-with a unique payload, so it pays cache-write premium for reads that never happen.
+with a unique payload, so it pays cache-write premium for reads that never happen. Turn it
+off on the subagent model, keep it on the root. Nothing needs configuring at the root under
+`mixed` or `openai`: an OpenAI root caches server-side on `/v1`, and
+`AnthropicPromptCachingMiddleware` no-ops for it (deepagents constructs it with
+`unsupported_model_behavior="ignore"`).
 
 ### Model gateway
 
-`models.py` picks the gateway path per **model id**, not per profile — that's what lets
-`mixed` run a GPT-5.6 terra root over Haiku 4.5 leaves. The difference is not cosmetic:
+Three profiles in `models.py:PROFILES`, chosen by `MODEL_PROFILE`: `anthropic` (Sonnet 4.6
+root over Haiku 4.5 leaves, the default), `mixed` (GPT-5.6 terra root over Haiku 4.5
+leaves), and `openai` (terra over GPT-5.6 luna).
+
+The gateway path is picked per **model id**, not per profile — that's what lets a single
+profile mix providers, as `mixed` does. The difference is not cosmetic:
 Anthropic models must use the **native** `/anthropic/v1/messages` path or prompt caching
 silently stops working (the OpenAI-compatible shim drops `cache_control`). On the native
 path the base URL must **not** end in `/v1` (the SDK appends it) and model ids are bare
@@ -173,7 +198,9 @@ it down the wrong path, which the gateway answers with a 501 that looks like an 
 - **The guards in `sources/pubmed.py` and `sources/pmc.py` are not boilerplate.** Each corresponds to a
   verified API failure mode that returns a *wrong answer rather than an error* — PMID
   tokenization, silent query rewriting, esummary's 500-UID cap returning HTTP 200,
-  unguessable PMC object version suffixes. Don't simplify them away;
+  unguessable PMC object version suffixes. Field tags in particular are validated locally
+  against PubMed's documented set, so supporting a new one means extending that list.
+  Don't simplify them away;
   `docs/pubmed_api_notes/` and `docs/pmc_api_notes/` (both gitignored) have the probe
   results.
 - **Blocking calls must go through `asyncio.to_thread`** (`sources/cache_io.py`). Under
