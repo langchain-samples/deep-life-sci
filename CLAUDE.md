@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A Deep Agents demo: a PubMed/PMC research assistant for life scientists. The agent
-searches PubMed, retrieves abstracts and PMC full text, fans out cheap subagents across
-many papers, and computes/plots in a sandboxed Python container.
+searches PubMed, retrieves abstracts and PMC full text, queries the ClinicalTrials.gov
+registry, fans out cheap subagents across many papers, and computes/plots in a sandboxed
+Python container.
 
 `docs/concept.md` holds the design rationale; `docs/measurements.md` holds the measured
 numbers behind the architectural choices. Both are worth reading before changing the
@@ -77,7 +78,7 @@ research_agent/
 ├── sandbox.py                            sandbox lifecycle + WebSocket retry
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
-├── sources/     pubmed.py pmc.py cache_io.py
+├── sources/     pubmed.py pmc.py ctgov.py cache_io.py
 └── middleware/  artifacts.py perf.py
 evals/  scripts/  ui/  docs/  data/
 ```
@@ -147,7 +148,7 @@ That's the core economy of the design:
 
 ### Subagents
 
-Three leaves in `prompts/subagents.py`, wired in `agent.py` by `analyst_leaf()`.
+Four leaves in `prompts/subagents.py`, wired in `agent.py` by `analyst_leaf()`.
 deepagents' default is that subagents **inherit the parent's tools**, so every leaf sets
 `tools: []` explicitly — and because `middleware: []` does *not* mean "no middleware"
 (deepagents prepends its own default filesystem, `execute` included), every leaf also
@@ -193,14 +194,39 @@ it down the wrong path, which the gateway answers with a 501 that looks like an 
 
 - **Subagents do no I/O.** NCBI allows 3 req/sec (10 with a key); N subagents each
   fetching would collect 429s. Batch-fetch up front is what makes a large fan-out safe.
+- **ClinicalTrials.gov is the tightest rate limit in the repo, and it is undocumented.**
+  Measured at roughly a 10-token bucket refilling at ~1 req/sec — 12 concurrent requests
+  returned ten 429s — and **the 429 carries no `Retry-After`**, so client-side backoff is
+  the only thing between a fan-out and a dead run. There is no API key that raises it.
+  `sources/ctgov.py:_throttle` serialises every request in the process, which is why that
+  module needs no separate concurrency semaphore the way `pmc.py` does. The design
+  response is to make per-trial fetching unnecessary rather than merely discouraged:
+  `pageSize` reaches 1,000 and `filter.ids` takes 300, so a 1,000-trial corpus is four
+  requests.
+- **`sources/ctgov.py` inverts `pubmed.py`'s validation story on purpose.** This API
+  answers a bad field, enum, area, sort or id with an HTTP 400 naming the token, so 4xx
+  bodies are surfaced verbatim and there is no local `check_field_tags()` analog. Do not
+  add one. Three behaviours still return a wrong answer rather than an error and each has
+  a guard: `pageSize` clamps silently at 1,000, unknown ids vanish from a `filter.ids`
+  batch with no missing list, and `countTotal` is opt-in and first-page-only. A fourth is
+  a footgun rather than a bug — an unfiltered `/studies` is legal and returns all ~600k
+  studies, which is why `ctgov_search` refuses an empty query.
+- **Registry reference types are not interchangeable.** `referencesModule` mixes RESULT
+  (sponsor-designated, and sparse — 1 of 126 references across one measured phase 3 set),
+  DERIVED (NLM's automatic back-link from PubMed's `[si]` field, where the coverage
+  actually is) and BACKGROUND (prior literature the sponsor cited — *other people's
+  papers*). `_study_to_record` splits them into `result_pmids`, `trial_pmids` and
+  `background_pmids` so the model never has to filter on `type`; collapsing them back into
+  one list would answer "what has this trial published" with a reading list.
 - **The guards in `sources/pubmed.py` and `sources/pmc.py` are not boilerplate.** Each corresponds to a
   verified API failure mode that returns a *wrong answer rather than an error* — PMID
   tokenization, silent query rewriting, esummary's 500-UID cap returning HTTP 200,
   unguessable PMC object version suffixes. Field tags in particular are validated locally
   against PubMed's documented set, so supporting a new one means extending that list.
   Don't simplify them away;
-  `docs/pubmed_api_notes/` and `docs/pmc_api_notes/` (both gitignored) have the probe
-  results.
+  `docs/pubmed_api_notes/`, `docs/pmc_api_notes/` and `docs/ctgov_api_notes/` (all
+  gitignored) have the probe results; the ctgov notes ship a `probe.py` that reproduces
+  every measurement, sleeps included.
 - **The host cache expires on the same window as the sandbox.** `IDLE_TTL_SECONDS`
   lives in `paths.py` precisely so `sandbox.py` and `sources/cache_io.py` cannot drift
   apart: past that window a returning thread finds neither its container nor its corpus,

@@ -2,9 +2,9 @@
 
 Two different roots live here and they must not be confused:
 
-* **Host paths** (`DATA_DIR` and below) are the durable cache `sources/pubmed.py` and
-  `sources/pmc.py` own. The agent never sees them — the sandbox starts empty and the
-  agent writes what it needs into it.
+* **Host paths** (`DATA_DIR` and below) are the durable cache the modules under
+  `sources/` own. The agent never sees them — the sandbox starts empty and the agent
+  writes what it needs into it.
 * **Sandbox paths** (`WORKSPACE`, `OUT_DIR`) are strings, not `Path`s, because they name
   locations inside a Linux container that this process cannot stat. They are mirrored in
   the system prompt and baked into the snapshot by `scripts/build_snapshot.py`.
@@ -39,11 +39,12 @@ DATA_DIR = Path(os.environ.get("RESEARCH_AGENT_DATA_DIR") or REPO_ROOT / "data")
 
 ABSTRACT_CACHE = DATA_DIR / "abstracts"
 PMC_CACHE = DATA_DIR / "pmc"
+CTGOV_CACHE = DATA_DIR / "trials"
 
 # Everything `cache_io.sweep` is allowed to delete from. Named explicitly rather than
 # walking DATA_DIR, because RESEARCH_AGENT_DATA_DIR can point anywhere and a sweep that
 # recurses into whatever else lives there is a footgun, not a cleanup.
-CACHE_ROOTS = (ABSTRACT_CACHE, PMC_CACHE)
+CACHE_ROOTS = (ABSTRACT_CACHE, PMC_CACHE, CTGOV_CACHE)
 
 # How long an idle thing stays alive — both a sandbox container and a host cache entry.
 #
@@ -66,6 +67,7 @@ OUT_DIR = f"{WORKSPACE}/out"
 __all__ = [
     "ABSTRACT_CACHE",
     "CACHE_ROOTS",
+    "CTGOV_CACHE",
     "DATA_DIR",
     "IDLE_TTL_SECONDS",
     "OUT_DIR",

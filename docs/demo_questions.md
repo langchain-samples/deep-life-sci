@@ -107,8 +107,11 @@ Worth knowing where this agent will disappoint, so a demo doesn't wander into it
 
 - **Anything needing full text.** Abstracts only. No PMC, no figures, no supplementary
   tables. "What buffer did they use?" is unanswerable.
-- **Anything needing data outside PubMed.** No GEO, no dbGaP, no ClinicalTrials.gov, no
+- **Anything needing data outside PubMed and ClinicalTrials.gov.** No GEO, no dbGaP, no
   citation counts, no web search. It cannot tell you what a paper's impact was.
+- **Posted trial results.** The registry tells you a trial *has* a results section and
+  links its publications; it will not read the posted outcome tables back to you. Ask for
+  the paper instead.
 - **Genomics file formats.** The sandbox has numpy/pandas/scipy/matplotlib, not PLINK or
   bcftools, and no way to fetch a VCF. It computes over what the abstracts yield.
 - **Author disambiguation.** `first_author`/`last_author` are strings from PubMed. Two

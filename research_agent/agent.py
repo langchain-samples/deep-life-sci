@@ -3,7 +3,7 @@
 The agent has two ways to run code, and they do different jobs:
 
 * **`eval` (QuickJS)** — the orchestration layer. It has no network, filesystem, or
-  shell of its own; it reaches the PubMed tools through programmatic tool calling and
+  shell of its own; it reaches the source tools through programmatic tool calling and
   dispatches subagents with `task()`. This is what lets a whole workflow — search,
   batch-fetch, fan out across 30 abstracts, collect — happen in one step.
 * **`execute` (sandbox shell)** — real Python in an isolated Linux container, for
@@ -34,7 +34,9 @@ from research_agent.prompts import (
     FIGURE_ANALYST,
     FULL_TEXT_ANALYST,
     SYSTEM_PROMPT,
+    TRIAL_ANALYST,
 )
+from research_agent.sources.ctgov import ctgov_fetch, ctgov_search
 from research_agent.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
 from research_agent.sources.pubmed import fetch_abstracts, pubmed_search
 
@@ -48,8 +50,10 @@ def build_agent(backend):
     fetch_figures, fetch_supplementary = make_sandbox_tools(backend)
 
     # Subagents inherit the parent's tools unless they declare their own, so every leaf
-    # sets `tools: []` explicitly. That governs the *parent's* tools — the PubMed ones —
-    # and is necessary but not sufficient.
+    # sets `tools: []` explicitly. That governs the *parent's* tools — the PubMed and
+    # registry ones — and is necessary but not sufficient. It is also what keeps
+    # ClinicalTrials.gov's ~1 req/sec limit survivable: a fan-out of leaves that could
+    # each fetch would trip it at twelve.
     #
     # `middleware: []` does NOT mean "no middleware". deepagents unconditionally prepends
     # FilesystemMiddleware + summarization + PatchToolCalls + prompt caching to whatever
@@ -109,12 +113,15 @@ def build_agent(backend):
             fetch_full_text,
             fetch_figures,
             fetch_supplementary,
+            ctgov_search,
+            ctgov_fetch,
         ],
         system_prompt=SYSTEM_PROMPT,
         subagents=[
             analyst_leaf(ABSTRACT_ANALYST),
             analyst_leaf(FULL_TEXT_ANALYST),
             analyst_leaf(FIGURE_ANALYST),
+            analyst_leaf(TRIAL_ANALYST),
         ],
         backend=backend,
         middleware=[
@@ -128,6 +135,8 @@ def build_agent(backend):
                     "fetch_full_text",
                     "fetch_figures",
                     "fetch_supplementary",
+                    "ctgov_search",
+                    "ctgov_fetch",
                     "execute",
                     "read_file",
                     "write_file",

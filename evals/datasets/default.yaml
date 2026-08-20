@@ -45,6 +45,11 @@
     percentage points are mixed on one axis, if SUSTAIN or PIONEER trials are included, or
     if any STEP or OASIS trials are omitted.
 
+    The registry is a legitimate way to find these — a phase 3 semaglutide/obesity search
+    returns 75 trials and the STEP programme is in it — but every plotted point has to come
+    from a publication. Fail if a trial appears on the plot with an effect size that no
+    PMID supports, or if a registered-but-unpublished trial is counted among the 19.
+
 # Q2
 - id: nishikubo-cdtb-nls
   question: What NLS did nishikubo identify in CdtB?

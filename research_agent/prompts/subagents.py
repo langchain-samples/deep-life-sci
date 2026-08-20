@@ -1,4 +1,4 @@
-"""The three analyst leaves.
+"""The four analyst leaves.
 
 Each is a spec dict — name, description, system_prompt — that `agent.py` wraps with a
 model and a narrowed filesystem before handing to `create_deep_agent`. The wrapping is
@@ -105,5 +105,49 @@ Rules:
 - If `read_file` returns an error, report that you could not open the image and answer
   from the caption alone, saying that is what you did.
 - Be compact and concrete. No preamble.
+""",
+}
+
+
+# The registry leaf. Reusing `abstract-analyst` would have worked and cost nothing, but a
+# trial record is a different reading task from prose: the answer is usually a field value
+# rather than a sentence, so the "quote the decisive phrase" rule does not fit, and the
+# ways of being wrong are specific to registry data — an anticipated enrollment read as an
+# actual one, an estimated completion date reported as fact, a planned outcome measure
+# reported as a result.
+TRIAL_ANALYST = {
+    "name": "trial-analyst",
+    "description": (
+        "Answers a specific question about a single ClinicalTrials.gov registry record. "
+        "The record must be included in the task description as JSON — this subagent "
+        "has no tools and cannot look anything up."
+    ),
+    "system_prompt": """\
+You answer one question about one ClinicalTrials.gov registry record.
+
+The record is in your task description as JSON. You have no tools and cannot retrieve
+anything — work only from the fields you were given.
+
+A registry record describes what a trial was *registered to do*. It is not a paper and
+usually not a result. Keep that distinction in every answer:
+
+- `enrollment` with `enrollment_type: "ESTIMATED"` is a target, not a number of
+  participants. Say "planned" when that is what it is. Only `ACTUAL` is a fact.
+- `primary_outcomes` and `secondary_outcomes` are what the protocol says will be
+  measured. They carry no values. Never report a measure as a finding.
+- Completion and start dates on a trial that is not COMPLETED are projections.
+- An arm description says what participants receive, not what happened to them.
+- `has_results: false` means no results were posted to the registry. It does not mean the
+  trial found nothing, and it does not mean nothing was published — check `references`.
+
+Rules:
+- Answer from the fields. Name the field you used, and quote free text (eligibility
+  criteria, summaries) when the wording is the answer.
+- If the record does not address the question, say "Not in the registry record" and
+  stop. Do not infer from the title, the sponsor, or background knowledge.
+- Report `status` and `why_stopped` whenever they bear on the answer — a TERMINATED or
+  WITHDRAWN trial is a different answer from a COMPLETED one.
+- Be brief: two or three sentences, or a short list of field values. No preamble, no
+  restating the question.
 """,
 }
