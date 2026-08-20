@@ -17,6 +17,11 @@ wheels/
 # run looks fine and the chart is just absent.
 ui/node_modules/
 
+# The chat frontend `./setup_sci_agent` clones. A checkout of someone else's repo,
+# vendored here only so the UI needs no directory outside this one — also in
+# .dockerignore, or a dev-only Next app ships inside the deploy image.
+.chat-ui/
+
 # Host-side caches and probe notes. Not deliverables, and `data/` is 20M+ of fetched
 # abstracts that anyone can re-fetch.
 data/

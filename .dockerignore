@@ -1,0 +1,38 @@
+# Docker context for `langgraph build` is this directory (langgraph_cli sets the build
+# context to langgraph.json's parent, then `ADD`s the lot), so what is listed here is what
+# stays out of the deploy image. Nothing else reads this file — local runs are unaffected.
+#
+# The entries that matter are the two big ones: .chat-ui (the dev-only Next frontend,
+# node_modules included) and data/ (20M+ of fetched abstracts, re-fetchable and
+# machine-local). .venv too — the image builds its own from uv.lock, and a macOS venv
+# would be wrong in a Linux image even if it were small.
+#
+# `**/` on anything that can appear at depth: unlike .gitignore, a bare `node_modules/`
+# here matches only the context root, so ui/node_modules would otherwise ship.
+#
+# Do NOT add pyproject.toml, uv.lock, langgraph.json, research_agent/, ui/ or README.md:
+# the first four are the build inputs, ui/ is the artifact components the graph bundles,
+# and pyproject declares `readme = "README.md"`, so excluding it fails the build outright.
+.chat-ui/
+.venv/
+data/
+.git/
+.github/
+**/node_modules/
+**/.next/
+**/__pycache__/
+**/*.py[oc]
+.ruff_cache/
+.pytest_cache/
+.langgraph_api/
+**/.DS_Store
+
+# Secrets stay on the host. langgraph.json's `env` becomes docker-compose's `env_file`,
+# read at run time from outside the image, so the file itself is never needed in here.
+.env
+
+# Measures the agent rather than being part of it, and nothing shipped should carry a test
+# framework (see CLAUDE.md on why evals/ sits outside the package). Safe to drop because
+# [tool.setuptools] names the packages explicitly and the version is static — the build
+# reads neither evals/ nor .git/.
+evals/

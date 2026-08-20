@@ -1,43 +1,50 @@
-# PubMed research assistant
+# Bio/chem research assistant
 
-A [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) demo for life
-scientists. Ask a research question and the agent searches PubMed and retrieves abstracts and
-PMC full text to answer questions and generate figures.
+A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for 
+life scientists and chemists. The agent searches PubMed, PMC full texts, and ClinicalTrials.gov 
+to answer questions and generate figures. Note that full text journal articles are only available
+if present in open-access subset. Only abstracts are available for paywalled papers.
 
-## Setup
+## Quickstart
 
-Needs [uv](https://docs.astral.sh/uv/) and a LangSmith account.
-
-1. `cp .env.example .env` and fill it in. Note:
-   **`OPENAI_API_KEY` is the LangSmith gateway service key (`lsv2_sk_...`), not an OpenAI
-   key** — every model call goes through the LangSmith LLM gateway. `LANGSMITH_API_KEY` is
-   for tracing and for provisioning the sandbox. `NCBI_API_KEY` is optional and raises
-   NCBI's rate limit from 3 to 10 requests/sec.
-
-2. Build a LangSmith Sandboxes snapshot:
-
-   ```bash
-   uv run scripts/build_snapshot.py     # ~35s, once
-   ```
-
-## Run
+### 1. Setup
 
 ```bash
-uv run agent                        # one-shot CLI
-MODEL_PROFILE=mixed uv run agent    # a different model pair (profiles in research_agent/models.py)
-./scripts/dev.sh                    # chat UI + graph server together, Ctrl-C stops both
+./setup_sci_agent                                # once per clone: keys, deps, sandbox, chat UI
 ```
 
-`scripts/dev.sh` expects a clone of
-[`agent-chat-ui`](https://github.com/langchain-ai/agent-chat-ui) at `../agent-chat-ui`
-with the two local patches described in `CLAUDE.md`; `AGENT_CHAT_UI=<path>` points it
-elsewhere.
+`setup_sci_agent` installs [uv](https://docs.astral.sh/uv/) if you don't have it (uv brings
+its own Python), writes `.env`, installs dependencies, builds the sandbox the agent's Python
+runs in, and sets up the chat UI. Re-running it is cheap and skips whatever is already done.
+`run_sci_agent` only runs the agent — it never installs.
 
-`docs/` has demo questions worth starting with.
+You need a [LangSmith](https://smith.langchain.com) account. Setup prompts for two keys
+from [Settings](https://smith.langchain.com/settings), which are **not** interchangeable:
+
+- **`OPENAI_API_KEY`** is the LangSmith **gateway service key** (`lsv2_sk_...`), *not* an
+  OpenAI key. Every model call goes through the LangSmith LLM gateway.
+- **`LANGSMITH_API_KEY`** is for tracing, and for provisioning the sandbox.
+
+`MODEL_PROFILE=mixed ./run_sci_agent ...` switches model pair (see
+`research_agent/models.py`). `--help` on either script covers the rest.
+
+The UI is a clone of [`agent-chat-ui`](https://github.com/langchain-ai/agent-chat-ui) in
+`.chat-ui/` (gitignored), pointed at the local server. It needs [Node](https://nodejs.org)
+20+, the one thing setup won't install for you: everything else finishes without it, so
+install Node and re-run to add the UI. `AGENT_CHAT_UI=<path>` uses your own checkout.
+
+### 3. Running
+
+```bash
+./run_sci_agent                                    # runs with browser UI (recommended)
+
+./run_sci_agent "which papers base-edit PCSK9?"    # runs headlessly in CLI
+```
 
 ## Layout
 
 ```
+setup_sci_agent       one-time setup; run_sci_agent starts the agent
 research_agent/       the agent: assembly, entry points, tools, prompts, middleware
 evals/                LangSmith datasets + evaluators (the closest thing to a test suite)
 scripts/              dev.sh, build_snapshot.py
@@ -45,10 +52,3 @@ ui/                   artifact components rendered by the chat frontend
 docs/                 design notes and demo questions
 data/                 host-side abstract/PMC cache (gitignored)
 ```
-
-## Limits
-
-PubMed only, and full text only from PMC's open-access subset — paywalled papers stop at
-the abstract. The sandbox has the standard scientific Python stack and nothing else: no
-genomics binaries, no other data sources. The code interpreter and dynamic subagents are
-both beta.

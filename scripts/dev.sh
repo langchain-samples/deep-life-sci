@@ -12,14 +12,16 @@
 # it stops.
 #
 #   ./scripts/dev.sh                            # both, logs interleaved and prefixed
-#   AGENT_CHAT_UI=~/src/acu ./scripts/dev.sh    # UI checkout elsewhere than ../agent-chat-ui
+#   AGENT_CHAT_UI=~/src/acu ./scripts/dev.sh    # a chat UI checkout of your own
 #
 set -euo pipefail
 
 # ../ because this script lives in scripts/ but both servers must start from the repo
 # root — `langgraph dev` resolves langgraph.json relative to its working directory.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UI_DIR="${AGENT_CHAT_UI:-$(dirname "$ROOT")/agent-chat-ui}"
+# .chat-ui is where `./setup_sci_agent` puts the frontend: inside the repo,
+# gitignored and dockerignored. AGENT_CHAT_UI points at a checkout of your own instead.
+UI_DIR="${AGENT_CHAT_UI:-$ROOT/.chat-ui}"
 
 PIDS=()
 
@@ -60,8 +62,8 @@ trap cleanup EXIT
 
 if [[ ! -d "$UI_DIR" ]]; then
   echo "[dev] no chat UI at $UI_DIR" >&2
-  echo "[dev] clone it, then apply the /ui/* rewrite to next.config.mjs:" >&2
-  echo "[dev]   git clone https://github.com/langchain-ai/agent-chat-ui.git $UI_DIR" >&2
+  echo "[dev] install it (clone, /ui/* rewrite, pnpm install) with:" >&2
+  echo "[dev]   ./setup_sci_agent" >&2
   exit 1
 fi
 
