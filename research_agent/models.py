@@ -4,14 +4,22 @@ Follows the intro-to-langsmith pattern: gateway compute is authenticated by
 OPENAI_API_KEY (the `lsv2_sk_...` gateway service key, not an OpenAI key), while
 LANGSMITH_API_KEY stays dedicated to tracing.
 
-Pick a profile with MODEL_PROFILE in .env (or `MODEL_PROFILE=openai uv run agent`):
+Each role is configured by three independent env vars, defaulting to the nine constants
+below:
 
-    anthropic  Sonnet 4.6 root  + Haiku 4.5 subagents   (default)
-    mixed      GPT-5.6 terra    + Haiku 4.5 subagents
-    openai     GPT-5.6 terra    + GPT-5.6 luna
+    ROOT_MODEL       SUBAGENT_MODEL       JUDGE_MODEL       gateway model id
+    ROOT_PROVIDER    SUBAGENT_PROVIDER    JUDGE_PROVIDER    anthropic | openai
+    ROOT_EFFORT      SUBAGENT_EFFORT      JUDGE_EFFORT      low | medium | high | xhigh | max
 
-A profile may mix providers, so the gateway path is chosen per *model* rather than per
-profile — see `_provider_for`. The two paths are not cosmetically different:
+Three axes rather than one named profile because they vary independently, and a name that
+covers combinations needs one entry per combination — a root swap, a leaf swap and a
+thinking level are three experiments, and the profile enum could express only the first
+two. `ROOT_EFFORT` already sat outside the naming for exactly that reason.
+
+`{ROLE}_PROVIDER` names the gateway path, per role, which is how one run mixes providers
+across roles. Swapping only `{ROLE}_MODEL` still works: a model with no path named
+alongside it takes the path its id's *form* implies (see `_resolve`). The two paths are
+not cosmetically different:
 
     /anthropic/v1/messages  (native)            prompt caching WORKS
     /v1/chat/completions    (OpenAI-compatible) prompt caching for Anthropic models
@@ -35,25 +43,34 @@ import os
 ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
 OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 
-PROFILES = {
-    "anthropic": {
-        "root": "claude-sonnet-4-6",
-        "subagent": "claude-haiku-4-5-20251001",
-    },
-    # terra root over Haiku leaves. The root swap is the measured win (README: 2 root
-    # turns vs 6, and root occupancy is where the latency lives); the leaves stay on
-    # Haiku because every sandbox-era measurement in this repo — the fan-out latency
-    # distribution behind SUBAGENT_TIMEOUT_SECONDS especially — was taken against it.
-    "mixed": {
-        "root": "openai/gpt-5.6-terra",
-        "subagent": "claude-haiku-4-5-20251001",
-    },
-    "openai": {
-        "root": "openai/gpt-5.6-terra",
-        "subagent": "openai/gpt-5.6-luna",
-    },
-}
-DEFAULT_PROFILE = "anthropic"
+# --- The nine model settings: three roles x three axes -----------------------------
+# Each is overridden by the identically named env var, so `ROOT_EFFORT=high uv run agent`
+# needs no code change. `""` means unset — and unset effort on an Anthropic model is *no
+# thinking at all*, not a default level (see `_effort`). A provider belongs to the model
+# beside it: swap the model in the environment without naming a path and the path comes
+# from the new id's form instead (see `_resolve`).
+
+ROOT_MODEL = "claude-sonnet-5"
+ROOT_PROVIDER = "anthropic"
+ROOT_EFFORT = ""
+
+SUBAGENT_MODEL = "claude-haiku-4-5-20251001"
+SUBAGENT_PROVIDER = "anthropic"
+SUBAGENT_EFFORT = ""  # Haiku 4.5 has no effort scale; the gateway 400s on the parameter
+
+JUDGE_MODEL = "openai/gpt-5.6-luna"
+JUDGE_PROVIDER = "openai"
+JUDGE_EFFORT = "low"
+
+# Why these. Sonnet 5 runs the heavy fan-outs 22-62% faster than Sonnet 4.6 at equal effort
+# (198s -> 76s on semaglutide-weightloss-boxplot) for 1.9-2.6x the root context (fmt-cdiff
+# 86k -> 214k chars), which is the budget docs/measurements.md is about — watch it before
+# assuming the swap is free. `ROOT_MODEL=claude-sonnet-4-6` reproduces the older pair and
+# shares these leaves, so it isolates the root. The leaves stay on Haiku because every
+# latency measurement in this repo was taken against it. The judge is pinned so that a
+# score change is attributable to the pair under test rather than to the grader, and is
+# luna rather than the cheaper Haiku 4.5 because Haiku has no effort scale at all (gateway
+# 400 "This model does not support the effort parameter", probed 2026-08-18).
 
 # Wall-clock ceiling on a single analyst request. Nothing else imposes one.
 #
@@ -78,18 +95,6 @@ DEFAULT_PROFILE = "anthropic"
 # rather than the whole run. Raise this if a profile's subagent legitimately runs longer.
 SUBAGENT_TIMEOUT_SECONDS = 30.0
 
-# The judge is pinned rather than following the active profile. A sweep exists to compare
-# profiles, so a judge that moved with the profile would shift the yardstick along with
-# the thing being measured — a score change could then be the root model, the leaves, or
-# the grader, with no way to tell which.
-#
-# Not Haiku 4.5, which was the obvious cheap pick: it has no effort scale at all, and the
-# gateway answers `reasoning_effort` with 400 "This model does not support the effort
-# parameter" (probed 2026-08-18). Its only thinking control is the deprecated
-# budget_tokens form. luna takes `low` directly.
-JUDGE_MODEL = "openai/gpt-5.6-luna"
-JUDGE_EFFORT = "low"
-
 # Deliberately longer than SUBAGENT_TIMEOUT_SECONDS. The judge is not on the fan-out
 # critical path — one grading call per example, after the answer already exists — and a
 # timeout here costs a missing score on an otherwise complete run, which is worse than
@@ -101,15 +106,28 @@ JUDGE_TIMEOUT_SECONDS = 60.0
 # API's call (Haiku 4.5 rejects the parameter outright, Sonnet 4.6 has no `xhigh`).
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
+# The two gateway paths, which is all a provider selects here — see the module docstring.
+PROVIDERS = ("anthropic", "openai")
 
-def active_profile() -> str:
-    name = os.environ.get("MODEL_PROFILE", DEFAULT_PROFILE).strip().lower()
-    if name not in PROFILES:
-        raise SystemExit(
-            f"MODEL_PROFILE={name!r} is not a known profile. "
-            f"Choose one of: {', '.join(PROFILES)}"
-        )
-    return name
+# The nine settings above, indexed for lookup by role and axis.
+DEFAULTS = {
+    "root": {"model": ROOT_MODEL, "provider": ROOT_PROVIDER, "effort": ROOT_EFFORT},
+    "subagent": {
+        "model": SUBAGENT_MODEL,
+        "provider": SUBAGENT_PROVIDER,
+        "effort": SUBAGENT_EFFORT,
+    },
+    "judge": {"model": JUDGE_MODEL, "provider": JUDGE_PROVIDER, "effort": JUDGE_EFFORT},
+}
+
+# Every env var this module reads, so `cli.py` and `evals/run.py` can preserve them across
+# their `load_dotenv(override=True)` without hand-maintaining a second copy of the list —
+# a copy that drifts is how a `ROOT_MODEL=...` on the command line silently loses to .env.
+ENV_VARS = tuple(
+    f"{role.upper()}_{axis.upper()}"
+    for role in DEFAULTS
+    for axis in ("model", "provider", "effort")
+)
 
 
 def check_gateway_config() -> None:
@@ -128,34 +146,106 @@ def check_gateway_config() -> None:
         )
 
 
-def _provider_for(model: str) -> str:
-    """Which gateway path a model id belongs to.
+def _infer_provider(model: str) -> str:
+    """Which gateway path a model id looks like, or "" when it says nothing.
 
     The two paths take different id forms (see the module docstring), so the id itself
-    says which one it is: bare ids like `claude-sonnet-4-6` are the Anthropic-native
-    path, `provider/model` ids like `openai/gpt-5.6-terra` are the OpenAI-compatible
-    one. Deciding here rather than from the profile name is what lets one profile mix
-    providers, as `mixed` does.
-
-    An id that matches neither form is rejected rather than guessed at: sending a bare
-    OpenAI id down the native path returns a 501 from the gateway, which reads like an
-    outage rather than a typo.
+    usually says which one it is: bare ids like `claude-sonnet-4-6` are the
+    Anthropic-native path, `provider/model` ids like `openai/gpt-5.6-terra` are the
+    OpenAI-compatible one.
     """
     if "/" in model:
         return "openai"
     if model.startswith("claude-"):
         return "anthropic"
+    return ""
+
+
+def _provider_for(role: str, model: str, declared: str) -> str:
+    """Validate one role's gateway path against the form of its model id.
+
+    A named path wins where the form says nothing, which is the escape hatch: a model id in
+    neither known form is usable by naming its path rather than by editing this module.
+    Where the form *does* say something and the two disagree, that is an error rather than
+    a preference — sending an id down the wrong path returns a 501 that reads like an
+    outage, or silently drops prompt caching.
+    """
+    inferred = _infer_provider(model)
+    if declared:
+        if declared not in PROVIDERS:
+            raise SystemExit(
+                f"{role.upper()}_PROVIDER={declared!r} is not a gateway path. "
+                f"Choose one of: {', '.join(PROVIDERS)}"
+            )
+        if inferred and inferred != declared:
+            raise SystemExit(
+                f"{role.upper()}_MODEL={model!r} is a {inferred!r} id but "
+                f"{role.upper()}_PROVIDER says {declared!r}. The paths take different id "
+                "forms: anthropic wants a bare id ('claude-sonnet-5'), openai a prefixed "
+                "one ('openai/gpt-5.6-terra'). Fix one or the other, or unset the "
+                "provider and let the form decide."
+            )
+        return declared
+    if inferred:
+        return inferred
     raise SystemExit(
-        f"Cannot tell which gateway path {model!r} needs. Anthropic-native ids are "
-        "bare ('claude-sonnet-4-6'); everything else must carry a provider prefix "
-        "('openai/gpt-5.6-terra')."
+        f"Cannot tell which gateway path {role.upper()}_MODEL={model!r} needs. "
+        "Anthropic-native ids are bare ('claude-sonnet-5'); everything else must carry a "
+        f"provider prefix ('openai/gpt-5.6-terra'). Or set {role.upper()}_PROVIDER "
+        f"explicitly to one of: {', '.join(PROVIDERS)}"
     )
 
 
-def _build(model: str, **kwargs):
+def _setting(role: str, axis: str) -> str:
+    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else the default.
+
+    An env var set to whitespace reads as unset rather than as an empty model id.
+    """
+    return os.environ.get(f"{role.upper()}_{axis.upper()}", "").strip() or DEFAULTS[role][axis]
+
+
+def _effort(role: str) -> str:
+    """`{ROLE}_EFFORT`, validated locally.
+
+    Validated here only to catch a typo before a sweep boots nine containers; whether a
+    *given* model supports the level is the API's call (Haiku 4.5 rejects the parameter
+    outright, Sonnet 4.6 has no `xhigh`).
+
+    On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
+    defaults `thinking` to adaptive whenever effort is set, setting it also turns thinking
+    *on* — unset is not "effort=high", it is no thinking at all. That difference is the
+    whole point of the axis, but it means summarized thinking lands in the transcript, so
+    expect root_context_chars to move with ROOT_EFFORT.
+    """
+    effort = _setting(role, "effort").lower()
+    if effort and effort not in EFFORT_LEVELS:
+        raise SystemExit(
+            f"{role.upper()}_EFFORT={effort!r} is not an effort level. "
+            f"Choose one of: {', '.join(EFFORT_LEVELS)}"
+        )
+    return effort
+
+
+def _resolve(role: str) -> tuple[str, str, str]:
+    """(model id, gateway path, effort) for one role, from the env or the defaults above."""
+    model = _setting(role, "model")
+    provider = os.environ.get(f"{role.upper()}_PROVIDER", "").strip().lower()
+    if not provider:
+        # A default provider describes the default model it sits beside, so it does not
+        # survive that model being replaced: `ROOT_MODEL=openai/gpt-5.6-terra` alone would
+        # otherwise contradict ROOT_PROVIDER and refuse to run.
+        provider = (
+            DEFAULTS[role]["provider"]
+            if model == DEFAULTS[role]["model"]
+            else _infer_provider(model)
+        )
+    return model, _provider_for(role, model, provider), _effort(role)
+
+
+def _build(model: str, provider: str, **kwargs):
     check_gateway_config()
     key = os.environ["OPENAI_API_KEY"]
-    if _provider_for(model) == "anthropic":
+    if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
         return ChatAnthropic(
@@ -175,62 +265,66 @@ def _build(model: str, **kwargs):
     )
 
 
-def root_model(**kwargs):
-    """The orchestrating agent's model.
-
-    ROOT_EFFORT sets reasoning effort on the root half only, so one profile can be scored
-    at two thinking levels without a second profile entry. It is an env var rather than a
-    profile field because it is a sweep axis, not a property of the pair.
-
-    On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
-    defaults `thinking` to adaptive whenever effort is set, it also turns thinking *on* —
-    unset is not "effort=high", it is no thinking at all. That difference is the whole
-    point of the axis, but it means summarized thinking lands in the root transcript, so
-    expect root_context_chars to move with it.
-    """
-    if effort := os.environ.get("ROOT_EFFORT", "").strip().lower():
-        if effort not in EFFORT_LEVELS:
-            raise SystemExit(
-                f"ROOT_EFFORT={effort!r} is not an effort level. "
-                f"Choose one of: {', '.join(EFFORT_LEVELS)}"
-            )
+def _model_for(role: str, **kwargs):
+    """One role's chat model, with its effort applied if it has one."""
+    model, provider, effort = _resolve(role)
+    if effort:
         kwargs.setdefault("reasoning_effort", effort)
-    return _build(PROFILES[active_profile()]["root"], **kwargs)
+    return _build(model, provider, **kwargs)
+
+
+def root_model(**kwargs):
+    """The orchestrating agent's model."""
+    return _model_for("root", **kwargs)
 
 
 def subagent_model(**kwargs):
     """The per-abstract analyst's model — the cheaper one of the pair.
 
     Timed out by default; see SUBAGENT_TIMEOUT_SECONDS for why one is mandatory here.
-    `timeout` is the constructor alias on both ChatAnthropic and ChatOpenAI, so this
-    works on either profile, and an explicit `timeout=` from a caller still wins.
+    `timeout` is the constructor alias on both ChatAnthropic and ChatOpenAI, so this works
+    whichever path the leaves take, and an explicit `timeout=` from a caller still wins.
     """
     kwargs.setdefault("timeout", SUBAGENT_TIMEOUT_SECONDS)
-    return _build(PROFILES[active_profile()]["subagent"], **kwargs)
+    return _model_for("subagent", **kwargs)
 
 
 def judge_model(**kwargs):
-    """The eval judge's model — configured independently of the profile under test.
+    """The eval judge's model — configured independently of the pair under test.
 
     See JUDGE_MODEL for why it is pinned. JUDGE_MODEL in the environment overrides it,
     which is how you check whether a verdict is the answer's fault or the grader's.
     """
     kwargs.setdefault("timeout", JUDGE_TIMEOUT_SECONDS)
-    kwargs.setdefault("reasoning_effort", os.environ.get("JUDGE_EFFORT", JUDGE_EFFORT))
-    return _build(os.environ.get("JUDGE_MODEL", JUDGE_MODEL), **kwargs)
+    return _model_for("judge", **kwargs)
 
 
-def describe() -> str:
-    """One line naming the active pair and the path each half takes.
+def describe(*roles: str) -> str:
+    """One line saying which model is doing what, for startup logs and eval metadata.
 
-    The path is worth printing, not just the model: it is what decides whether prompt
-    caching works, and a mixed profile sends its two halves different ways.
+    Names the model, its gateway path and its effort for each role asked for, defaulting to
+    the pair that does the work:
+
+        root=claude-sonnet-5 (anthropic) subagent=claude-haiku-4-5-20251001 (anthropic)
+
+    The path is printed and not just the model because it decides whether prompt caching
+    works, and because nothing stops two roles taking different ones.
     """
-    p = active_profile()
     parts = []
-    for role in ("root", "subagent"):
-        model = PROFILES[p][role]
-        parts.append(f"{role}={model} ({_provider_for(model)})")
-    if effort := os.environ.get("ROOT_EFFORT", "").strip().lower():
-        parts.append(f"root_effort={effort}")
-    return f"{p}: {' '.join(parts)}"
+    for role in roles or ("root", "subagent"):
+        model, provider, effort = _resolve(role)
+        parts.append(f"{role}={model} ({provider}" + (f", {effort})" if effort else ")"))
+    return " ".join(parts)
+
+
+def slug() -> str:
+    """A short name for the current configuration, used as the eval experiment prefix.
+
+    Just the root model and its effort — `claude-sonnet-5`, or `claude-sonnet-4-6-low` —
+    because the root is what a sweep almost always varies. Two sweeps that differ only in
+    their leaves therefore share a prefix and sort together in LangSmith, which is the
+    comparison you wanted anyway; `describe()` goes into the experiment metadata, so the
+    leaves and the judge are still recorded.
+    """
+    model, _, effort = _resolve("root")
+    return f"{model.split('/')[-1]}" + (f"-{effort}" if effort else "")

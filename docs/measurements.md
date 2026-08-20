@@ -1,6 +1,6 @@
 # Measured numbers
 
-The figures behind the architectural choices in this repo — which model profile to run,
+The figures behind the architectural choices in this repo — which models to run,
 why the leaves are cheap, why prompt caching is configured the way it is, and why the
 system prompt forbids reading artifacts back. All of it was measured against the live
 gateway and the live NCBI APIs, not estimated.
@@ -9,6 +9,19 @@ Read this with `docs/concept.md` before changing the shape of the agent. `CLAUDE
 states the rules these numbers produced; this file is the evidence.
 
 ## Profile comparison
+
+**The profile names below are historical.** `models.py` no longer has a profile enum —
+each role is configured by `{ROOT,SUBAGENT,JUDGE}_{MODEL,PROVIDER,EFFORT}` instead. The
+pairs these runs used, as env:
+
+| was | now |
+|---|---|
+| `anthropic` | `ROOT_MODEL=claude-sonnet-4-6` (leaves already default to Haiku 4.5) |
+| `mixed` | `ROOT_MODEL=openai/gpt-5.6-terra` |
+| `openai` | `ROOT_MODEL=openai/gpt-5.6-terra SUBAGENT_MODEL=openai/gpt-5.6-luna` |
+
+The current default is `claude-sonnet-5` over those same Haiku leaves, which no profile
+ever named and which none of the figures below were measured against.
 
 **These numbers predate the sandbox.** They were measured with a host-rooted filesystem
 backend and no `execute` tool, so the prompt was shorter and no run spent time booting a

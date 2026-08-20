@@ -1,11 +1,11 @@
 """Score the agent against a LangSmith dataset.
 
-    uv run python -m evals.run                          # full sweep, default profile
+    uv run python -m evals.run                          # full sweep, default pair
     uv run python -m evals.run --structural             # no judge model, no model cost
     uv run python -m evals.run --limit 3                # smoke test on three examples
     uv run python -m evals.run --seed-id tpd-publication-volume   # one example, by seed id
     ROOT_EFFORT=low uv run python -m evals.run          # score the root at low effort
-    MODEL_PROFILE=mixed uv run python -m evals.run      # score a different model pair
+    ROOT_MODEL=openai/gpt-5.6-terra uv run python -m evals.run   # score a different root
 
 Every run gets its own sandbox per example. That is the expensive choice and it is the
 right one: `evals/` scores `artifact_names`, and a shared container would let one
@@ -27,11 +27,12 @@ from dotenv import load_dotenv
 
 # Same capture-and-restore dance as cli.py, and for the same reason: override=True is what
 # stops an exported LANGSMITH_PROJECT from capturing these traces, but it is too blunt for
-# the settings a sweep exists to vary. Without this, the `MODEL_PROFILE=mixed` in this
-# module's own docstring is silently overwritten by the MODEL_PROFILE in .env and the sweep
-# scores the default profile twice while reporting two different names.
-_ENV_OVERRIDES = {k: v for k in ("MODEL_PROFILE", "ROOT_EFFORT", "JUDGE_MODEL",
-                                 "JUDGE_EFFORT", "RESEARCH_AGENT_CACHE_TTL")
+# the settings a sweep exists to vary. Without this, the `ROOT_MODEL=...` in this module's
+# own docstring is silently overwritten by the ROOT_MODEL in .env and the sweep scores the
+# default pair twice while reporting two different names.
+from research_agent.models import ENV_VARS
+
+_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "RESEARCH_AGENT_CACHE_TTL")
                   if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_ENV_OVERRIDES)
@@ -52,10 +53,9 @@ from langsmith import aevaluate  # noqa: E402
 
 from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
 from research_agent.models import (  # noqa: E402
-    JUDGE_EFFORT,
-    JUDGE_MODEL,
     check_gateway_config,
     describe,
+    slug,
 )
 from research_agent.runner import run_once  # noqa: E402
 
@@ -115,13 +115,15 @@ async def main() -> None:
 
     # Fail on a bad model config before booting the first container.
     check_gateway_config()
-    profile = describe()
-    print(f"[evals] {profile}")
+    pair = describe()
+    print(f"[evals] {pair}")
 
     evaluators = STRUCTURAL if args.structural else DEFAULT
     print(f"[evals] {len(evaluators)} evaluators, dataset={args.dataset}")
     if not args.structural:
-        print(f"[evals] judge={JUDGE_MODEL} effort={JUDGE_EFFORT}")
+        # The effective judge, not the pinned default — JUDGE_MODEL in the environment
+        # overrides it, and a sweep that printed the constant would hide that.
+        print(f"[evals] {describe('judge')}")
 
     data = args.dataset
     if args.seed_id or args.limit:
@@ -146,10 +148,11 @@ async def main() -> None:
         data=data,
         evaluators=evaluators,
         # The prefix is what makes two experiments comparable in the LangSmith UI, so it
-        # carries the model profile — the single most common thing being varied.
-        experiment_prefix=f"pubmed-{profile.split(':')[0]}",
+        # carries the root model and its effort — the things most commonly varied. The
+        # full configuration goes in metadata, where the leaves and the judge survive too.
+        experiment_prefix=f"pubmed-{slug()}",
         max_concurrency=args.concurrency,
-        metadata={"profile": profile, "judge": not args.structural},
+        metadata={"models": describe("root", "subagent", "judge"), "judge": not args.structural},
     )
     # A verdict per seed, on stdout. Everything here is also in LangSmith, which is where
     # the answers, judge comments and trajectories are read from — this exists only so the

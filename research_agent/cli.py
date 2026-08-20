@@ -1,7 +1,8 @@
 """One-shot CLI: ask the demo question, stream the answer, exit.
 
-    uv run agent                        # default `anthropic` profile
-    MODEL_PROFILE=mixed uv run agent    # switch model pair (see models.py PROFILES)
+    uv run agent                                  # default pair (see models.py)
+    ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one half
+    ROOT_EFFORT=high uv run agent                 # same pair, more thinking
 
 Traces export to LangSmith automatically when LANGSMITH_TRACING=true and
 LANGSMITH_API_KEY are set in .env.
@@ -18,9 +19,15 @@ from langchain_core.messages import AIMessageChunk
 #
 # But override=True is too blunt for settings you want to vary per run, so anything
 # passed explicitly on the command line is captured first and restored afterwards.
-# Without this, `MODEL_PROFILE=openai uv run agent` is silently overwritten by the
-# MODEL_PROFILE in .env and you get the default profile with no indication why.
-_CLI_OVERRIDES = {k: v for k in ("MODEL_PROFILE",) if (v := os.environ.get(k))}
+# Without this, `ROOT_MODEL=... uv run agent` is silently overwritten by the ROOT_MODEL
+# in .env and you get the default pair with no indication why.
+#
+# The names come from models.py rather than a copy here, so a new axis is preserved by
+# adding it there and nowhere else. Importing that module this early is safe *because* it
+# reads the environment only inside functions — unlike `sandbox.py` below.
+from research_agent.models import ENV_VARS
+
+_CLI_OVERRIDES = {k: v for k in ENV_VARS if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_CLI_OVERRIDES)
 

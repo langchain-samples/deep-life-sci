@@ -16,8 +16,8 @@ shape of the agent. `README.md` is setup only — human onboarding, not a refere
 ## Commands
 
 ```bash
-uv run agent                           # one-shot CLI, default `anthropic` profile
-MODEL_PROFILE=mixed uv run agent       # switch model pair (see models.py PROFILES)
+uv run agent                           # one-shot CLI, default pair (see models.py)
+ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one role; SUBAGENT_/JUDGE_ too
 uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
                                        # into the sandbox snapshot (~100s, rdkit is most of it)
 ./scripts/dev.sh                       # both halves of the chat stack, Ctrl-C stops both
@@ -61,10 +61,13 @@ go through the LangSmith LLM gateway. `LANGSMITH_API_KEY` is for tracing and san
 provisioning.
 
 `cli.py` calls `load_dotenv(override=True)` on purpose (an exported `LANGSMITH_PROJECT`
-would otherwise capture traces), but captures CLI-passed `MODEL_PROFILE` first and
-restores it afterwards. Adding another per-run env override means adding it to
-`_CLI_OVERRIDES` in `cli.py`. That ordering is why `cli.py` imports `sandbox.py` *after*
-`load_dotenv` — `sandbox.py` reads `SANDBOX_SNAPSHOT_NAME` at import time.
+would otherwise capture traces), but captures the CLI-passed model vars first and
+restores them afterwards. The names come from `models.py:ENV_VARS`, which `cli.py` and
+`evals/run.py` both import, so a new axis is preserved by adding it there and nowhere
+else — a hand-copied list is how a `ROOT_MODEL=...` on the command line silently loses to
+`.env`. That ordering is why `cli.py` imports `sandbox.py` *after* `load_dotenv` —
+`sandbox.py` reads `SANDBOX_SNAPSHOT_NAME` at import time, whereas `models.py` reads the
+environment only inside functions and is therefore safe to import before it.
 
 Every host-side path is defined in `research_agent/paths.py`, anchored to the repo root
 rather than to any module's location. `RESEARCH_AGENT_DATA_DIR` overrides where the cache
@@ -166,29 +169,52 @@ The auto-added `general-purpose` subagent *does* inherit the PubMed tools and an
 unrestricted filesystem including `execute`. Nothing routes work to it, but don't start.
 
 Root runs the larger model, leaves the cheaper one (`models.py:root_model` /
-`subagent_model`). Whenever the leaves are Anthropic (the default `anthropic`, and
-`mixed`), subagent prompt caching is a net loss — each leaf is a fresh single-turn agent
-with a unique payload, so it pays cache-write premium for reads that never happen. Turn it
-off on the subagent model, keep it on the root. Nothing needs configuring at the root under
-`mixed` or `openai`: an OpenAI root caches server-side on `/v1`, and
+`subagent_model`). Whenever the leaves are Anthropic — which the default
+`SUBAGENT_MODEL` is — subagent prompt caching is a net loss: each leaf is a fresh single-turn
+agent with a unique payload, so it pays cache-write premium for reads that never happen.
+Turn it off on the subagent model, keep it on the root. Nothing needs configuring for an
+OpenAI root: it caches server-side on `/v1`, and
 `AnthropicPromptCachingMiddleware` no-ops for it (deepagents constructs it with
 `unsupported_model_behavior="ignore"`).
 
 ### Model gateway
 
-Three profiles in `models.py:PROFILES`, chosen by `MODEL_PROFILE`: `anthropic` (Sonnet 4.6
-root over Haiku 4.5 leaves, the default), `mixed` (GPT-5.6 terra root over Haiku 4.5
-leaves), and `openai` (terra over GPT-5.6 luna).
+Three roles — `ROOT`, `SUBAGENT`, `JUDGE` — each configured by three independent env
+vars, defaulting to the constants in `models.py`:
 
-The gateway path is picked per **model id**, not per profile — that's what lets a single
-profile mix providers, as `mixed` does. The difference is not cosmetic:
-Anthropic models must use the **native** `/anthropic/v1/messages` path or prompt caching
-silently stops working (the OpenAI-compatible shim drops `cache_control`). On the native
-path the base URL must **not** end in `/v1` (the SDK appends it) and model ids are bare
-(`claude-sonnet-4-6`, not `anthropic/...`). OpenAI models use `/v1` and cache
-server-side automatically. `_provider_for` reads the path off the id form — bare means
-native, prefixed means `/v1` — and rejects anything matching neither rather than sending
-it down the wrong path, which the gateway answers with a 501 that looks like an outage.
+| | `_MODEL` | `_PROVIDER` | `_EFFORT` |
+|---|---|---|---|
+| `ROOT` | `claude-sonnet-5` | `anthropic` | unset |
+| `SUBAGENT` | `claude-haiku-4-5-20251001` | `anthropic` | unset |
+| `JUDGE` | `openai/gpt-5.6-luna` | `openai` | `low` |
+
+All nine sit in one block at the top of `models.py` rather than beside the notes that
+justify them, so the configuration is readable without reading the rationale.
+
+Three axes rather than one named profile because they vary independently: a root swap, a
+leaf swap and a thinking level are three different experiments, and a name covering
+combinations needs an entry per combination. `ROOT_EFFORT` always sat outside the naming
+for that reason.
+
+`_EFFORT` unset is **not** `effort=high`, it is no thinking at all — langchain-anthropic
+defaults `thinking` to adaptive whenever effort is set, so setting it turns thinking on and
+`root_context_chars` moves with it. Haiku 4.5 has no effort scale and the gateway answers
+`SUBAGENT_EFFORT` on it with a 400.
+
+The gateway path is picked per **model**, not globally — that's what lets one run mix
+providers across roles. The difference is not cosmetic: Anthropic models must use the
+**native** `/anthropic/v1/messages` path or prompt caching silently stops working (the
+OpenAI-compatible shim drops `cache_control`). On the native path the base URL must **not**
+end in `/v1` (the SDK appends it) and model ids are bare (`claude-sonnet-5`, not
+`anthropic/...`). OpenAI models use `/v1` and cache server-side automatically.
+
+Each role's path is stated outright rather than inferred, and a default path belongs to
+the default model beside it — replace only `ROOT_MODEL` and the path comes from the new
+id's form instead (bare means native, prefixed means `/v1`), which is what keeps
+`ROOT_MODEL=openai/gpt-5.6-terra` a one-variable swap. Naming `_PROVIDER` explicitly is
+the escape hatch for an id in neither form, so a new model needs no code edit; name one
+the id's form contradicts and `_provider_for` raises rather than sending it down the wrong
+path, which the gateway answers with a 501 that looks like an outage.
 
 ## Invariants worth preserving
 

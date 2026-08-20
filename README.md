@@ -24,7 +24,7 @@ Needs [uv](https://docs.astral.sh/uv/) and a LangSmith account.
 
 ```bash
 uv run agent                        # one-shot CLI
-MODEL_PROFILE=mixed uv run agent    # a different model pair (profiles in research_agent/models.py)
+ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # a different root (see research_agent/models.py)
 ./scripts/dev.sh                    # chat UI + graph server together, Ctrl-C stops both
 ```
 
