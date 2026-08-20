@@ -112,8 +112,8 @@ Worth knowing where this agent will disappoint, so a demo doesn't wander into it
 - **Posted trial results.** The registry tells you a trial *has* a results section and
   links its publications; it will not read the posted outcome tables back to you. Ask for
   the paper instead.
-- **Genomics file formats.** The sandbox has numpy/pandas/scipy/matplotlib, not PLINK or
-  bcftools, and no way to fetch a VCF. It computes over what the abstracts yield.
+- **Genomics file formats.** The sandbox has the Python stack (biopython included), not
+  PLINK or bcftools, and no way to fetch a VCF. It computes over what the abstracts yield.
 - **Author disambiguation.** `first_author`/`last_author` are strings from PubMed. Two
   different people named J. Zhang are one string.
 - **Exhaustive claims.** The agent targets ≤200 papers and shapes queries to get there,

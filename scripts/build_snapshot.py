@@ -23,7 +23,7 @@ load_dotenv(override=True)
 
 from langsmith.sandbox import SandboxClient  # noqa: E402
 
-SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py")
+SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py-bio")
 
 # Pinned so a rebuild doesn't silently move the library versions under the agent.
 # Bump deliberately, then rebuild.
@@ -40,17 +40,42 @@ PACKAGES = [
     # need to hand back to the user has to already be here.
     "python-docx==1.2.0",
     "python-pptx==1.0.2",
+    # Domain libraries. scipy covers t-tests and curve fitting and stops there, but the
+    # questions this agent gets are pooled effect sizes, hazard ratios, sequences and
+    # SMILES — without these the model hand-rolls the statistics in raw numpy.
+    "statsmodels==0.14.6",  # meta-analysis, GLMs, multiple-testing correction
+    # Survival analysis: Kaplan-Meier, Cox PH, log-rank. This is scikit-survival
+    # rather than the more usual lifelines because lifelines pins `pandas<3.0` and
+    # would drag the pandas pin above backwards. statsmodels.duration (SurvfuncRight,
+    # PHReg, survdiff) covers the same ground if this ever has to go.
+    "scikit-survival==0.28.0",  # needs scikit-learn>=1.9,<1.10 — keep the two in step
+    "scikit-learn==1.9.0",  # clustering/PCA over a corpus
+    # Parsers only (FASTA/GenBank/PDB/Medline). Its Bio.Entrez fetchers reach NCBI
+    # directly, which would bypass sources/pubmed.py's rate limiting, tokenization
+    # guards and cache — that path stays host-side. The prompt says so too.
+    "biopython==1.88",
+    # ~120MB wheel and the bulk of this script's runtime, but the only real option for
+    # SMILES, descriptors, fingerprints and 2D depiction.
+    "rdkit==2026.3.5",
 ]
 
 # The workspace is baked in so the agent never has to create it, and so a prompt that
 # says "save plots to /workspace/out" is true the instant the sandbox boots.
 BUILD = (
     "mkdir -p /workspace/out && "
+    # rdkit.Chem.Draw dlopens libXrender/libXext, which the base image doesn't carry.
+    # Core rdkit (parsing, descriptors, fingerprints) works without them, so the gap
+    # only surfaces at the moment the agent tries to draw a molecule — as an
+    # ImportError naming a .so, from a library the prompt promised it had.
+    "(apt-get update -qq && apt-get install -y -qq --no-install-recommends "
+    "libxrender1 libxext6) >/dev/null && "
     f"pip install --break-system-packages --quiet {' '.join(PACKAGES)}"
 )
 
 VERIFY = (
     'python3 -c "import numpy, pandas, scipy, matplotlib, openpyxl, docx, pptx; '
+    "import statsmodels, sksurv, sklearn, Bio; "
+    "from rdkit import Chem, rdBase; from rdkit.Chem import Descriptors, Draw; "
     "matplotlib.use('Agg'); import matplotlib.pyplot as plt; "
     "plt.plot([1, 2, 3]); plt.savefig('/workspace/out/_smoke.png'); "
     # Exercise the xlsx path rather than just importing openpyxl: the failure mode
@@ -61,9 +86,17 @@ VERIFY = (
     "d = docx.Document(); d.add_paragraph('smoke'); d.save('/workspace/out/_smoke.docx'); "
     "p = pptx.Presentation(); p.slides.add_slide(p.slide_layouts[0]); "
     "p.save('/workspace/out/_smoke.pptx'); "
+    # rdkit's import only proves its shared libraries loaded. A parse plus a descriptor
+    # is what catches a wheel whose data files didn't come along: MolFromSmiles returns
+    # None rather than raising, so the failure would otherwise surface mid-run.
+    "mol = Chem.MolFromSmiles('CC(=O)Oc1ccccc1C(=O)O'); Descriptors.MolWt(mol); "
+    # Depiction is the part that needs the apt packages above, and importing Draw is
+    # not enough to prove they're there — the .so load happens on the draw call.
+    "Draw.MolToFile(mol, '/workspace/out/_smoke_mol.png'); "
     "print(numpy.__version__, pandas.__version__, scipy.__version__, "
     "matplotlib.__version__, openpyxl.__version__, docx.__version__, "
-    'pptx.__version__)"'
+    "pptx.__version__, statsmodels.__version__, sksurv.__version__, "
+    'sklearn.__version__, Bio.__version__, rdBase.rdkitVersion)"'
 )
 
 
@@ -96,7 +129,11 @@ def main() -> None:
         # It has to start empty now that ArtifactMiddleware publishes everything it
         # finds there — a leftover would be pushed to the UI on the first tool call of
         # every run, in every thread.
-        sandbox.run("rm -f /workspace/out/_smoke.png /workspace/out/_smoke.xlsx")
+        sandbox.run(
+            "rm -f /workspace/out/_smoke.png /workspace/out/_smoke.xlsx "
+            "/workspace/out/_smoke.docx /workspace/out/_smoke.pptx "
+            "/workspace/out/_smoke_mol.png"
+        )
 
         t2 = time.monotonic()
         snapshot = client.capture_snapshot(sandbox.name, SNAPSHOT_NAME, timeout=600)

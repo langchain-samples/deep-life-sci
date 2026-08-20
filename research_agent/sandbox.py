@@ -64,15 +64,20 @@ logger = logging.getLogger(__name__)
 # corpus gone together. See the note in `paths.py`.
 
 # The default sandbox image is bare Python 3.12 — no numpy/pandas/scipy/matplotlib —
-# and installing them costs ~30s. `scripts/build_snapshot.py` bakes them into a named
-# snapshot instead; booting from it takes ~1s. Run that once, then every run starts warm.
-SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py")
+# and installing them costs ~95s (rdkit is most of it).
+# `scripts/build_snapshot.py` bakes them into a named snapshot instead; booting from it
+# takes ~1s. Run that once, then every run starts warm.
+SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py-bio")
 
 # Fallback for a clone that hasn't built the snapshot yet. Same package set, paid per run.
 PROVISION = (
     f"mkdir -p {WORKSPACE}/out && "
+    # libXrender/libXext are for rdkit's 2D depiction; see build_snapshot.py.
+    "(apt-get update -qq && apt-get install -y -qq --no-install-recommends "
+    "libxrender1 libxext6) >/dev/null && "
     "pip install --break-system-packages --quiet "
-    "numpy pandas scipy matplotlib openpyxl python-docx python-pptx 2>&1 | tail -2"
+    "numpy pandas scipy matplotlib openpyxl python-docx python-pptx "
+    "statsmodels scikit-survival scikit-learn biopython rdkit 2>&1 | tail -2"
 )
 
 # Four attempts over ~7s of backoff. A dataplane that is recycling comes back inside
@@ -99,10 +104,11 @@ _INSTALL_COMMAND_RE = re.compile(
 
 _INSTALL_BLOCKED_MESSAGE = (
     "Blocked: installing packages at runtime is disabled. This sandbox is "
-    "pre-provisioned (numpy, pandas, scipy, matplotlib, openpyxl, python-docx, "
-    "python-pptx) by build_snapshot.py — use one of those instead of installing a "
-    "substitute. If the task genuinely needs something outside that list, say so "
-    "in your final answer rather than trying to install it."
+    "pre-provisioned (numpy, pandas, scipy, statsmodels, scikit-survival, "
+    "scikit-learn, matplotlib, openpyxl, python-docx, python-pptx, biopython, rdkit) "
+    "by build_snapshot.py — use one of those instead of installing a substitute. If "
+    "the task genuinely needs something outside that list, say so in your final "
+    "answer rather than trying to install it."
 )
 
 

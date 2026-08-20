@@ -17,7 +17,7 @@ Needs [uv](https://docs.astral.sh/uv/) and a LangSmith account.
 2. Build a LangSmith Sandboxes snapshot:
 
    ```bash
-   uv run scripts/build_snapshot.py     # ~35s, once
+   uv run scripts/build_snapshot.py     # ~100s, once
    ```
 
 ## Run

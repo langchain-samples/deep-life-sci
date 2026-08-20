@@ -149,3 +149,65 @@
     IL-7 + IL-15.
 
     Fail if activation is called converged, or if the editor is reported as RNP or plasmid.
+
+# Q10 — registry-only. Nothing here is answerable from PubMed: an abandoned trial has no
+# paper, and `why_stopped` is free text the sponsor writes at withdrawal.
+- id: semaglutide-stopped-trials
+  question: >-
+    Which phase 3 interventional trials of semaglutide in obesity were terminated,
+    withdrawn, or suspended, and what reason did each sponsor give?
+  expects_artifact: []
+  domain: D3 clinical medicine and trials
+  surface: ctgov
+  rubric: |-
+    Five trials as of August 2026, all found via ClinicalTrials.gov, none of them
+    published:
+
+      NCT04741074  TERMINATED  Geisinger Clinic       "low recruitment"
+      NCT04885634  WITHDRAWN   Axel Brandes           "Not received funding."
+      NCT05444153  WITHDRAWN   Novo Nordisk           "Sponsor decision"
+      NCT06619015  WITHDRAWN   Esbjerg Hospital       "suspended by the danish medical agency"
+      NCT07357766  WITHDRAWN   Novo Nordisk           "The study is withdrawn due to strategic reasons."
+
+    Credit if the terminated trial and at least three of the withdrawn ones are named by
+    NCT number with their stated reason. A sixth trial appearing after August 2026 is not
+    a failure; neither is quoting `why_stopped` verbatim including its sponsor typos.
+
+    Fail if a reason is paraphrased into something the registry does not say, if a
+    WITHDRAWN trial (zero participants enrolled) is described as having produced or failed
+    to produce results, or if the answer searches PubMed for these trials and reports that
+    they do not exist.
+
+# Q11 — the bridge. Needs both sources and one of them twice: the registry to enumerate
+# what was run, PubMed to test each one for a publication.
+- id: psilocybin-depression-unpublished
+  question: >-
+    Of the completed interventional trials of psilocybin for depression registered on
+    ClinicalTrials.gov, how many have published results and how many appear never to have
+    been published? Name the unpublished ones.
+  expects_artifact: []
+  domain: D3 clinical medicine and trials
+  surface: ctgov+pubmed
+  rubric: |-
+    30 completed interventional trials as of August 2026: 17 with a linked publication,
+    13 with none by either route. The 13:
+
+      NCT06372197 NCT04739865 NCT05399498 NCT05624268 NCT04932434 NCT06650800 NCT05581797
+      NCT06746441 NCT06230757 NCT05710237 NCT04842045 NCT06235411 NCT05385783
+
+    The substantive point is that the two largest are industry phase 2b/3 programmes, not
+    small academic pilots — COMPASS Pathways' COMP360 trial NCT05624268 (n=258) and Cybin's
+    CYB003 trial NCT05385783 (n=57).
+
+    A correct answer checks both directions rather than trusting one: `trial_pmids` on the
+    registry record, and a `NCT[si]` PubMed search for the ones with no link. Both agree
+    here, which is worth saying.
+
+    Credit a split within +/-4 in either bucket and at least 9 of the 13 named, provided
+    the search that produced the denominator is stated. Trials published after August 2026
+    move from one bucket to the other and are not failures.
+
+    Fail if `result_pmids` alone is used to decide publication status — it is sponsor-
+    entered and mostly empty, and would report nearly every trial as unpublished. Fail if
+    `background_pmids` are counted as the trial's own publications. Fail if "no results
+    posted to the registry" (`has_results: false`) is reported as "not published".

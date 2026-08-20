@@ -18,8 +18,8 @@ shape of the agent. `README.md` is setup only — human onboarding, not a refere
 ```bash
 uv run agent                           # one-shot CLI, default `anthropic` profile
 MODEL_PROFILE=mixed uv run agent       # switch model pair (see models.py PROFILES)
-uv run scripts/build_snapshot.py       # one-off: bake numpy/pandas/scipy/matplotlib
-                                       # into the sandbox snapshot (~35s)
+uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
+                                       # into the sandbox snapshot (~100s, rdkit is most of it)
 ./scripts/dev.sh                       # both halves of the chat stack, Ctrl-C stops both
 uv run langgraph dev                   # just the graph, on :2024
 cd ../agent-chat-ui && pnpm dev        # just the UI, on :3000 -> http://localhost:2024
@@ -48,9 +48,9 @@ The chat UI is a local clone of `langchain-ai/agent-chat-ui` living *outside* th
 There is no test suite. Ruff is configured in `pyproject.toml` and available in the
 `dev` dependency group; `evals/` is the closest thing to a regression check.
 
-Skip `scripts/build_snapshot.py` and runs still work — they just pay a ~30s `pip install` each
+Skip `scripts/build_snapshot.py` and runs still work — they just pay a ~95s install each
 time, per sandbox. `sandbox.py` looks for the snapshot named by `SANDBOX_SNAPSHOT_NAME`
-(default `pubmed-py`) and falls back to installing at runtime when nothing matches, so a
+(default `pubmed-py-bio`) and falls back to installing at runtime when nothing matches, so a
 missing snapshot is slow rather than broken.
 
 ## Environment

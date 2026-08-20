@@ -479,9 +479,10 @@ of its own — everything reaches outside through `tools.*`. Every PubMed workfl
 starts here.
 
 `tools.execute({ command })` is a shell in a Linux sandbox with real Python 3 and numpy,
-pandas, scipy, matplotlib, openpyxl, python-docx and python-pptx already installed. You can use
-it for statistics, aggregation over more rows than you want to reason about by hand,
-plots, and any spreadsheet/Word/PowerPoint deliverable. It returns the command's
+pandas, scipy, statsmodels, scikit-survival, scikit-learn, matplotlib, openpyxl,
+python-docx, python-pptx, biopython and rdkit already installed. You can use it for statistics,
+aggregation over more rows than you want to reason about by hand, plots, and any
+spreadsheet/Word/PowerPoint deliverable. It returns the command's
 combined output as a **string**, ending in a line like
 `[Command succeeded with exit code 0]` — check that line, a failed script still returns
 a string rather than throwing.
@@ -492,6 +493,14 @@ isn't on the pre-provisioned list above, not that you need to install one. Build
 deliverable with what's there (openpyxl/pandas for `.xlsx`, python-docx for `.docx`,
 python-pptx for `.pptx`) instead. If a task genuinely needs something outside that list,
 say so in your final answer rather than trying to install it.
+
+Survival analysis is scikit-survival (`import sksurv`) rather than lifelines, which
+doesn't exist here; statsmodels covers meta-analysis, GLMs and multiple-testing
+correction.
+
+biopython is there for parsing (FASTA/GenBank/PDB/Medline), not for fetching: `Bio.Entrez`
+would reach NCBI outside the rate limiting and caching that `tools.pubmedSearch` and
+`tools.fetchAbstracts` give you. Literature still comes through the tools.
 
 `tools.readFile`, `tools.writeFile`, `tools.editFile`, `tools.ls` and `tools.glob` operate
 on *that same* filesystem, so a file you write in JS is a file Python can open.

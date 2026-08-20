@@ -19,7 +19,7 @@ Rather than exposing tools to the model directly, we’ll have it compose them i
 That covers orchestration but not quantitative work—reading a corpus and then actually computing over it (group by year, tally model organisms, run a statistic, draw a plot) needs real Python, which QuickJS can’t give us. So there are **two code surfaces**, and the prompt has to draw the line between them or the model reaches for the wrong one:
 
 - **`eval` (QuickJS)** — orchestration. Search, fetch, fan out, collect. Everything reaches outside through `tools.*`.
-- **`execute` (sandbox shell)** — Python 3 with numpy/pandas/scipy/matplotlib, in an isolated Linux container. This comes from swapping the agent’s *backend* to a LangSmith sandbox, which adds `execute` alongside the filesystem tools.
+- **`execute` (sandbox shell)** — Python 3 with numpy/pandas/scipy/statsmodels/lifelines/scikit-learn/matplotlib plus biopython and rdkit, in an isolated Linux container. This comes from swapping the agent’s *backend* to a LangSmith sandbox, which adds `execute` alongside the filesystem tools.
 
 Both go in the PTC allowlist, so one `eval` call can run search → fetch → write → compute → collect. The filesystem tools are in there too and operate on the sandbox’s filesystem, the same one `execute` sees.
 
