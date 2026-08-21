@@ -101,7 +101,7 @@ research_agent/
 ├── sandbox.py                            sandbox lifecycle + WebSocket retry
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
-├── sources/     pubmed.py pmc.py ctgov.py cache_io.py
+├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
 └── middleware/  artifacts.py perf.py
 evals/  scripts/  ui/  docs/  data/
 ```
@@ -109,8 +109,8 @@ evals/  scripts/  ui/  docs/  data/
 `evals/` is deliberately outside the package — it measures the agent, it isn't part of it, and
 nothing shipped at deploy time should carry a test framework. Its entry points run with `-m`
 from the repo root (`uv run python -m evals.run`), which puts the root on `sys.path` so
-`evals.evaluators` resolves. Seeds live in git as JSONL and LangSmith is the mirror; `sync.py`
-matches on `seed_id` and never deletes.
+`evals.evaluators` resolves. Seeds live in git as YAML and LangSmith is the mirror; `sync.py`
+matches each seed's `id` (carried into example metadata as `seed_id`) and never deletes.
 
 Three entry points build the **same** agent via `agent.py:build_agent(backend)`. It only
 assembles — it owns no sandbox and no I/O, which is what lets all three share it:
@@ -243,10 +243,16 @@ path, which the gateway answers with a 501 that looks like an outage.
   Measured at roughly a 10-token bucket refilling at ~1 req/sec — 12 concurrent requests
   returned ten 429s — and **the 429 carries no `Retry-After`**, so client-side backoff is the
   only thing between a fan-out and a dead run. No API key raises it.
-  `sources/ctgov.py:_throttle` serialises every request in the process, which is why that
+  `ctgov.py`'s `Throttle` (from `sources/_http.py`) serialises every request in the
+  process, which is why that
   module needs no concurrency semaphore the way `pmc.py` does. The design response is to make
   per-trial fetching unnecessary rather than merely discouraged: `pageSize` reaches 1,000 and
   `filter.ids` takes 300, so a 1,000-trial corpus is four requests.
+- **`sources/_http.py` holds the shared pacing/backoff mechanism, but each caller keeps
+  its own `Throttle`.** The two APIs meter independently, so a shared `_last_call` would
+  make a PubMed search delay a registry fetch for nothing. Each module also keeps its own
+  `_request` — the POST branch, 4xx handling and exception types genuinely differ.
+  `pmc.py` uses none of it; S3 caps concurrency with a semaphore instead.
 - **`sources/ctgov.py` inverts `pubmed.py`'s validation story on purpose.** This API
   answers a bad field, enum, area, sort or id with an HTTP 400 naming the token, so 4xx
   bodies are surfaced verbatim and there is no local `check_field_tags()` analog. Do not

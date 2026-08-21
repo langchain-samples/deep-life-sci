@@ -48,6 +48,7 @@ per in-flight `eval`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import statistics
@@ -93,10 +94,10 @@ class LoopLagProbe(AgentMiddleware):
     async def _sample(self, stop: asyncio.Event, wakes: list[float]) -> None:
         """Record when the loop actually gave us a slice, once per interval."""
         while not stop.is_set():
-            try:
+            # Timing out is the normal path: it means a full interval elapsed without
+            # the stop event, which is exactly the sample we want.
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=self.interval)
-            except TimeoutError:
-                pass
             wakes.append(time.perf_counter())
 
     def _lags(self, started: float, ended: float, wakes: list[float]) -> list[float]:
@@ -117,7 +118,7 @@ class LoopLagProbe(AgentMiddleware):
             max(0.0, marks[i + 1] - marks[i] - self.interval) for i in range(len(marks) - 1)
         ]
 
-    async def awrap_tool_call(self, request: ToolCallRequest, handler):  # noqa: ANN001
+    async def awrap_tool_call(self, request: ToolCallRequest, handler):
         name = request.tool_call.get("name")
         if not enabled() or name not in PROBED_TOOLS:
             return await handler(request)
@@ -134,7 +135,8 @@ class LoopLagProbe(AgentMiddleware):
             stop.set()
             try:
                 await sampler
-            except Exception:  # noqa: BLE001 - instrumentation must never fail a tool call
+            # Instrumentation must never fail a tool call.
+            except Exception:
                 logger.debug("loop-lag sampler failed", exc_info=True)
             # Drop the wake the sampler takes on its way out; it is an artefact of
             # stop.set(), not an interval that elapsed.

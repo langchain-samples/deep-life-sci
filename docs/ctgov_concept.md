@@ -156,6 +156,14 @@ with a different interval, no `Retry-After`, and a different base URL. `pmc.py` 
 chose to duplicate rather than share. **Follow that precedent** — one more copy is cheaper
 than a three-way abstraction over three genuinely different rate-limit regimes.
 
+> **Superseded.** The duplication above shipped and was later consolidated into
+> `sources/_http.py` (`Throttle`, `backoff_delay`, `chunks`, `RETRY_STATUSES`). The
+> feared three-way abstraction did not materialise: `pmc.py` talks to S3, which is not
+> metered this way and caps concurrency with a semaphore instead, so the shared module
+> spans two callers rather than three. Each keeps its own `Throttle` instance — the
+> buckets are metered independently — and each keeps its own `_request`, which is where
+> the POST branch, the 4xx handling and the exception types genuinely differ.
+
 ## Recommendation 3: the bridges are the reason to do this
 
 A second search box is worth little. Three verified joins are worth a lot, and they are

@@ -25,7 +25,8 @@ import json
 import logging
 import mimetypes
 import posixpath
-from typing import Annotated, Any, Sequence
+from collections.abc import Sequence
+from typing import Annotated, Any
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain.agents.middleware.types import ToolCallRequest
@@ -190,7 +191,7 @@ class ArtifactMiddleware(AgentMiddleware):
                 seen.setdefault(path, fingerprint)
         return seen
 
-    async def awrap_tool_call(self, request: ToolCallRequest, handler):  # noqa: ANN001
+    async def awrap_tool_call(self, request: ToolCallRequest, handler):
         result = await handler(request)
 
         if request.tool_call.get("name") not in WRITER_TOOLS:
@@ -198,7 +199,7 @@ class ArtifactMiddleware(AgentMiddleware):
 
         try:
             await self._publish_new_files(request)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # Publishing is a side channel. A failure here must never take down a run
             # that has already done its expensive work — the user would lose the whole
             # analysis over a missing thumbnail.
@@ -269,7 +270,9 @@ class ArtifactMiddleware(AgentMiddleware):
             return
 
         downloads = await self.backend.adownload_files([p for p, _, _ in inline])
-        for (path, size, fingerprint), response in zip(inline, downloads):
+        # strict: one response per requested path. A short list would silently drop
+        # artifacts from the sweep, which is invisible — the run just looks emptier.
+        for (path, size, fingerprint), response in zip(inline, downloads, strict=True):
             if response.error or response.content is None:
                 logger.warning("could not download %s: %s", path, response.error)
                 # Nothing was published, so the fingerprint must not stick — otherwise

@@ -48,8 +48,9 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Any, Callable
+from typing import Any
 
 from deepagents.backends import LangSmithSandbox
 from deepagents.backends.protocol import ExecuteResponse
@@ -173,7 +174,8 @@ class ResilientSandbox(LangSmithSandbox):
 
             try:
                 fresh = await asyncio.to_thread(self._reacquire)
-            except Exception:  # noqa: BLE001 - re-acquire failing is not fatal; retry the old handle
+            # Re-acquire failing is not fatal; fall back to retrying the old handle.
+            except Exception:
                 logger.warning("sandbox re-acquire failed; retrying existing handle", exc_info=True)
                 return False
 
@@ -187,10 +189,14 @@ class ResilientSandbox(LangSmithSandbox):
             if stale_client is not None:
                 try:
                     await stale_client.aclose()
-                except Exception:  # noqa: BLE001 - the pool is already unusable
+                # The pool is already unusable; closing it is best-effort.
+                except Exception:
                     logger.debug("closing stale sandbox client failed", exc_info=True)
 
-            logger.warning("re-acquired sandbox %r after connection failure", getattr(fresh, "name", "?"))
+            logger.warning(
+                "re-acquired sandbox %r after connection failure",
+                getattr(fresh, "name", "?"),
+            )
             return True
 
     async def aexecute(self, command: str, *, timeout: int | None = None) -> Any:  # noqa: ASYNC109
@@ -231,13 +237,18 @@ class ResilientSandbox(LangSmithSandbox):
     def execute(self, command: str, *, timeout: int | None = None) -> Any:
         """Synchronous `execute` with the same retry policy.
 
-        Used by `build_snapshot.py` and by provisioning, which run before there is
-        an event loop. Re-acquire is deliberately not attempted here: the sync path
-        runs at startup, where a failure is better surfaced loudly than papered over.
+        **Nothing in this repo calls this, and it must not be deleted for that reason.**
+        It overrides an inherited public method, so removing it would hand any
+        synchronous caller — inside deepagents, or a future one here — a path to the
+        container that skips the `pip install` guard below. The guard, not the retry,
+        is why the override exists.
 
-        Note: `scripts/build_snapshot.py` and `provision()` below call `sandbox.run()`
-        on the raw (unwrapped) sandbox directly, not this method, so the install guard
-        below never blocks the provisioning step that's supposed to install packages.
+        `scripts/build_snapshot.py` and `provision()` below deliberately call
+        `sandbox.run()` on the raw, unwrapped sandbox instead, which is what keeps the
+        guard from blocking the one step whose whole job is installing packages.
+
+        Re-acquire is deliberately not attempted here: the sync path runs at startup,
+        where a failure is better surfaced loudly than papered over.
         """
         if _INSTALL_COMMAND_RE.search(command):
             return _blocked_execute_response()

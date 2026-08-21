@@ -5,7 +5,7 @@ biology domain, the *kind* of question, and which of the agent's two code surfac
 leans on (`eval`/fan-out for reading comprehension, `execute`/Python for counting and
 statistics).
 
-Each is written to be pasted verbatim as `DEMO_QUESTION` in `agent.py`.
+Each is written to be pasted verbatim as `DEMO_QUESTION` in `cli.py`.
 
 ---
 

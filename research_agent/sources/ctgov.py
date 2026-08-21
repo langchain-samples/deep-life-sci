@@ -37,9 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
 import re
-import time
 from typing import Any
 
 import httpx
@@ -47,6 +45,7 @@ from langchain_core.tools import tool
 
 from research_agent.paths import CTGOV_CACHE
 from research_agent.sources import cache_io
+from research_agent.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
 
 BASE_URL = "https://clinicaltrials.gov/api/v2"
 
@@ -92,36 +91,14 @@ def _min_interval() -> float:
     return 1.0
 
 
-RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 RETRY_ATTEMPTS = 4
 # Higher than pubmed.py's 1.0. Against a bucket that refills at 1/sec, a one-second
 # retry is just the next request in the burst that caused the 429.
 RETRY_BASE_DELAY = 2.0
 RETRY_MAX_DELAY = 30.0
 
-_rate_lock = asyncio.Lock()
-_last_call = 0.0
-
-
-async def _throttle() -> None:
-    global _last_call
-    async with _rate_lock:
-        wait = _min_interval() - (time.monotonic() - _last_call)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _last_call = time.monotonic()
-
-
-def _backoff_delay(attempt: int) -> float:
-    """Seconds before retry `attempt` + 1.
-
-    No `Retry-After` branch, unlike `pubmed.py`: this API's 429 carries no such header
-    (nor any `X-RateLimit-*`), so there is nothing to obey and the client's own backoff
-    is the only thing between a fan-out and a dead run. Jittered because the callers
-    that trip a 429 are concurrent by construction.
-    """
-    ceiling = min(RETRY_BASE_DELAY * 2 ** (attempt - 1), RETRY_MAX_DELAY)
-    return random.uniform(ceiling / 2, ceiling)
+# The registry's own bucket, separate from NCBI's in pubmed.py.
+_throttle = Throttle(_min_interval)
 
 
 async def _request(path: str, **params: Any) -> httpx.Response:
@@ -135,12 +112,17 @@ async def _request(path: str, **params: Any) -> httpx.Response:
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         for attempt in range(1, RETRY_ATTEMPTS + 1):
-            await _throttle()
+            await _throttle.wait()
             resp = await client.get(url, params=payload)
             if resp.status_code == 200:
                 return resp
             if resp.status_code in RETRY_STATUSES and attempt < RETRY_ATTEMPTS:
-                await asyncio.sleep(_backoff_delay(attempt))
+                # No `resp=`: this API's 429 carries no `Retry-After` header (nor any
+                # `X-RateLimit-*`), so our own backoff is the only thing between a
+                # fan-out and a dead run.
+                await asyncio.sleep(
+                    backoff_delay(attempt, base=RETRY_BASE_DELAY, maximum=RETRY_MAX_DELAY)
+                )
                 continue
             detail = " ".join(resp.text.split())[:300]
             raise ClinicalTrialsError(
@@ -164,11 +146,6 @@ def validate_nct_ids(ids: list[str]) -> tuple[list[str], list[str]]:
         s = str(raw).strip().upper()
         (valid if NCT_RE.match(s) else invalid).append(s)
     return list(dict.fromkeys(valid)), invalid
-
-
-def _chunks(items: list[str], size: int):
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
 
 
 # --------------------------------------------------------------------------------
@@ -592,7 +569,7 @@ async def ctgov_fetch(nct_ids: list[str], include: list[str] | None = None) -> d
     for group in sorted(groups):
         fields.extend(INCLUDE_FIELDS[group])
 
-    for chunk in _chunks(to_fetch, ID_CHUNK):
+    for chunk in chunks(to_fetch, ID_CHUNK):
         # `filter.ids` drops unknown ids and collapses duplicates without saying so, so
         # the request is never trusted to define the response — `missing` below is a diff
         # of what was asked against what came back.
