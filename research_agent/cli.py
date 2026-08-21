@@ -116,6 +116,15 @@ def run() -> None:
     shell has already split it into words by the time it arrives here, and the
     alternative is a confusing "unexpected argument" for a natural way to type it.
     """
+    missing = [k for k in ("OPENAI_API_KEY", "LANGSMITH_API_KEY") if not os.environ.get(k)]
+    if missing:
+        # Without this the first model call dies as an SDK auth error a long way from its
+        # cause. The launcher used to check this in shell; it lives here so the check
+        # survives being invoked as `uv run agent` directly, which is the Windows path.
+        raise SystemExit(
+            f"[agent] not set up — {', '.join(missing)} missing from .env.\n"
+            "[agent] run:  uv run scripts/setup.py"
+        )
     asyncio.run(main(" ".join(sys.argv[1:]).strip() or DEMO_QUESTION))
 
 

@@ -10,7 +10,7 @@ sandbox that has gone quiet, which is the only cleanup that survives the process
 killed. We never explicitly delete one, because "the user might come back to this
 thread" is true right up until it isn't.
 
-Point a chat UI at this — `./scripts/dev.sh` starts both halves, or by hand:
+Point a chat UI at this — `uv run scripts/dev.py` starts both halves, or by hand:
 
     uv run langgraph dev                     # this graph, on :2024
     cd ../agent-chat-ui && pnpm dev          # UI, on :3000 -> http://localhost:2024

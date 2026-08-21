@@ -18,15 +18,13 @@ for the user to set up the repo and understand what it is and how to use it.
 ## Commands
 
 ```bash
-./setup_sci_agent                      # once per clone: uv, .env, deps, snapshot, chat UI
-./run_sci_agent                        # the chat stack, via scripts/dev.sh
-./run_sci_agent "question"             # headless; execs `uv run agent`
+uv run scripts/setup.py                # once per clone: .env, deps, snapshot, chat UI
+uv run scripts/dev.py                  # the chat stack, both halves, Ctrl-C stops both
+                                       # NO_BROWSER=1 skips opening the browser tab
 uv run agent ["question"]              # bare = DEMO_QUESTION
 ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one role; SUBAGENT_/JUDGE_ too
 uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
                                        # into the sandbox snapshot (~100s, rdkit is most of it)
-./scripts/dev.sh                       # both halves of the chat stack, Ctrl-C stops both
-                                       # NO_BROWSER=1 skips opening the browser tab
 uv run langgraph dev                   # just the graph, on :2024
 cd .chat-ui && pnpm dev                # just the UI, on :3000 -> http://localhost:2024
 
@@ -35,19 +33,24 @@ uv run python -m evals.run --structural --limit 3   # score, no judge model
 uvx ruff check .                       # config lives in pyproject.toml
 ```
 
-`setup_sci_agent` and `run_sci_agent` are the front door, split so starting the agent never
-triggers an install: setup does uv, `.env`, `uv sync`, the snapshot and the frontend, each
-skipped when already done; run *verifies* them instead. Setup is the only thing that writes
-`.env`, so a new required setting needs a prompt there plus a line in `.env.example`; both
-scripts copy `env_value`, whose placeholder rule must stay identical.
+`scripts/setup.py` and `scripts/dev.py` are the front door, split so starting the agent never
+triggers an install: setup does `.env`, `uv sync`, the snapshot and the frontend, each skipped
+when already done; dev *verifies* them instead. Setup is the only thing that writes `.env`, so
+a new required setting needs a prompt there plus a line in `.env.example`.
 
-The chat UI has no flag and is not optional — it is the assumed way in, with a bare
-`./run_sci_agent` opening it (via `scripts/dev.sh`, which starts both halves, prefixes their
-logs, reuses either port already listening, and opens `:3000` in a browser once it answers —
-polled, because a tab that arrives before `next dev` binds shows a connection error;
-`NO_BROWSER=1` opts out) and a question on the command line selecting the headless path. Node
-is the one prerequisite setup will not install unasked, so it comes *last*: a machine without
-Node still finishes with a working `uv run agent`.
+Python rather than shell because Windows users run them directly, and a port check, a browser
+and killing a process tree have no portable shell spelling. `setup_sci_agent`/`run_sci_agent`
+are thin macOS/Linux shims whose one irreplaceable job is installing uv; `.gitattributes` pins
+their line endings, since a CRLF checkout breaks a shebang. Preflight therefore lives in
+`_common.require_setup` and `cli.py:run`, so it applies on every platform.
+
+`dev.py` reuses either port already listening and opens `:3000` once it answers — polled,
+because a tab arriving before `next dev` binds shows a connection error. Each server gets its
+own process group so teardown kills the whole tree, and **SIGINT is installed explicitly, not
+just SIGTERM**: a background process in a non-interactive shell inherits SIGINT as `SIG_IGN`,
+Python keeps that disposition, and the teardown is then skipped silently with both ports held.
+The chat UI is not optional and has no flag; Node is the one thing setup will not install
+unasked, so it comes *last* — a machine without Node still gets a working `uv run agent`.
 
 The UI is a clone of `langchain-ai/agent-chat-ui` vendored at `.chat-ui/`, inside the repo so
 nothing needs a writable directory beside it — which is what `.dockerignore` is for, since
@@ -75,7 +78,7 @@ installing at runtime when nothing matches, so a missing snapshot is slow rather
 
 ## Environment
 
-`setup_sci_agent` writes `.env`; the trip-up it exists to prevent is that
+`scripts/setup.py` writes `.env`; the trip-up it exists to prevent is that
 **`OPENAI_API_KEY` is the LangSmith gateway service key (`lsv2_sk_...`), not an OpenAI
 key** — all model calls go through the LangSmith LLM gateway. `LANGSMITH_API_KEY` is for
 tracing and sandbox provisioning.

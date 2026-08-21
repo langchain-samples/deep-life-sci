@@ -46,7 +46,7 @@ def _load(path: Path) -> list[dict]:
     so every example is validated before the first one is pushed.
     """
     try:
-        rows = yaml.safe_load(path.read_text()) or []
+        rows = yaml.safe_load(path.read_text(encoding="utf-8")) or []
     except yaml.YAMLError as exc:
         raise SystemExit(f"{path.name}: {exc}") from exc
     if not isinstance(rows, list):
