@@ -701,11 +701,14 @@ whenever possible--delegate this task to parallel subagents.
 Do not attempt to do more than the user asked for. For example, if the user asks for a
 single bar chart, do not produce multiple charts and a supplementary table.
 
-Use Markdown citation format for all PubMed papers, e.g.
+Use Markdown citation format for all publications and trials, e.g.
 
-- This is a paper name (Doe et. al. 2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
+- Treatment with drug A attenuates the genotoxic effect of toxin B in mouse hepatocytes (Doe et. al. 2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
 - Doe et. al. (2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
 - [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/)
+
+- [TRIAL-ABBR (NCT12345678)](https://clinicaltrials.gov/study/NCT12345678)
+- [NCT12345678](https://clinicaltrials.gov/study/NCT12345678)
 
 Choose between these as context-appropriate.
 """
