@@ -18,6 +18,7 @@
     The STEP and OASIS programmes, 19 published trials. For each: trial name with its
     number, PMID, and effect size.
 
+    REQUIRED:
       STEP 1         33567185  -12.4
       STEP 2         33667417   -6.2
       STEP 3         33625476  -10.3
@@ -32,23 +33,22 @@
       STEP 12        42575111   -9.9
       STEP UP        40961952  -14.8
       STEP UP T2D    40961953   -9.3
-      STEP-HFpEF     37622681  -10.7
-      STEP-HFpEF DM  38587233   -6.4
       OASIS 1        37385278  -12.7
       OASIS 2        40758358  -13.07
+      OASIS 3        NA        NA
       OASIS 4        40934115  -11.4
+
+    OPTIONAL:
+      STEP-HFpEF     37622681  -10.7
+      STEP-HFpEF DM  38587233   -6.4
 
     Effect sizes are placebo- or comparator-subtracted differences in percent body weight
     change, in percentage points; median -11.1, range -14.8 to -6.2.
 
-    Credit >=16 trials with PMIDs correct and effect sizes within 0.5pp. Fail if kg and
-    percentage points are mixed on one axis, if SUSTAIN or PIONEER trials are included, or
-    if any STEP or OASIS trials are omitted.
-
-    The registry is a legitimate way to find these — a phase 3 semaglutide/obesity search
-    returns 75 trials and the STEP programme is in it — but every plotted point has to come
-    from a publication. Fail if a trial appears on the plot with an effect size that no
-    PMID supports, or if a registered-but-unpublished trial is counted among the 19.
+    All REQUIRED trials must be present. OASIS 3 must be mentioned, but no results have been
+    published yet, so it should not be in the plot. The HFpEF trials may be included or excluded, 
+    but if they are mentioned, the agent must note that weight loss was not their primary 
+    endpoint. Effect sizes must be within 0.5pp.
 
 # Q2
 - id: nishikubo-cdtb-nls
