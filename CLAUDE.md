@@ -59,16 +59,26 @@ Next app in the deploy image (its comments list what must *not* be excluded).
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere. Setup also runs `npm ci` in `ui/`,
 whose components the *graph server* bundles: without those deps the bundler logs
 `Could not resolve "xlsx"`, answers `/ui/<graph>/entrypoint.js` with a 200 anyway, and the
-component is silently absent. Two patches:
+component is silently absent. Four patches, all reapplied by setup on every run so the
+README's steps alone produce a working app, and each anchored on an exact upstream string
+that it prints rather than guesses past — a moved anchor must not clobber an upstream fix:
 
 1. A `/ui/:path*` rewrite in `next.config.mjs` pointing at `:2024`. Required — without it the
-   artifact components silently never render (see the invariant below). Setup reapplies it on
-   every run, and prints the snippet instead of editing if upstream ever grows a `rewrites`
-   key, since a second one would silently shadow the first.
-2. An empty-message early return in `src/components/thread/messages/ai.tsx`, left manual
-   because it is cosmetic and edits a component body: an AI turn that is pure `thinking` +
-   `tool_use` still renders its hover CommandBar, and our runs are dozens of such turns, so
-   unpatched the first visible output sits ~900px of whitespace below the question.
+   artifact components silently never render (see the invariant below). Bails out if upstream
+   ever grows a `rewrites` key, since a second one would silently shadow the first.
+2. An empty-message early return in `src/components/thread/messages/ai.tsx`: an AI turn that
+   is pure `thinking` + `tool_use` still renders its hover CommandBar, and our runs are dozens
+   of such turns, so unpatched the first visible output sits ~900px of whitespace below the
+   question.
+3. `clip-path` → `clipPath` in `src/components/icons/langgraph.tsx`. Valid SVG, invalid JSX,
+   so upstream's logo logs `Invalid DOM property` on every render and parks the dev overlay's
+   error badge on a healthy app.
+4. An emptied upload allowlist in `src/hooks/use-file-upload.tsx`, the toast that explains it,
+   and `accept="*/*"` on the composer's file input so the attempt reaches that toast instead
+   of being greyed out of the picker. An attachment rides in model context and never reaches
+   the sandbox, so the CSV a user wants computed over is the one upload worth having and does
+   not work yet — upstream's message offered JPEG and PDF rather than saying so. Putting the
+   first real MIME type back in that list is what reopens uploads.
 
 There is no test suite; `evals/` is the closest thing to a regression check, and ruff is
 configured in `pyproject.toml` (`dev` group). Skip `scripts/build_snapshot.py` and runs still

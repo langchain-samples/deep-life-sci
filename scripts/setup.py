@@ -186,10 +186,8 @@ REWRITE = """  // setup: artifact components load /ui/* from the page origin, so
 
 
 def patch_next_config() -> None:
-    """Reapplied on every run. It is load-bearing — without it the artifact components
-    silently render nothing (see CLAUDE.md) — and it is a one-key insert. The other patch
-    CLAUDE.md documents, the ai.tsx whitespace fix, is cosmetic and edits a component body,
-    so it stays a manual choice rather than something rewritten underneath whoever made it.
+    """Reapplied on every run, and load-bearing: without it the artifact components
+    silently render nothing (see CLAUDE.md).
     """
     cfg = chat_ui_dir() / "next.config.mjs"
     if not cfg.is_file():
@@ -212,6 +210,152 @@ def patch_next_config() -> None:
     lines.insert(hits[0] + 1, REWRITE.rstrip())
     cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
     say(TAG, "added the /ui/* rewrite to next.config.mjs")
+
+
+# The three patches below are cosmetic rather than load-bearing, unlike the rewrite above.
+# They are applied anyway because setup's job is a working app, and an app that logs a
+# console error, opens on a screenful of whitespace, or offers an upload it then refuses is
+# not one. Each is anchored on an exact upstream string and prints the change instead of
+# guessing if that string ever moves, so an upstream fix is never clobbered and a stale
+# patch never lands silently.
+
+
+def patch_svg_props() -> None:
+    """`clip-path` is valid SVG and invalid JSX, so upstream's logo makes React log
+    `Invalid DOM property` on every render, which parks the dev overlay's error badge in the
+    corner of an otherwise healthy app.
+    """
+    icon = chat_ui_dir() / "src" / "components" / "icons" / "langgraph.tsx"
+    if not icon.is_file():
+        return
+    text = icon.read_text(encoding="utf-8")
+    if "clip-path=" not in text:
+        return
+    icon.write_text(text.replace("clip-path=", "clipPath="), encoding="utf-8")
+    say(TAG, "fixed the clip-path JSX warning in langgraph.tsx")
+
+
+# Every name this reads is already in scope at the anchor below; it adds only its own.
+EMPTY_TURN_GUARD = """
+  // setup: an AI turn that is only thinking + tool_use renders no content of its own, but
+  // its hover CommandBar is opacity-0 rather than absent and still occupies its row. A run
+  // here is dozens of such turns, so unpatched the first visible output sits about a
+  // screenful below the question. See CLAUDE.md.
+  const hasCustomComponents = !!thread.values.ui?.some(
+    (ui) => ui.metadata?.message_id === message?.id,
+  );
+  if (
+    !isToolResult &&
+    !threadInterrupt &&
+    contentString.length === 0 &&
+    !hasCustomComponents &&
+    (hideToolCalls || (!hasToolCalls && !hasAnthropicToolCalls))
+  ) {
+    return null;
+  }
+"""
+
+# The tool-result guard, which is the last statement before the component's own `return (`.
+EMPTY_TURN_ANCHOR = """  if (isToolResult && hideToolCalls) {
+    return null;
+  }
+"""
+
+
+def patch_empty_ai_turns() -> None:
+    ai = chat_ui_dir() / "src" / "components" / "thread" / "messages" / "ai.tsx"
+    if not ai.is_file():
+        return
+    text = ai.read_text(encoding="utf-8")
+    if "hasCustomComponents" in text:
+        return
+    if text.count(EMPTY_TURN_ANCHOR) != 1:
+        say(TAG, f"warning: {ai} is not the shape expected. Add this to AssistantMessage, "
+                 "after its `isToolResult && hideToolCalls` guard, by hand:")
+        print(EMPTY_TURN_GUARD)
+        return
+    text = text.replace(EMPTY_TURN_ANCHOR, EMPTY_TURN_ANCHOR + EMPTY_TURN_GUARD)
+    ai.write_text(text, encoding="utf-8")
+    say(TAG, "collapsed the empty thinking-only AI turns in ai.tsx")
+
+
+# Upstream accepts JPEG/PNG/GIF/WEBP and PDF. This agent accepts nothing yet: an attachment
+# would ride in model context rather than land in the sandbox, so there is no useful thing
+# to do with one. What the demo actually wants is a spreadsheet or CSV written into
+# /workspace for `execute` to compute over, and that path does not exist yet.
+#
+# So the allowlist is emptied and the existing invalid-type toast — already wired to the
+# picker, drag-and-drop and paste — is made to say which of those two facts the user hit.
+# Reopening uploads later is putting the first real MIME type back in this list and
+# rewording the toast; both live in the one file.
+UPLOAD_TYPES_ANCHOR = """export const SUPPORTED_FILE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+];"""
+
+UPLOAD_TYPES_PATCH = """\
+// setup: nothing is accepted yet. An attachment reaches the model as context and never
+// reaches the sandbox, so a CSV cannot be computed over — which is the only upload worth
+// having here. Emptying the list routes every attempt into the toast below, which says so
+// rather than listing types the agent has no use for. See CLAUDE.md.
+export const SUPPORTED_FILE_TYPES: string[] = [];
+
+export const UNSUPPORTED_FILE_TITLE = "Attachments aren't supported yet";
+export const UNSUPPORTED_FILE_BODY =
+  "Spreadsheet and CSV upload is coming soon. Papers, figures and trial records the " +
+  "agent fetches for itself — just ask for them.";"""
+
+# The two upstream messages, one for the picker and drop handlers and one for paste. Only
+# the literal is replaced, because the three call sites are indented differently.
+UPLOAD_MESSAGES = {
+    '"You have uploaded invalid file type. Please upload a JPEG, PNG, GIF, WEBP image or a PDF."':
+        "UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY }",
+    '"You have pasted an invalid file type. Please paste a JPEG, PNG, GIF, WEBP image or a PDF."':
+        "UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY }",
+}
+
+# The composer's own promises. `accept` has to go: with it, the file picker greys out the
+# CSV the user came to attach, so the attempt never happens and no message is ever shown —
+# the silent dead end this patch exists to remove.
+UPLOAD_COMPOSER = {
+    'accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"': 'accept="*/*"',
+    "Upload PDF or Image": "Attach a file",
+}
+
+
+def patch_upload_messaging() -> None:
+    """Tell the user why an attachment bounced, instead of listing types we don't want."""
+    hook = chat_ui_dir() / "src" / "hooks" / "use-file-upload.tsx"
+    composer = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not hook.is_file() or not composer.is_file():
+        return
+    text = hook.read_text(encoding="utf-8")
+    if "UNSUPPORTED_FILE_TITLE" in text:
+        return
+
+    edits = [(hook, UPLOAD_TYPES_ANCHOR, UPLOAD_TYPES_PATCH)]
+    edits += [(hook, old, new) for old, new in UPLOAD_MESSAGES.items()]
+    edits += [(composer, old, new) for old, new in UPLOAD_COMPOSER.items()]
+
+    # All or nothing. A half-applied patch is the bad case here: the allowlist emptied but
+    # the old toast still naming JPEG and PDF reads as a bug in the app rather than a
+    # deliberate refusal.
+    contents = {hook: text, composer: composer.read_text(encoding="utf-8")}
+    for path, old, _ in edits:
+        if old not in contents[path]:
+            say(TAG, f"warning: {path} is not the shape expected; left the upload messaging "
+                     f"alone. It still offers JPEG/PNG/GIF/WEBP/PDF uploads, which the agent "
+                     f"cannot use. Missing anchor:")
+            print(old)
+            return
+    for path, old, new in edits:
+        contents[path] = contents[path].replace(old, new)
+    for path, updated in contents.items():
+        path.write_text(updated, encoding="utf-8")
+    say(TAG, "replaced the upload allowlist and its message in the chat UI")
 
 
 def ensure_node() -> None:
@@ -257,6 +401,9 @@ def ensure_chat_ui() -> None:
         run(["git", "clone", "--depth", "1", "--quiet", UI_REPO, str(ui_dir)])
 
     patch_next_config()
+    patch_svg_props()
+    patch_empty_ai_turns()
+    patch_upload_messaging()
 
     # Without this the UI opens on a form asking for a deployment URL and assistant id.
     # `.env.local` because Next reads it ahead of `.env` and upstream ignores `*.local`.
