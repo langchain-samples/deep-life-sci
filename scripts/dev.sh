@@ -13,6 +13,7 @@
 #
 #   ./scripts/dev.sh                            # both, logs interleaved and prefixed
 #   AGENT_CHAT_UI=~/src/acu ./scripts/dev.sh    # a chat UI checkout of your own
+#   NO_BROWSER=1 ./scripts/dev.sh               # don't open a browser tab
 #
 set -euo pipefail
 
@@ -26,6 +27,21 @@ UI_DIR="${AGENT_CHAT_UI:-$ROOT/.chat-ui}"
 PIDS=()
 
 listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+
+UI_URL="http://localhost:3000"
+
+# The window is the assumed way in, so opening it is part of starting the stack rather
+# than something to remember afterwards. NO_BROWSER=1 opts out — a headless box, or a tab
+# you already have open. An unknown platform simply prints the URL, as before.
+url_opener() {  # echoes the command that opens a URL; empty if there is none, or if opted out
+  if [[ -n ${NO_BROWSER:-} ]]; then return 0; fi
+  local cmd
+  for cmd in open xdg-open wslview; do
+    if command -v "$cmd" >/dev/null 2>&1; then printf '%s' "$cmd"; return 0; fi
+  done
+  return 0
+}
+OPENER="$(url_opener)"
 
 # Each service runs in its own subshell so $! is a handle to the whole pipeline; the
 # cleanup below kills that subshell and the children it spawned (pnpm -> next dev).
@@ -60,6 +76,21 @@ cleanup() {
 trap 'cleanup; exit 0' INT TERM
 trap cleanup EXIT
 
+# Polled rather than opened straight away: `next dev` needs a few seconds to bind :3000,
+# and a browser that arrives first shows a connection error the user has to reload past.
+# Backgrounded, and tracked in PIDS so a Ctrl-C during those seconds takes it down too —
+# otherwise the tab opens onto servers this script has already stopped.
+open_ui_when_ready() {
+  if [[ -z $OPENER ]]; then return 0; fi
+  (
+    for _ in $(seq 1 120); do
+      if listening 3000; then "$OPENER" "$UI_URL" >/dev/null 2>&1 || true; exit 0; fi
+      sleep 0.5
+    done
+  ) &
+  PIDS+=("$!")
+}
+
 if [[ ! -d "$UI_DIR" ]]; then
   echo "[dev] no chat UI at $UI_DIR" >&2
   echo "[dev] install it (clone, /ui/* rewrite, pnpm install) with:" >&2
@@ -85,8 +116,12 @@ fi
 
 if listening 3000; then
   echo "[dev] :3000 already serving — reusing it"
+  # Already listening, so there is nothing to wait for: open it here rather than through
+  # the backgrounded waiter, which the both-already-up exit below would race.
+  if [[ -n $OPENER ]]; then "$OPENER" "$UI_URL" >/dev/null 2>&1 || true; fi
 else
   start ui "$UI_DIR" pnpm dev
+  open_ui_when_ready
 fi
 
 # Both already up. There is nothing to supervise and nothing this script may stop — the
@@ -94,9 +129,9 @@ fi
 # blocking on a `wait` that would never return.
 if [[ ${#PIDS[@]} -eq 0 ]]; then
   echo "[dev] both halves already running — nothing to start."
-  echo "[dev] chat UI -> http://localhost:3000"
+  echo "[dev] chat UI -> $UI_URL"
   exit 0
 fi
 
-echo "[dev] chat UI -> http://localhost:3000   (Ctrl-C stops what this script started)"
+echo "[dev] chat UI -> $UI_URL   (Ctrl-C stops what this script started)"
 wait

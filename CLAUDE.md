@@ -26,6 +26,7 @@ ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one role; SUBAGENT_/JUDGE_
 uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
                                        # into the sandbox snapshot (~100s, rdkit is most of it)
 ./scripts/dev.sh                       # both halves of the chat stack, Ctrl-C stops both
+                                       # NO_BROWSER=1 skips opening the browser tab
 uv run langgraph dev                   # just the graph, on :2024
 cd .chat-ui && pnpm dev                # just the UI, on :3000 -> http://localhost:2024
 
@@ -42,9 +43,11 @@ scripts copy `env_value`, whose placeholder rule must stay identical.
 
 The chat UI has no flag and is not optional — it is the assumed way in, with a bare
 `./run_sci_agent` opening it (via `scripts/dev.sh`, which starts both halves, prefixes their
-logs, and reuses either port already listening) and a question on the command line selecting
-the headless path. Node is the one prerequisite setup will not install unasked, so it comes
-*last*: a machine without Node still finishes with a working `uv run agent`.
+logs, reuses either port already listening, and opens `:3000` in a browser once it answers —
+polled, because a tab that arrives before `next dev` binds shows a connection error;
+`NO_BROWSER=1` opts out) and a question on the command line selecting the headless path. Node
+is the one prerequisite setup will not install unasked, so it comes *last*: a machine without
+Node still finishes with a working `uv run agent`.
 
 The UI is a clone of `langchain-ai/agent-chat-ui` vendored at `.chat-ui/`, inside the repo so
 nothing needs a writable directory beside it — which is what `.dockerignore` is for, since

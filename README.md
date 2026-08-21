@@ -36,7 +36,7 @@ install Node and re-run to add the UI. `AGENT_CHAT_UI=<path>` uses your own chec
 ### 2. Running
 
 ```bash
-./run_sci_agent                                    # runs with browser UI (recommended)
+./run_sci_agent                                    # opens the chat UI in your browser (recommended)
 
 ./run_sci_agent "which papers base-edit PCSK9?"    # runs headlessly in CLI
 ```
