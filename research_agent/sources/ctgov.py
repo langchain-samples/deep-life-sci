@@ -40,6 +40,7 @@ import json
 import random
 import re
 import time
+from datetime import date
 from typing import Any
 
 import httpx
@@ -487,6 +488,7 @@ async def ctgov_search(
     Returns:
         count: total matches in the registry (may far exceed the records returned)
         returned: how many records are in this response
+        current_date: today, so a projected completion date can be told from a past one
         query_sent: the parameters actually sent, for the record
         warnings: ways the request was altered. Empty means it ran as asked
         records: list of {nct_id, title, acronym, status, why_stopped, study_type,
@@ -530,6 +532,10 @@ async def ctgov_search(
     return {
         "count": count,
         "returned": len(records),
+        # The interpreter's `Date.now()` is stubbed, so JS comparing a completion date
+        # against "now" has no other source for it. Costs one field per call, in the JS
+        # heap, where it reaches the model only if the model returns it.
+        "current_date": date.today().isoformat(),
         # There is no `query_translation` equivalent on this API — synonym expansion is
         # applied and invisible — so the honest thing to echo is what was sent.
         "query_sent": {k: v for k, v in params.items() if k != "fields"},

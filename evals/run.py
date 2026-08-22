@@ -32,7 +32,8 @@ from dotenv import load_dotenv
 # default pair twice while reporting two different names.
 from research_agent.models import ENV_VARS
 
-_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "RESEARCH_AGENT_CACHE_TTL")
+_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "RESEARCH_AGENT_CACHE_TTL",
+                                 "RESEARCH_AGENT_NOTES")
                   if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_ENV_OVERRIDES)

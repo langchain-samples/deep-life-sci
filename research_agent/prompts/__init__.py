@@ -11,12 +11,18 @@ from research_agent.prompts.subagents import (
     FULL_TEXT_ANALYST,
     TRIAL_ANALYST,
 )
-from research_agent.prompts.system import SYSTEM_PROMPT
+from research_agent.prompts.system import (
+    IMPROVEMENT_NOTES,
+    build_system_prompt,
+    notes_requested,
+)
 
 __all__ = [
     "ABSTRACT_ANALYST",
     "FIGURE_ANALYST",
     "FULL_TEXT_ANALYST",
-    "SYSTEM_PROMPT",
+    "IMPROVEMENT_NOTES",
     "TRIAL_ANALYST",
+    "build_system_prompt",
+    "notes_requested",
 ]

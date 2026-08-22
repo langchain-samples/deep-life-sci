@@ -33,8 +33,8 @@ from research_agent.prompts import (
     ABSTRACT_ANALYST,
     FIGURE_ANALYST,
     FULL_TEXT_ANALYST,
-    SYSTEM_PROMPT,
     TRIAL_ANALYST,
+    build_system_prompt,
 )
 from research_agent.sources.ctgov import ctgov_fetch, ctgov_search
 from research_agent.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
@@ -116,7 +116,7 @@ def build_agent(backend):
             ctgov_search,
             ctgov_fetch,
         ],
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=build_system_prompt(),
         subagents=[
             analyst_leaf(ABSTRACT_ANALYST),
             analyst_leaf(FULL_TEXT_ANALYST),
