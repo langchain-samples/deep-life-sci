@@ -10,8 +10,8 @@ if present in the open-access subset. Only abstracts are available for paywalled
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/mcunningham1440/pubmed_agent.git
-cd pubmed_agent
+git clone https://github.com/mcunningham1440/deep-life-sci.git
+cd deep-life-sci
 ```
 
 Needs [git](https://git-scm.com/downloads), which setup also uses to fetch the chat UI.
