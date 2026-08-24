@@ -22,7 +22,7 @@ uv run scripts/setup.py                # once per clone: .env, deps, snapshot, c
 uv run scripts/dev.py                  # the chat stack, both halves, Ctrl-C stops both
                                        # NO_BROWSER=1 skips opening the browser tab
 uv run agent ["question"]              # bare = DEMO_QUESTION
-ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one role; SUBAGENT_/JUDGE_ too
+ROOT_MODEL=claude-sonnet-5 uv run agent        # swap one role; SUBAGENT_/JUDGE_ too
 uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
                                        # into the sandbox snapshot (~100s, rdkit is most of it)
 uv run langgraph dev                   # just the graph, on :2024
@@ -228,7 +228,7 @@ Root runs the larger model, leaves the cheaper one (`models.py:root_model` /
 `subagent_model`). Whenever the leaves are Anthropic — which the default
 `SUBAGENT_MODEL` is — subagent prompt caching is a net loss: each leaf is a fresh single-turn
 agent with a unique payload, so it pays cache-write premium for reads that never happen.
-Turn it off on the subagent model, keep it on the root. Nothing needs configuring for an
+Turn it off on the subagent model, keep it on the root. Nothing needs configuring for the default
 OpenAI root: it caches server-side on `/v1`, and
 `AnthropicPromptCachingMiddleware` no-ops for it (deepagents constructs it with
 `unsupported_model_behavior="ignore"`).
@@ -240,7 +240,7 @@ vars, defaulting to the constants in `models.py`:
 
 | | `_MODEL` | `_PROVIDER` | `_EFFORT` |
 |---|---|---|---|
-| `ROOT` | `claude-sonnet-5` | `anthropic` | unset |
+| `ROOT` | `openai/gpt-5.6-terra` | `openai` | unset |
 | `SUBAGENT` | `claude-haiku-4-5-20251001` | `anthropic` | unset |
 | `JUDGE` | `openai/gpt-5.6-luna` | `openai` | `low` |
 
@@ -252,10 +252,11 @@ leaf swap and a thinking level are three different experiments, and a name cover
 combinations needs an entry per combination. `ROOT_EFFORT` always sat outside the naming
 for that reason.
 
-`_EFFORT` unset is **not** `effort=high`, it is no thinking at all — langchain-anthropic
-defaults `thinking` to adaptive whenever effort is set, so setting it turns thinking on and
-`root_context_chars` moves with it. Haiku 4.5 has no effort scale and the gateway answers
-`SUBAGENT_EFFORT` on it with a 400.
+`_EFFORT` unset means different things per path. On an Anthropic model it is **not**
+`effort=high`, it is no thinking at all — langchain-anthropic defaults `thinking` to adaptive
+whenever effort is set, so setting it turns thinking on and `root_context_chars` moves with
+it; on an OpenAI model, unset just takes the provider's own default. Haiku 4.5 has no effort
+scale and the gateway answers `SUBAGENT_EFFORT` on it with a 400.
 
 The gateway path is picked per **model**, not globally — that's what lets one run mix
 providers across roles. The difference is not cosmetic: Anthropic models must use the
@@ -267,7 +268,8 @@ end in `/v1` (the SDK appends it) and model ids are bare (`claude-sonnet-5`, not
 Each role's path is stated outright rather than inferred, and a default path belongs to
 the default model beside it — replace only `ROOT_MODEL` and the path comes from the new
 id's form instead (bare means native, prefixed means `/v1`), which is what keeps
-`ROOT_MODEL=openai/gpt-5.6-terra` a one-variable swap. Naming `_PROVIDER` explicitly is
+`ROOT_MODEL=claude-sonnet-5` a one-variable swap (bare, so it goes native and keeps
+caching, without `ROOT_PROVIDER` being named). Naming `_PROVIDER` explicitly is
 the escape hatch for an id in neither form, so a new model needs no code edit; name one
 the id's form contradicts and `_provider_for` raises rather than sending it down the wrong
 path, which the gateway answers with a 501 that looks like an outage.

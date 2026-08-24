@@ -44,7 +44,7 @@ from [Settings](https://smith.langchain.com/settings), which are **not** interch
   OpenAI key. Every model call goes through the LangSmith LLM gateway.
 - **`LANGSMITH_API_KEY`** is for tracing, and for provisioning the sandbox.
 
-`ROOT_MODEL=openai/gpt-5.6-terra` in front of either command below swaps a model (see
+`ROOT_MODEL=claude-sonnet-5` in front of either command below swaps a model (see
 `research_agent/models.py`).
 
 The UI is a clone of [`agent-chat-ui`](https://github.com/langchain-ai/agent-chat-ui) in

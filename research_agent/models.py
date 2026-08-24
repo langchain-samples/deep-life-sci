@@ -45,13 +45,14 @@ OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 
 # --- The nine model settings: three roles x three axes -----------------------------
 # Each is overridden by the identically named env var, so `ROOT_EFFORT=high uv run agent`
-# needs no code change. `""` means unset — and unset effort on an Anthropic model is *no
-# thinking at all*, not a default level (see `_effort`). A provider belongs to the model
-# beside it: swap the model in the environment without naming a path and the path comes
-# from the new id's form instead (see `_resolve`).
+# needs no code change. `""` means unset, which is not the same thing on both paths: on an
+# Anthropic model it is *no thinking at all* rather than a default level (see `_effort`),
+# while an OpenAI model falls back to whatever the provider does by default. A provider
+# belongs to the model beside it: swap the model in the environment without naming a path
+# and the path comes from the new id's form instead (see `_resolve`).
 
-ROOT_MODEL = "claude-sonnet-5"
-ROOT_PROVIDER = "anthropic"
+ROOT_MODEL = "openai/gpt-5.6-terra"
+ROOT_PROVIDER = "openai"
 ROOT_EFFORT = ""
 
 SUBAGENT_MODEL = "claude-haiku-4-5-20251001"
@@ -62,12 +63,17 @@ JUDGE_MODEL = "openai/gpt-5.6-luna"
 JUDGE_PROVIDER = "openai"
 JUDGE_EFFORT = "low"
 
-# Why these. Sonnet 5 runs the heavy fan-outs 22-62% faster than Sonnet 4.6 at equal effort
-# (198s -> 76s on semaglutide-weightloss-boxplot) for 1.9-2.6x the root context (fmt-cdiff
-# 86k -> 214k chars), which is the budget docs/measurements.md is about — watch it before
-# assuming the swap is free. `ROOT_MODEL=claude-sonnet-4-6` reproduces the older pair and
-# shares these leaves, so it isolates the root. The leaves stay on Haiku because every
-# latency measurement in this repo was taken against it. The judge is pinned so that a
+# Why these. terra and Sonnet 5 score the same as the root: over the eval dataset both hit
+# 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other (probed
+# 2026-08-23, both at ROOT_EFFORT=medium; terra's one regression was the missing deliverable
+# on tpd-publication-volume). A tie on quality makes it a cost decision, and every
+# head-to-head in docs/measurements.md puts terra far ahead per paper. Swapping back is one
+# variable: `ROOT_MODEL=claude-sonnet-5` is the previous default, `claude-sonnet-4-6` the one
+# before it, and both share these leaves, so either isolates the root — but watch root
+# context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k ->
+# 214k chars) for fan-outs 22-62% faster (198s -> 76s on semaglutide-weightloss-boxplot),
+# and that budget is what docs/measurements.md is about. The leaves stay on Haiku because
+# every latency measurement in this repo was taken against it. The judge is pinned so that a
 # score change is attributable to the pair under test rather than to the grader, and is
 # luna rather than the cheaper Haiku 4.5 because Haiku has no effort scale at all (gateway
 # 400 "This model does not support the effort parameter", probed 2026-08-18).
@@ -305,7 +311,7 @@ def describe(*roles: str) -> str:
     Names the model, its gateway path and its effort for each role asked for, defaulting to
     the pair that does the work:
 
-        root=claude-sonnet-5 (anthropic) subagent=claude-haiku-4-5-20251001 (anthropic)
+        root=openai/gpt-5.6-terra (openai) subagent=claude-haiku-4-5-20251001 (anthropic)
 
     The path is printed and not just the model because it decides whether prompt caching
     works, and because nothing stops two roles taking different ones.
@@ -320,7 +326,7 @@ def describe(*roles: str) -> str:
 def slug() -> str:
     """A short name for the current configuration, used as the eval experiment prefix.
 
-    Just the root model and its effort — `claude-sonnet-5`, or `claude-sonnet-4-6-low` —
+    Just the root model and its effort — `gpt-5.6-terra`, or `claude-sonnet-5-medium` —
     because the root is what a sweep almost always varies. Two sweeps that differ only in
     their leaves therefore share a prefix and sort together in LangSmith, which is the
     comparison you wanted anyway; `describe()` goes into the experiment metadata, so the

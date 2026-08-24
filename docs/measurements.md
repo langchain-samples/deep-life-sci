@@ -17,11 +17,12 @@ pairs these runs used, as env:
 | was | now |
 |---|---|
 | `anthropic` | `ROOT_MODEL=claude-sonnet-4-6` (leaves already default to Haiku 4.5) |
-| `mixed` | `ROOT_MODEL=openai/gpt-5.6-terra` |
-| `openai` | `ROOT_MODEL=openai/gpt-5.6-terra SUBAGENT_MODEL=openai/gpt-5.6-luna` |
+| `mixed` | *the current default* — `openai/gpt-5.6-terra` over the Haiku leaves |
+| `openai` | `SUBAGENT_MODEL=openai/gpt-5.6-luna` (terra root is now default) |
 
-The current default is `claude-sonnet-5` over those same Haiku leaves, which no profile
-ever named and which none of the figures below were measured against.
+The default root is `openai/gpt-5.6-terra`; see
+[Scoring the root pair](#scoring-the-root-pair) for the run that chose it over
+`claude-sonnet-5`, which none of the figures below were measured against either.
 
 **These numbers predate the sandbox.** They were measured with a host-rooted filesystem
 backend and no `execute` tool, so the prompt was shorter and no run spent time booting a
@@ -108,6 +109,45 @@ Under `mixed` the root escapes the trap for a different reason — an OpenAI roo
 server-side caching on `/v1` and `AnthropicPromptCachingMiddleware` no-ops for it
 (deepagents constructs it with `unsupported_model_behavior="ignore"`), so nothing needs
 configuring at the root either.
+
+## Scoring the root pair
+
+Two eval sweeps over the 11-example `pubmed-agent-default` dataset, run back-to-back on
+2026-08-23, varying only the root: `claude-sonnet-5` against `openai/gpt-5.6-terra`, both
+at `ROOT_EFFORT=medium`, both over the default Haiku leaves and the pinned luna judge, one
+example at a time.
+
+| | sonnet-5 | terra |
+|---|---|---|
+| rubric | 7/11 | 7/11 |
+| citations_exist | 8/9 applicable | 8/9 applicable |
+| produced_expected_artifacts | 2/2 applicable | **1/2** |
+| wall clock, 11 examples | 16m23s | 10m53s |
+
+Experiments `pubmed-claude-sonnet-5-medium-eb50afd6` and
+`pubmed-gpt-5.6-terra-medium-41f78442` in LangSmith.
+
+What made terra the default is the tie, not a win. The two roots failed the **same four
+rubric seeds** — `base-editing-t-cells-convergence`, `fmt-cdiff-placebo-trials`,
+`psilocybin-depression-unpublished`, `semaglutide-weightloss-boxplot` — and the citation
+difference was a swap rather than a gain, sonnet missing base-editing where terra missed
+`egan-ulk1-ampk-sites`. Four seeds failing under both roots is evidence about those
+questions, the rubric or the shared leaves, not about root capability; they are the first
+place to look before reading any of this as a model ranking. With quality tied, the
+per-paper cost figures above decide it.
+
+Two caveats on these numbers, both of which flatter terra:
+
+- **n=1 per seed, binary rubric.** One seed flipping moves a column by 9 points, and every
+  difference here is a single seed.
+- **The second run read a warm cache.** `evals/run.py` pins `RESEARCH_AGENT_CACHE_TTL=off`
+  against a shared `data/`, so run 2 reused the corpus run 1 fetched. That is most of why
+  the wall-clock gap is as wide as it is; treat it as indicative, not as a latency
+  measurement.
+
+`root_context_chars` was not captured for either sweep — it is on each `RunResult` in the
+traces. That is the number to compare next, and it matters most on a swap *back* to an
+Anthropic root, where `ROOT_EFFORT=medium` turns thinking on and moves it.
 
 ## After the sandbox
 
