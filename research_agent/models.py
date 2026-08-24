@@ -53,11 +53,11 @@ OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 
 ROOT_MODEL = "openai/gpt-5.6-terra"
 ROOT_PROVIDER = "openai"
-ROOT_EFFORT = ""
+ROOT_EFFORT = "low"
 
-SUBAGENT_MODEL = "claude-haiku-4-5-20251001"
-SUBAGENT_PROVIDER = "anthropic"
-SUBAGENT_EFFORT = ""  # Haiku 4.5 has no effort scale; the gateway 400s on the parameter
+SUBAGENT_MODEL = "openai/gpt-5.6-luna"
+SUBAGENT_PROVIDER = "openai"
+SUBAGENT_EFFORT = "low"
 
 JUDGE_MODEL = "openai/gpt-5.6-luna"
 JUDGE_PROVIDER = "openai"
@@ -72,11 +72,36 @@ JUDGE_EFFORT = "low"
 # before it, and both share these leaves, so either isolates the root — but watch root
 # context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k ->
 # 214k chars) for fan-outs 22-62% faster (198s -> 76s on semaglutide-weightloss-boxplot),
-# and that budget is what docs/measurements.md is about. The leaves stay on Haiku because
-# every latency measurement in this repo was taken against it. The judge is pinned so that a
-# score change is attributable to the pair under test rather than to the grader, and is
-# luna rather than the cheaper Haiku 4.5 because Haiku has no effort scale at all (gateway
-# 400 "This model does not support the effort parameter", probed 2026-08-18).
+# and that budget is what docs/measurements.md is about.
+#
+# The leaves moved from Haiku 4.5 to luna on 2026-08-24 on cost, with quality held flat.
+# Three sweeps over the same dataset, notes off, judge pinned: terra-low/haiku-4.5 scored
+# 7/11 rubric, 9/9 citations, $1.54; terra-low/luna-low scored the same *cell for cell* --
+# every seed, all three evaluators -- for $0.88, 43% less on 21% fewer tokens, at +5s median
+# latency (31.0s -> 36.2s). terra-medium/haiku-4.5 was the third and bought nothing: 7/11
+# again, failing the same four seeds, and it lost a citation on
+# psilocybin-depression-unpublished. `ROOT_EFFORT` is `low` for that reason -- medium cost
+# 53% more latency per run and fixed exactly one cell (the tpd-publication-volume
+# deliverable), which is not a trade worth making the default.
+#
+# Two caveats attach to that $0.88. It is one run of 11 examples with no repeats, so read
+# 43% as a direction rather than a constant; and the leaves are now the same model and
+# effort as the judge. That is not self-grading -- the judge scores the root's final answer,
+# never leaf output -- but it is a confound worth retiring with a sweep on a different judge
+# before leaning on the number.
+#
+# What did *not* move is the more useful finding: the same four rubric seeds fail in all
+# three configurations. Root effort did not touch them and neither did swapping the leaf
+# model across providers, so they are a prompt, tool or criteria problem rather than a
+# model-selection one.
+#
+# The older latency measurements in docs/measurements.md were taken against Haiku leaves.
+# `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
+# has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
+# gateway answers the parameter with a 400.
+#
+# The judge is pinned so that a score change is attributable to the pair under test rather
+# than to the grader. It was already luna, and stays there.
 
 # Wall-clock ceiling on a single analyst request. Nothing else imposes one.
 #
@@ -311,7 +336,7 @@ def describe(*roles: str) -> str:
     Names the model, its gateway path and its effort for each role asked for, defaulting to
     the pair that does the work:
 
-        root=openai/gpt-5.6-terra (openai) subagent=claude-haiku-4-5-20251001 (anthropic)
+        root=openai/gpt-5.6-terra (openai, low) subagent=openai/gpt-5.6-luna (openai, low)
 
     The path is printed and not just the model because it decides whether prompt caching
     works, and because nothing stops two roles taking different ones.

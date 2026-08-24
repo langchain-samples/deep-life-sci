@@ -38,8 +38,30 @@ BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 # GET breaks at ~361 ids (HTTP 414); POST above this and there is no measured downside.
 POST_THRESHOLD = 200
 # esummary rejects >500 UIDs with an HTTP 200 error body. Chunk well under it.
+# Raising it toward the cap is a pessimisation, not an optimisation: per-request latency
+# scales with UID count, so 9 requests of 500 measured *slower* than 23 of 200 (44.9s vs
+# 39.6s) for the same 4484 ids. Concurrency is the lever here, not batch size.
 SUMMARY_CHUNK = 200
+# How many esummary chunks may be in flight at once. This bounds *sockets*, not rate --
+# `_throttle` still paces every dispatch, so NCBI sees the same requests/sec whatever
+# this is set to, and raising it cannot breach the usage policy.
+#
+# 5 is where the throttle overtakes the cap as the binding constraint at the keyless
+# 0.34s interval (~= latency / interval, 1.70 / 0.34). Measured over a stub transport,
+# 4484 ids / 23 requests: sequential 39.4s, cap 3 14.1s, cap 5 9.3s, and caps 6 / 8 / 12
+# all identical to cap 5. With NCBI_API_KEY set the interval drops to 0.11s and a bigger
+# cap would keep paying (12 -> 4.6s), but 5 still gives 8.8s and is the one value that is
+# safe and near-optimal in both configurations.
+SUMMARY_CONCURRENCY = 5
 FETCH_CHUNK = 200
+# In flight at once for efetch, and the same argument as `SUMMARY_CONCURRENCY`: the cap
+# bounds sockets, `_throttle` bounds the rate. Kept identical to it deliberately -- the
+# two are the same shape of request against the same bucket, and one number is easier to
+# reason about than two. efetch is heavier per request (2.6s and ~7 MB of XML for 200
+# ids, against 1.7s for esummary), so the cap saturates later here, not sooner: a larger
+# value would still pay at the keyless interval. 5 stays because it is safe with a key
+# too, where the interval drops to 0.11s.
+FETCH_CONCURRENCY = 5
 # esearch silently clamps retmax to this; clamp explicitly so the caller knows.
 MAX_RETMAX = 9999
 
@@ -142,11 +164,28 @@ RETRY_MAX_DELAY = 30.0
 _throttle = Throttle(_min_interval)
 
 
+# Transport-level failures, as opposed to HTTP statuses. `RETRY_STATUSES` cannot see
+# these: the request never gets far enough to have a status. Retried on the same ladder
+# because they are the same kind of event -- a connection NCBI dropped or never
+# accepted. Scoped deliberately: `LocalProtocolError` and `UnsupportedProtocol` are
+# caller bugs and retrying them just delays the traceback.
+RETRY_EXCEPTIONS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+)
+
+
 async def _request(util: str, **params: Any) -> httpx.Response:
-    """Call an E-utility, retrying 429/5xx with jittered backoff. Raises on non-200.
+    """Call an E-utility, retrying 429/5xx and dropped connections. Raises on non-200.
 
     Retries are safe because every E-utility call here is a read; the POST branch below
     is only a workaround for URL length, not a mutation.
+
+    Both failure modes go through one ladder. An earlier version keyed retries purely on
+    `resp.status_code`, so a `ReadError` propagated out on the first occurrence without
+    consuming an attempt -- and because `_esummary` gathers its chunks, one such error
+    takes down the entire search rather than one request of twenty-three.
     """
     payload = {**_common_params(), **{k: v for k, v in params.items() if v is not None}}
     url = f"{BASE_URL}{util}.fcgi"
@@ -157,10 +196,21 @@ async def _request(util: str, **params: Any) -> httpx.Response:
     async with httpx.AsyncClient(timeout=120.0) as client:
         for attempt in range(1, RETRY_ATTEMPTS + 1):
             await _throttle.wait()
-            if use_post:
-                resp = await client.post(url, data=payload)
-            else:
-                resp = await client.get(url, params=payload)
+            try:
+                if use_post:
+                    resp = await client.post(url, data=payload)
+                else:
+                    resp = await client.get(url, params=payload)
+            except RETRY_EXCEPTIONS as exc:
+                if attempt == RETRY_ATTEMPTS:
+                    raise PubMedError(
+                        f"{util}: {type(exc).__name__} on all {attempt} attempts"
+                    ) from exc
+                # No response, so no `Retry-After` to honour -- jittered backoff only.
+                await asyncio.sleep(
+                    backoff_delay(attempt, base=RETRY_BASE_DELAY, maximum=RETRY_MAX_DELAY)
+                )
+                continue
             if resp.status_code == 200:
                 return resp
             retryable = resp.status_code in RETRY_STATUSES
@@ -238,23 +288,45 @@ def _collect_warnings(result: dict) -> list[str]:
     return warnings
 
 
-async def _esummary(pmids: list[str]) -> dict[str, dict]:
-    """Fetch citation metadata, chunked under the 500-UID cap."""
-    records: dict[str, dict] = {}
-    for chunk in chunks(pmids, SUMMARY_CHUNK):
+async def _esummary_chunk(chunk: list[str], sem: asyncio.Semaphore) -> dict[str, dict]:
+    """One esummary request. The semaphore is held only across the round trip."""
+    async with sem:
         resp = await _request("esummary", db="pubmed", id=",".join(chunk), retmode="json")
-        payload = resp.json()
-        # Over-cap and malformed requests come back as HTTP 200 with an `error` key
-        # and no `result` at all — reading result.uids first would look like 0 hits.
-        if "error" in payload:
-            raise PubMedError(f"esummary: {payload['error']}")
-        result = payload.get("result")
-        if result is None:
-            raise PubMedError("esummary returned no `result` block")
-        for uid in result.get("uids", []):
-            rec = result.get(uid)
-            if isinstance(rec, dict) and not rec.get("error"):
-                records[uid] = rec
+    payload = resp.json()
+    # Over-cap and malformed requests come back as HTTP 200 with an `error` key
+    # and no `result` at all — reading result.uids first would look like 0 hits.
+    if "error" in payload:
+        raise PubMedError(f"esummary: {payload['error']}")
+    result = payload.get("result")
+    if result is None:
+        raise PubMedError("esummary returned no `result` block")
+    records: dict[str, dict] = {}
+    for uid in result.get("uids", []):
+        rec = result.get(uid)
+        if isinstance(rec, dict) and not rec.get("error"):
+            records[uid] = rec
+    return records
+
+
+async def _esummary(pmids: list[str]) -> dict[str, dict]:
+    """Fetch citation metadata, chunked under the 500-UID cap, chunks concurrent.
+
+    Sequential, this was the dominant cost of any large search: a 4484-hit query is 23
+    round trips, and one at a time made a single `pubmed_search` 40.6s of a 44.0s `eval`.
+
+    The semaphore is per call rather than module-global — unlike `pmc.py`'s, which is
+    shared. Two reasons: the rate ceiling is `_throttle`'s job and is already global, so
+    a shared socket cap buys nothing; and a module-global `asyncio.Semaphore` caches the
+    first loop it is awaited on and raises if a later call arrives on a different one,
+    which is exactly what a per-example `asyncio.run` would do.
+    """
+    sem = asyncio.Semaphore(SUMMARY_CONCURRENCY)
+    parts = await asyncio.gather(
+        *(_esummary_chunk(chunk, sem) for chunk in chunks(pmids, SUMMARY_CHUNK))
+    )
+    records: dict[str, dict] = {}
+    for part in parts:
+        records.update(part)
     return records
 
 
@@ -504,6 +576,27 @@ def _parse_efetch(xml_text: str) -> dict[str, dict]:
     return records
 
 
+async def _efetch_chunk(chunk: list[str], sem: asyncio.Semaphore) -> dict[str, dict]:
+    """One efetch request, parsed and written to the cache.
+
+    The semaphore is held only across the round trip, not across the parse or the cache
+    write -- those are handed to a thread, and holding a slot through them would idle a
+    socket the next chunk could be using.
+
+    Parsing is on the event loop on purpose. 200 records is ~7 MB of XML and measures
+    40-60ms, which is not worth a thread hop; `_write_cache` is the blocking part and
+    that one does get `to_thread`.
+    """
+    async with sem:
+        # retmode=xml, never the text mode: text concatenates every abstract behind a
+        # positional counter that renumbers when records drop, so it can't be mapped
+        # back to the requested ids. Never pass retmax — it truncates silently.
+        resp = await _request("efetch", db="pubmed", id=",".join(chunk), retmode="xml")
+    parsed = _parse_efetch(resp.text)
+    await asyncio.to_thread(_write_cache, parsed)
+    return parsed
+
+
 @tool
 async def fetch_abstracts(pmids: list[str]) -> dict:
     """Retrieve abstracts for a list of PMIDs, batched and cached locally.
@@ -513,7 +606,8 @@ async def fetch_abstracts(pmids: list[str]) -> dict:
     have subagents call it; fetch here, then pass the text into subagent prompts.
 
     Already-cached abstracts are served from disk without an HTTP request, so calling
-    this again with overlapping PMIDs is cheap.
+    this again with overlapping PMIDs is cheap. Batching is also what makes the fetch
+    concurrent: chunks of one call go out together, where separate calls serialise.
 
     Args:
         pmids: PMIDs as strings. Anything that isn't all digits is rejected rather
@@ -538,14 +632,12 @@ async def fetch_abstracts(pmids: list[str]) -> dict:
     # that outright — see cache_io for why it matters in production too.
     records, from_cache, to_fetch = await asyncio.to_thread(_scan_cache, valid)
 
-    for chunk in chunks(to_fetch, FETCH_CHUNK):
-        # retmode=xml, never the text mode: text concatenates every abstract behind a
-        # positional counter that renumbers when records drop, so it can't be mapped
-        # back to the requested ids. Never pass retmax — it truncates silently.
-        resp = await _request("efetch", db="pubmed", id=",".join(chunk), retmode="xml")
-        parsed = _parse_efetch(resp.text)
-        records.update(parsed)
-        await asyncio.to_thread(_write_cache, parsed)
+    sem = asyncio.Semaphore(FETCH_CONCURRENCY)
+    parts = await asyncio.gather(
+        *(_efetch_chunk(chunk, sem) for chunk in chunks(to_fetch, FETCH_CHUNK))
+    )
+    for part in parts:
+        records.update(part)
 
     return {
         "records": records,

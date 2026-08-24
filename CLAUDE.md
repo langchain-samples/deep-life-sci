@@ -225,13 +225,14 @@ The auto-added `general-purpose` subagent *does* inherit the PubMed tools and an
 unrestricted filesystem including `execute`. Nothing routes work to it, but don't start.
 
 Root runs the larger model, leaves the cheaper one (`models.py:root_model` /
-`subagent_model`). Whenever the leaves are Anthropic — which the default
-`SUBAGENT_MODEL` is — subagent prompt caching is a net loss: each leaf is a fresh single-turn
-agent with a unique payload, so it pays cache-write premium for reads that never happen.
-Turn it off on the subagent model, keep it on the root. Nothing needs configuring for the default
-OpenAI root: it caches server-side on `/v1`, and
-`AnthropicPromptCachingMiddleware` no-ops for it (deepagents constructs it with
-`unsupported_model_behavior="ignore"`).
+`subagent_model`). Both defaults are now OpenAI, so nothing needs configuring for caching:
+both paths cache server-side on `/v1`, and `AnthropicPromptCachingMiddleware` no-ops for
+them (deepagents constructs it with `unsupported_model_behavior="ignore"`).
+
+That stops being true the moment you point either role at an Anthropic model. Whenever the
+*leaves* are Anthropic, subagent prompt caching is a net loss: each leaf is a fresh
+single-turn agent with a unique payload, so it pays cache-write premium for reads that never
+happen. Turn it off on the subagent model, keep it on the root.
 
 ### Model gateway
 
@@ -240,8 +241,8 @@ vars, defaulting to the constants in `models.py`:
 
 | | `_MODEL` | `_PROVIDER` | `_EFFORT` |
 |---|---|---|---|
-| `ROOT` | `openai/gpt-5.6-terra` | `openai` | unset |
-| `SUBAGENT` | `claude-haiku-4-5-20251001` | `anthropic` | unset |
+| `ROOT` | `openai/gpt-5.6-terra` | `openai` | `low` |
+| `SUBAGENT` | `openai/gpt-5.6-luna` | `openai` | `low` |
 | `JUDGE` | `openai/gpt-5.6-luna` | `openai` | `low` |
 
 All nine sit in one block at the top of `models.py` rather than beside the notes that
@@ -255,8 +256,10 @@ for that reason.
 `_EFFORT` unset means different things per path. On an Anthropic model it is **not**
 `effort=high`, it is no thinking at all — langchain-anthropic defaults `thinking` to adaptive
 whenever effort is set, so setting it turns thinking on and `root_context_chars` moves with
-it; on an OpenAI model, unset just takes the provider's own default. Haiku 4.5 has no effort
-scale and the gateway answers `SUBAGENT_EFFORT` on it with a 400.
+it; on an OpenAI model, unset just takes the provider's own default. Both defaults now set
+an effort explicitly, so this matters on a swap rather than out of the box — and one swap in
+particular: Haiku 4.5 has no effort scale, so `SUBAGENT_MODEL=claude-haiku-4-5-20251001`
+must also clear `SUBAGENT_EFFORT=` or the gateway answers with a 400.
 
 The gateway path is picked per **model**, not globally — that's what lets one run mix
 providers across roles. The difference is not cosmetic: Anthropic models must use the

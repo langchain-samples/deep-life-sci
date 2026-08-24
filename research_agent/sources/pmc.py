@@ -771,35 +771,59 @@ def make_sandbox_tools(backend: Any) -> list:
         skipped: list[dict] = []
         uploads: list[tuple[str, bytes]] = []
 
+        async def one(client, pmcid: str, name: str) -> tuple[dict, bytes] | dict:
+            """Resolve, size-check and download one file. A bare dict is a skip."""
+            package = await _resolve(client, pmcid)
+            if package is None:
+                return {"pmcid": pmcid, "file": name, "reason": "no full text in PMC"}
+            size = package["objects"].get(name)
+            if size is None:
+                return {"pmcid": pmcid, "file": name,
+                        "reason": f"no such file; available: {sorted(package['objects'])[:12]}"}
+            if size > cap:
+                return {"pmcid": pmcid, "file": name, "bytes": size,
+                        "reason": f"{size:,} bytes exceeds the {cap:,}-byte limit"}
+            data = await _object_bytes(client, package, name)
+            if data is None:
+                return {"pmcid": pmcid, "file": name, "reason": "download failed"}
+            path = f"{dest_dir}/{pmcid}/{name}"
+            return {"pmcid": pmcid, "file": name, "path": path, "bytes": size}, data
+
         async with httpx.AsyncClient(
             timeout=300.0, follow_redirects=True,
             headers={"User-Agent": "pubmed_agent/0.1"},
         ) as client:
-            for pmcid, name in pmcids_and_files:
-                package = await _resolve(client, pmcid)
-                if package is None:
-                    skipped.append({"pmcid": pmcid, "file": name, "reason": "no full text in PMC"})
-                    continue
-                size = package["objects"].get(name)
-                if size is None:
-                    skipped.append(
-                        {"pmcid": pmcid, "file": name,
-                         "reason": f"no such file; available: {sorted(package['objects'])[:12]}"}
-                    )
-                    continue
-                if size > cap:
-                    skipped.append(
-                        {"pmcid": pmcid, "file": name, "bytes": size,
-                         "reason": f"{size:,} bytes exceeds the {cap:,}-byte limit"}
-                    )
-                    continue
-                data = await _object_bytes(client, package, name)
-                if data is None:
-                    skipped.append({"pmcid": pmcid, "file": name, "reason": "download failed"})
-                    continue
-                path = f"{dest_dir}/{pmcid}/{name}"
-                uploads.append((path, data))
-                staged.append({"pmcid": pmcid, "file": name, "path": path, "bytes": size})
+            # Concurrent, and needing no new cap to be safe: `_s3_get` already holds
+            # `_semaphore()` for every request, so the 16 slots that were sitting idle
+            # while this loop ran one file at a time are what bounds it. S3 is not
+            # metered per key the way NCBI is, which is why this module caps concurrency
+            # instead of pacing a rate.
+            #
+            # Worth doing despite the small file counts because staging sits *in front
+            # of* a fan-out rather than inside one: nothing can dispatch a
+            # `figure-analyst` until every image is on disk, so this latency overlaps
+            # with nothing.
+            #
+            # `_resolve` is called per file rather than hoisted per pmcid. It caches
+            # host-side, so the duplicates cost a disk read, and concurrent callers for
+            # one paper can race to fetch the same package -- harmless, since the write
+            # is idempotent and this path is one or two papers, not a corpus.
+            results = await asyncio.gather(
+                *(one(client, pmcid, name) for pmcid, name in pmcids_and_files),
+                return_exceptions=True,
+            )
+
+        for (pmcid, name), result in zip(pmcids_and_files, results, strict=True):
+            # An exception here is one file's download, not the batch's: the others are
+            # already in hand, so report it as a skip and stage the rest.
+            if isinstance(result, BaseException):
+                skipped.append({"pmcid": pmcid, "file": name, "reason": str(result)})
+            elif isinstance(result, tuple):
+                entry, data = result
+                uploads.append((entry["path"], data))
+                staged.append(entry)
+            else:
+                skipped.append(result)
 
         if uploads:
             responses = await backend.aupload_files(uploads)

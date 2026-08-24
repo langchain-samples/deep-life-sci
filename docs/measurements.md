@@ -16,9 +16,12 @@ pairs these runs used, as env:
 
 | was | now |
 |---|---|
-| `anthropic` | `ROOT_MODEL=claude-sonnet-4-6` (leaves already default to Haiku 4.5) |
-| `mixed` | *the current default* — `openai/gpt-5.6-terra` over the Haiku leaves |
-| `openai` | `SUBAGENT_MODEL=openai/gpt-5.6-luna` (terra root is now default) |
+| `anthropic` | `ROOT_MODEL=claude-sonnet-4-6 SUBAGENT_MODEL=claude-haiku-4-5-20251001 SUBAGENT_EFFORT=` |
+| `mixed` | `SUBAGENT_MODEL=claude-haiku-4-5-20251001 SUBAGENT_EFFORT=` — terra root over Haiku leaves |
+| `openai` | *the current default* — terra root over luna leaves, both at `low` |
+
+Note the `SUBAGENT_EFFORT=` in the first two: the leaves now default to an explicit `low`,
+and Haiku 4.5 has no effort scale, so a swap that only names the model gets a gateway 400.
 
 The default root is `openai/gpt-5.6-terra`; see
 [Scoring the root pair](#scoring-the-root-pair) for the run that chose it over
@@ -148,6 +151,48 @@ Two caveats on these numbers, both of which flatter terra:
 `root_context_chars` was not captured for either sweep — it is on each `RunResult` in the
 traces. That is the number to compare next, and it matters most on a swap *back* to an
 Anthropic root, where `ROOT_EFFORT=medium` turns thinking on and moves it.
+
+## Scoring the leaves
+
+Three sweeps over the same 11-example dataset on 2026-08-24, notes off
+(`RESEARCH_AGENT_NOTES=0`), judge pinned at luna/low, run after the `_esummary` and
+`fetch_abstracts` concurrency work landed. This is what moved the leaves off Haiku 4.5.
+
+| | terra-low / haiku-4.5 | terra-medium / haiku-4.5 | terra-low / luna-low |
+|---|---|---|---|
+| rubric | 7/11 | 7/11 | 7/11 |
+| citations | 9/9 | 8/9 | 9/9 |
+| artifacts | 1/2 | 2/2 | 1/2 |
+| median run latency | 31.0s | 48.2s | 36.2s |
+| tokens | 2,101,686 | 2,034,659 | 1,650,743 |
+| cost | $1.54 | $1.38 | **$0.88** |
+| error rate | 0 | 0 | 0 |
+
+**luna-low scored identically to Haiku 4.5 cell for cell** — every seed, all three
+evaluators — for 43% less on 21% fewer tokens, at +5s median latency. That is the whole
+argument for the swap; there is no quality column to trade against.
+
+**Root effort at medium bought nothing.** Same 7/11, failing the same four seeds, 53% more
+latency per run, and it *lost* a citation on `psilocybin-depression-unpublished`. It fixed
+exactly one cell: the missing `tpd-publication-volume` deliverable. Hence `ROOT_EFFORT=low`
+as the default.
+
+Two caveats on the $0.88, since it is the headline:
+
+- **n=1 per configuration, 11 examples, no repeats.** Token counts vary run to run. Read
+  43% as a direction, not a constant.
+- **The leaves are now the same model and effort as the judge.** Not self-grading — the
+  judge scores the root's final answer, never leaf output — but a confound worth retiring
+  with a sweep on a different judge before leaning on the number.
+
+The more useful finding is what did *not* move: **the same four rubric seeds fail in all
+three configurations** (`base-editing-t-cells-convergence`, `fmt-cdiff-placebo-trials`,
+`psilocybin-depression-unpublished`, `semaglutide-weightloss-boxplot`). Root effort did not
+touch them and neither did swapping the leaf model across providers, so they are a prompt,
+tool or criteria problem rather than a model-selection one.
+
+Every latency figure elsewhere in this document predates the swap and was taken against
+Haiku leaves; the profile table above has the one-variable restore.
 
 ## After the sandbox
 
