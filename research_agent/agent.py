@@ -28,6 +28,7 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 from research_agent.middleware.artifacts import ArtifactMiddleware
 from research_agent.middleware.perf import LoopLagProbe
+from research_agent.middleware.progress import with_progress
 from research_agent.middleware.uploads import UploadMiddleware
 from research_agent.models import root_model, subagent_model
 from research_agent.prompts import (
@@ -107,7 +108,9 @@ def build_agent(backend):
 
     agent = create_deep_agent(
         model=root_model(),
-        tools=[
+        # Wrapped so each call inside `eval` emits a line the frontend can show. The
+        # wrappers are the same tools in every respect PTC inspects; see middleware/progress.py.
+        tools=with_progress([
             pubmed_search,
             fetch_abstracts,
             pmc_locate,
@@ -116,7 +119,7 @@ def build_agent(backend):
             fetch_supplementary,
             ctgov_search,
             ctgov_fetch,
-        ],
+        ]),
         system_prompt=build_system_prompt(),
         subagents=[
             analyst_leaf(ABSTRACT_ANALYST),

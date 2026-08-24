@@ -32,8 +32,13 @@ import webbrowser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _common import REPO_ROOT, chat_ui_dir, die, listening, require_setup, say, tool
+from setup import apply_patches, ensure_overlay, unapplied_patches
 
-UI_URL = "http://localhost:3000"
+# `hideToolCalls` is a nuqs query param, so opening the tab with it set is a default
+# without a patch: nuqs keeps it across thread switches, and the in-app toggle still
+# turns it back off. Our root turns are almost all thinking + tool_use, so left on the
+# upstream default the transcript is mostly collapsed tool cards.
+UI_URL = "http://localhost:3000?hideToolCalls=true"
 WINDOWS = os.name == "nt"
 
 _started: list[tuple[str, subprocess.Popen[str]]] = []
@@ -142,6 +147,25 @@ def main() -> int:
     if not ui_dir.is_dir():
         say("dev", f"no chat UI at {ui_dir}")
         die("dev", "install it (clone, /ui/* rewrite, pnpm install) with:  uv run scripts/setup.py")
+
+    # The clone is gitignored, so a patch that is missing from it leaves no trace anywhere:
+    # the feature is simply absent while the repo looks like it shipped. Checking that setup
+    # *ran* does not catch that — a `git pull` bringing a new patch, or an upgraded clone,
+    # both land here already un-patched. Re-applying is cheap and each patch no-ops when its
+    # mark is present, so this is a check by doing rather than a prompt to go and re-run.
+    copied = ensure_overlay()
+    if copied:
+        say("dev", f"refreshed {len(copied)} overlay component(s) in the chat UI")
+
+    missing = unapplied_patches()
+    if missing:
+        say("dev", f"chat UI patches missing ({', '.join(missing)}) — reapplying…")
+        apply_patches()
+        still_missing = unapplied_patches()
+        if still_missing:
+            # The patch functions have already printed what could not be anchored and why.
+            say("dev", f"warning: still unpatched ({', '.join(still_missing)}); "
+                       "starting anyway — see the messages above.")
 
     if listening(2024):
         say("dev", ":2024 already serving — reusing it")

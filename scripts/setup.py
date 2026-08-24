@@ -175,6 +175,86 @@ def ensure_snapshot() -> None:
 # `langgraph build` uses the repo root as its Docker context, so .chat-ui has to be listed
 # in .dockerignore or a dev-only frontend ships in the deploy image.
 
+# What each patch leaves behind, and where. Every patch is idempotent because it looks for
+# its own mark before doing anything, and `unapplied_patches()` asks the same question from
+# outside — which is what lets `dev.py` verify the patches are *present* rather than that
+# setup once *ran*. The clone is gitignored, so nothing else records what the frontend is:
+# a hand-edited or half-upgraded .chat-ui otherwise sits un-patched while the repo believes
+# the feature shipped. One table rather than a literal in each function, so the two answers
+# cannot drift apart.
+#
+# Mapped to False where the patch works by *removing* something.
+# The name this agent goes by in the UI. Upstream ships its own throughout, and a
+# half-renamed app is worse than an unrenamed one, so every occurrence moves together.
+APP_NAME = "Life Sci Agent"
+
+# The empty state's logo and heading, stacked rather than side by side. Its own patch rather
+# than another edit inside patch_app_name, so a clone already carrying the rename picks it up.
+HOME_HEADING_OLD = '<div className="flex items-center gap-3">'
+HOME_HEADING_NEW = '<div className="flex flex-col items-center gap-3">'
+
+# U+1F9EA TEST TUBE, the closest thing Unicode has to a beaker that renders as a lab glass on
+# every platform (U+2697 ALEMBIC is a text-presentation character and shows up monochrome and
+# tiny on some). Both places the name is rendered as a heading, so the two do not disagree;
+# not the browser tab or the setup form, where it would read as decoration in a sentence.
+BEAKER = "\N{TEST TUBE}"
+BEAKER_EDITS = tuple(
+    (f'{cls}">\n{indent}{APP_NAME}\n', f'{cls}">\n{indent}{BEAKER} {APP_NAME}\n')
+    for cls, indent in (
+        ('className="text-xl font-semibold tracking-tight', " " * 20),
+        ('className="text-2xl font-semibold tracking-tight', " " * 24),
+    )
+)
+
+PATCH_MARKS = {
+    "rewrite": ("next.config.mjs", "/ui/:path", True),
+    "dev-indicator": ("next.config.mjs", "devIndicators", True),
+    "svg": ("src/components/icons/langgraph.tsx", "clip-path=", False),
+    "github-link": ("src/components/thread/index.tsx", "OpenGitHubRepo", False),
+    "app-name": ("src/components/thread/index.tsx", APP_NAME, True),
+    "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
+    "beaker": ("src/components/thread/index.tsx", BEAKER, True),
+    "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
+    "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
+    "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
+    "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
+}
+
+
+def _marked(name: str) -> bool:
+    """Whether this patch's mark is where it left it.
+
+    A file that is not there counts as applied: upstream moving or renaming one is not drift
+    that re-running fixes, and the patch function itself is what says so — reporting it here
+    as well would put the same warning on every launch.
+    """
+    relative, mark, present = PATCH_MARKS[name]
+    path = chat_ui_dir() / relative
+    if not path.is_file():
+        return True
+    return (mark in path.read_text(encoding="utf-8", errors="replace")) is present
+
+
+def unapplied_patches() -> list[str]:
+    """Names of the patches whose mark is missing from the clone."""
+    return [name for name in PATCH_MARKS if not _marked(name)]
+
+
+def apply_patches() -> None:
+    """Every patch, in order. Safe to call on an already-patched clone."""
+    patch_next_config()
+    patch_dev_indicator()
+    patch_svg_props()
+    patch_github_link()
+    patch_app_name()
+    patch_home_heading()
+    patch_beaker()
+    patch_empty_ai_turns()
+    patch_uploads()
+    patch_progress_events()
+    patch_progress_row()
+
+
 REWRITE = """  // setup: artifact components load /ui/* from the page origin, so this proxy is
   // what makes them render at all. See CLAUDE.md.
   async rewrites() {
@@ -193,9 +273,9 @@ def patch_next_config() -> None:
     if not cfg.is_file():
         say(TAG, f"warning: no next.config.mjs in {chat_ui_dir()}; skipped the /ui/* rewrite.")
         return
-    text = cfg.read_text(encoding="utf-8")
-    if "/ui/:path" in text:
+    if _marked("rewrite"):
         return
+    text = cfg.read_text(encoding="utf-8")
 
     # Upstream currently has no `rewrites` key and one `const nextConfig = {` to insert
     # after. If either stops being true, print the snippet instead of guessing: a second
@@ -212,7 +292,38 @@ def patch_next_config() -> None:
     say(TAG, "added the /ui/* rewrite to next.config.mjs")
 
 
-# The three patches below are cosmetic rather than load-bearing, unlike the rewrite above.
+DEV_INDICATOR = """\
+  // setup: this app is run by end users through `uv run scripts/dev.py`, so Next's dev
+  // overlay button in the bottom-left corner is chrome for a toolchain they are not being
+  // asked to think about. See CLAUDE.md.
+  devIndicators: false,
+"""
+
+
+def patch_dev_indicator() -> None:
+    """Hide the Next dev-tools button. Its own patch rather than a second line inside
+    REWRITE, so a clone that already has the rewrite still picks this up.
+    """
+    cfg = chat_ui_dir() / "next.config.mjs"
+    if not cfg.is_file():
+        return
+    if _marked("dev-indicator"):
+        return
+    text = cfg.read_text(encoding="utf-8")
+
+    anchor = "const nextConfig = {"
+    lines = text.splitlines()
+    hits = [i for i, line in enumerate(lines) if line.startswith(anchor)]
+    if len(hits) != 1:
+        say(TAG, f"warning: {cfg} is not the shape expected. Add this to its config by hand:")
+        print(DEV_INDICATOR)
+        return
+    lines.insert(hits[0] + 1, DEV_INDICATOR.rstrip())
+    cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    say(TAG, "hid the Next dev-tools button in next.config.mjs")
+
+
+# The four patches below are cosmetic rather than load-bearing, unlike the rewrite above.
 # They are applied anyway because setup's job is a working app, and an app that logs a
 # console error, opens on a screenful of whitespace, or offers an upload it then refuses is
 # not one. Each is anchored on an exact upstream string and prints the change instead of
@@ -228,11 +339,80 @@ def patch_svg_props() -> None:
     icon = chat_ui_dir() / "src" / "components" / "icons" / "langgraph.tsx"
     if not icon.is_file():
         return
-    text = icon.read_text(encoding="utf-8")
-    if "clip-path=" not in text:
+    if _marked("svg"):
         return
+    text = icon.read_text(encoding="utf-8")
     icon.write_text(text.replace("clip-path=", "clipPath="), encoding="utf-8")
     say(TAG, "fixed the clip-path JSX warning in langgraph.tsx")
+
+
+# Both call sites plus the component and its import, since a component left behind with no
+# call site is an unused-import lint error rather than dead-but-harmless code.
+GITHUB_LINK_EDITS = [
+    ('import { GitHubSVG } from "../icons/github";\n', ""),
+    ("""import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../ui/tooltip";
+""", ""),
+    ("""function OpenGitHubRepo() {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <a
+            href="https://github.com/langchain-ai/agent-chat-ui"
+            target="_blank"
+            className="flex items-center justify-center"
+          >
+            <GitHubSVG
+              width="24"
+              height="24"
+            />
+          </a>
+        </TooltipTrigger>
+        <TooltipContent side="left">
+          <p>Open GitHub repo</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+""", ""),
+    ("""              <div className="absolute top-2 right-4 flex items-center">
+                <OpenGitHubRepo />
+              </div>
+""", ""),
+    ("""                <div className="flex items-center">
+                  <OpenGitHubRepo />
+                </div>
+""", ""),
+]
+
+
+def patch_github_link() -> None:
+    """Drop the link to upstream's own repo from the header. It points at the chat client
+    rather than at this agent, so to a user here it is a link to someone else's project.
+    """
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("github-link"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in GITHUB_LINK_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the GitHub link "
+                     "in the header. Missing anchor:")
+            print(old)
+            return
+    for old, new in GITHUB_LINK_EDITS:
+        text = text.replace(old, new)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, "removed the GitHub link from the chat UI header")
 
 
 # Every name this reads is already in scope at the anchor below; it adds only its own.
@@ -266,9 +446,9 @@ def patch_empty_ai_turns() -> None:
     ai = chat_ui_dir() / "src" / "components" / "thread" / "messages" / "ai.tsx"
     if not ai.is_file():
         return
-    text = ai.read_text(encoding="utf-8")
-    if "hasCustomComponents" in text:
+    if _marked("empty-turns"):
         return
+    text = ai.read_text(encoding="utf-8")
     if text.count(EMPTY_TURN_ANCHOR) != 1:
         say(TAG, f"warning: {ai} is not the shape expected. Add this to AssistantMessage, "
                  "after its `isToolResult && hideToolCalls` guard, by hand:")
@@ -500,7 +680,7 @@ def patch_uploads() -> None:
         return
 
     contents = {key: path.read_text(encoding="utf-8") for key, path in paths.items()}
-    if "isSpreadsheetUpload" in contents["hook"]:
+    if _marked("uploads"):
         return
 
     header = next(
@@ -531,6 +711,270 @@ def patch_uploads() -> None:
     for key, text in contents.items():
         paths[key].write_text(text, encoding="utf-8")
     say(TAG, "opened CSV/TSV/xlsx uploads in the chat UI")
+
+
+# The agent does its work inside one `eval` call, so the transcript shows a single tool call
+# that has not returned yet — and with tool calls hidden, nothing at all. The graph narrates
+# the calls happening inside it over the custom-event channel instead
+# (research_agent/middleware/progress.py); these two patches carry that line to the screen.
+# Split in two because they fail differently: without the first there is no event to read,
+# without the second the events arrive and nothing renders them.
+PROGRESS_TYPES = """\
+// setup: the agent orchestrates inside one `eval`, so a multi-minute run produces no visible
+// message until it is over. It narrates itself over the same custom-event channel the UI
+// components already use — see research_agent/middleware/progress.py — and the latest line
+// travels to the thread view through the context below.
+export type ProgressEvent = { type: "progress"; text: string };
+
+function isProgressEvent(event: unknown): event is ProgressEvent {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as { type?: unknown }).type === "progress" &&
+    typeof (event as { text?: unknown }).text === "string"
+  );
+}
+
+// A context of its own rather than another key on the stream value: that value is the SDK
+// hook's return, and spreading it to add one would fix whatever it computes per render.
+const RunProgressContext = createContext<string | null>(null);
+export const useRunProgress = (): string | null => useContext(RunProgressContext);
+
+"""
+
+PROGRESS_PROVIDER = """\
+  // A finished run's last line is not progress any more. Clearing on `isLoading` also covers
+  // the run that failed, where no completion event is coming.
+  useEffect(() => {
+    if (!streamValue.isLoading) setRunProgress(null);
+  }, [streamValue.isLoading]);
+
+  return (
+    <StreamContext.Provider value={streamValue}>
+      <RunProgressContext.Provider value={runProgress}>
+        {children}
+      </RunProgressContext.Provider>
+    </StreamContext.Provider>
+  );
+"""
+
+PROGRESS_EDITS = [
+    ("export type StateType = { messages: Message[]; ui?: UIMessage[] };\n\n",
+     "export type StateType = { messages: Message[]; ui?: UIMessage[] };\n\n" + PROGRESS_TYPES),
+    ("    CustomEventType: UIMessage | RemoveUIMessage;",
+     "    CustomEventType: UIMessage | RemoveUIMessage | ProgressEvent;"),
+    ('  const { getThreads, setThreads } = useThreads();',
+     '  const { getThreads, setThreads } = useThreads();\n'
+     '  const [runProgress, setRunProgress] = useState<string | null>(null);'),
+    ("    onCustomEvent: (event, options) => {\n"
+     "      if (isUIMessage(event) || isRemoveUIMessage(event)) {",
+     "    onCustomEvent: (event, options) => {\n"
+     "      if (isProgressEvent(event)) {\n"
+     "        setRunProgress(event.text);\n"
+     "        return;\n"
+     "      }\n"
+     "      if (isUIMessage(event) || isRemoveUIMessage(event)) {"),
+    ("  return (\n"
+     "    <StreamContext.Provider value={streamValue}>\n"
+     "      {children}\n"
+     "    </StreamContext.Provider>\n"
+     "  );\n",
+     PROGRESS_PROVIDER),
+]
+
+
+def patch_progress_events() -> None:
+    """Receive the graph's progress events and publish the latest one."""
+    stream = chat_ui_dir() / "src" / "providers" / "Stream.tsx"
+    if not stream.is_file():
+        return
+    if _marked("progress-events"):
+        return
+    text = stream.read_text(encoding="utf-8")
+    for old, _ in PROGRESS_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {stream} is not the shape expected; left run progress alone. "
+                     "Runs will show no status while they work. Missing anchor:")
+            print(old)
+            return
+    for old, new in PROGRESS_EDITS:
+        text = text.replace(old, new)
+    stream.write_text(text, encoding="utf-8")
+    say(TAG, "wired the graph's progress events into the chat UI")
+
+
+# Upstream drops the typing dots as soon as any AI message arrives, which here is the first
+# `eval` — about two seconds into a run that lasts minutes. The replacement is a component of
+# ours rather than JSX spliced in here: see `ensure_overlay` below for why. What is left is
+# the smallest anchored change that can mount it.
+PROGRESS_ROW_ANCHOR = """\
+                  {isLoading && !firstTokenReceived && (
+                    <AssistantMessageLoading />
+                  )}
+"""
+
+# `firstTokenReceived` existed to hide those dots, and `prevMessageLength` existed to set it;
+# with the dots gone every reader of both is gone too, and what is left is state that is
+# written on three paths and read on none. Removed rather than left in place — it looks like
+# it still governs the loading indicator, and the next person to touch this file would have
+# to work out that it does not.
+PROGRESS_ROW_EDITS = [
+    ('import { useStreamContext } from "@/providers/Stream";',
+     'import { useStreamContext } from "@/providers/Stream";\n'
+     'import { RunStatus } from "./RunStatus";'),
+    ('import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";',
+     'import { AssistantMessage } from "./messages/ai";'),
+    ("  const [firstTokenReceived, setFirstTokenReceived] = useState(false);\n", ""),
+    ("""  // TODO: this should be part of the useStream hook
+  const prevMessageLength = useRef(0);
+  useEffect(() => {
+    if (
+      messages.length !== prevMessageLength.current &&
+      messages?.length &&
+      messages[messages.length - 1].type === "ai"
+    ) {
+      setFirstTokenReceived(true);
+    }
+
+    prevMessageLength.current = messages.length;
+  }, [messages]);
+
+""", ""),
+    ("      return;\n    setFirstTokenReceived(false);\n", "      return;\n"),
+    ("""    // Do this so the loading state is correct
+    prevMessageLength.current = prevMessageLength.current - 1;
+    setFirstTokenReceived(false);
+""", ""),
+    (PROGRESS_ROW_ANCHOR, "                  <RunStatus />\n"),
+]
+
+
+def patch_progress_row() -> None:
+    """Mount the run status component, and clear out what upstream's dots left behind."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("progress-row"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in PROGRESS_ROW_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the status row "
+                     "alone. Runs will show no status while they work. Missing anchor:")
+            print(old)
+            return
+    for old, new in PROGRESS_ROW_EDITS:
+        text = text.replace(old, new)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, "mounted the run status row in the chat UI")
+
+
+def patch_app_name() -> None:
+    """Put this agent's name on the app in place of upstream's.
+
+    Three files rather than one: the header and empty-state heading are what a user reads,
+    but leaving the browser tab and the setup form saying `Agent Chat` is how a rename looks
+    half-done. Unanchored on purpose — a bare rename of a string upstream may move around.
+    """
+    tagline = ("Agent Chat UX by LangChain", f"{APP_NAME}, a Deep Agents demo")
+    files = (
+        ("src/app/layout.tsx", (tagline,)),
+        ("src/providers/Stream.tsx", ()),
+        ("src/components/thread/index.tsx", ()),
+    )
+    if _marked("app-name"):
+        return
+    touched = False
+    for relative, extra in files:
+        path = chat_ui_dir() / relative
+        if not path.is_file():
+            continue
+        text = original = path.read_text(encoding="utf-8")
+        for old, new in extra:
+            text = text.replace(old, new)
+        text = text.replace("Agent Chat", APP_NAME)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            touched = True
+    if touched:
+        say(TAG, f"renamed the chat UI to {APP_NAME}")
+
+
+def patch_home_heading() -> None:
+    """Stack the empty state's name under the logo instead of beside it."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("home-heading"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    if text.count(HOME_HEADING_OLD) != 1:
+        say(TAG, f"warning: {thread} is not the shape expected; left the home screen "
+                 "heading beside the logo. Missing anchor:")
+        print(HOME_HEADING_OLD)
+        return
+    thread.write_text(text.replace(HOME_HEADING_OLD, HOME_HEADING_NEW), encoding="utf-8")
+    say(TAG, "stacked the home screen heading under the logo")
+
+
+def patch_beaker() -> None:
+    """Put a beaker beside the name, in the header and on the home screen alike."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("beaker"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in BEAKER_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the beaker off "
+                     "the name. Missing anchor:")
+            print(old)
+            return
+    for old, new in BEAKER_EDITS:
+        text = text.replace(old, new)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, f"added the {BEAKER} to the chat UI name")
+
+
+# Components this repo owns, copied into the clone rather than patched into it.
+#
+# The fixes above are upstream-shaped: small, anchored, and things upstream might
+# plausibly want. Product surface is the opposite — it has no upstream counterpart, will never
+# converge, and is exactly what a search-and-replace inside a Python string is worst at. So it
+# lives here as ordinary .tsx files: in git, reviewable in a diff, linted and edited like code,
+# with the anchored patch reduced to the one line that mounts them.
+#
+# The directory mirrors the clone's `src/`, so a file's path here is where it lands. The copy
+# is one-way and unconditional: the clone is gitignored and this is the original, so an edit
+# made over there is a lost edit either way — better lost on the next launch than silently
+# kept and diverging.
+OVERLAY_DIR = REPO_ROOT / "chat-ui-overlay"
+
+
+def ensure_overlay() -> list[str]:
+    """Copy the overlay into the clone. Returns the files it actually had to write."""
+    if not OVERLAY_DIR.is_dir():
+        return []
+    src = chat_ui_dir() / "src"
+    if not src.is_dir():
+        say(TAG, f"warning: no src/ in {chat_ui_dir()}; left the overlay components out.")
+        return []
+
+    written: list[str] = []
+    for path in sorted(OVERLAY_DIR.rglob("*")):
+        if not path.is_file() or path.suffix not in (".ts", ".tsx"):
+            continue
+        target = src / path.relative_to(OVERLAY_DIR)
+        content = path.read_text(encoding="utf-8")
+        # Compared rather than always written, so `next dev` is not handed a changed mtime and
+        # a rebuild on every launch of an unchanged app.
+        if target.is_file() and target.read_text(encoding="utf-8") == content:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written.append(str(target.relative_to(chat_ui_dir())))
+    return written
 
 
 def ensure_node() -> None:
@@ -575,10 +1019,10 @@ def ensure_chat_ui() -> None:
         say(TAG, f"cloning agent-chat-ui into {ui_dir}…")
         run(["git", "clone", "--depth", "1", "--quiet", UI_REPO, str(ui_dir)])
 
-    patch_next_config()
-    patch_svg_props()
-    patch_empty_ai_turns()
-    patch_uploads()
+    copied = ensure_overlay()
+    if copied:
+        say(TAG, f"copied {len(copied)} overlay component(s) into the chat UI")
+    apply_patches()
 
     # Without this the UI opens on a form asking for a deployment URL and assistant id.
     # `.env.local` because Next reads it ahead of `.env` and upstream ignores `*.local`.

@@ -44,9 +44,10 @@ are thin macOS/Linux shims whose one irreplaceable job is installing uv; `.gitat
 their line endings, since a CRLF checkout breaks a shebang. Preflight therefore lives in
 `_common.require_setup` and `cli.py:run`, so it applies on every platform.
 
-`dev.py` reuses either port already listening and opens `:3000` once it answers — polled,
-because a tab arriving before `next dev` binds shows a connection error. Each server gets its
-own process group so teardown kills the whole tree, and **all four of SIGINT, SIGTERM, SIGHUP
+`dev.py` reuses either port already listening and opens `:3000?hideToolCalls=true` once it
+answers — polled, because a tab arriving before `next dev` binds shows a connection error.
+The query param is nuqs state, so it is a default without a patch and the in-app toggle
+still turns it off. Each server gets its own process group so teardown kills the whole tree, and **all four of SIGINT, SIGTERM, SIGHUP
 and SIGQUIT are installed explicitly** (by `getattr`, since the last two are absent on
 Windows). Any one left out skips the teardown silently and leaves both ports held — and
 because reuse only asks whether *something* is listening, the next launch then serves the run
@@ -64,9 +65,13 @@ Next app in the deploy image (its comments list what must *not* be excluded).
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere. Setup also runs `npm ci` in `ui/`,
 whose components the *graph server* bundles: without those deps the bundler logs
 `Could not resolve "xlsx"`, answers `/ui/<graph>/entrypoint.js` with a 200 anyway, and the
-component is silently absent. Four patches, all reapplied by setup on every run so the
+component is silently absent. Eleven patches, all reapplied by setup on every run so the
 README's steps alone produce a working app, and each anchored on an exact upstream string
-that it prints rather than guesses past — a moved anchor must not clobber an upstream fix:
+that it prints rather than guesses past — a moved anchor must not clobber an upstream fix.
+Each leaves a mark behind, named in `setup.py:PATCH_MARKS`, which is also what its own
+early-out tests; `dev.py` checks those marks and re-applies on every launch, because the
+clone is gitignored and an un-patched one otherwise sits there with the feature simply
+absent and nothing saying so:
 
 1. A `/ui/:path*` rewrite in `next.config.mjs` pointing at `:2024`. Required — without it the
    artifact components silently never render (see the invariant below). Bails out if upstream
@@ -88,6 +93,47 @@ that it prints rather than guesses past — a moved anchor must not clobber an u
    composer input so a `.xls` reaches the toast telling the user to re-save it rather than
    being greyed out of the picker. `patch_uploads` accepts two baselines, upstream's and the
    earlier "nothing is accepted yet" patch, so an existing clone upgrades in place.
+5. A `RunProgressContext` in `src/providers/Stream.tsx`, fed from the `onCustomEvent` hook
+   that already handles UI messages, publishing the latest `{type: "progress"}` event.
+6. `<RunStatus />` in `src/components/thread/index.tsx`, replacing the typing dots — which
+   upstream stops showing once any AI message arrives, i.e. seconds into a run that lasts
+   minutes. The component itself is ours; see the overlay below. This is the one patch that
+   *deletes* upstream code: `firstTokenReceived` and `prevMessageLength` existed only to hide
+   those dots, so with them gone both are written on three paths and read on none — left in,
+   they read as if they still govern the loading indicator.
+7. `devIndicators: false` in `next.config.mjs`, hiding Next's dev-overlay button in the
+   bottom-left corner: this app is run by end users through `dev.py`, not by anyone working
+   on the frontend. Its own patch rather than a second line in the rewrite above, so a clone
+   that already has the rewrite still picks it up.
+8. The header's link to `langchain-ai/agent-chat-ui` removed from
+   `src/components/thread/index.tsx` — it points at the chat client, so to a user here it is
+   a link to someone else's project. Takes the `OpenGitHubRepo` component and its now-unused
+   imports with it, since a component with no call site is a lint error rather than harmless
+   dead code; `src/components/icons/github.tsx` is left alone as untouched upstream.
+9. `Agent Chat` → `setup.py:APP_NAME` across `layout.tsx`, `Stream.tsx` and
+   `thread/index.tsx`. The header and empty-state heading are what a user reads, but a
+   browser tab still saying `Agent Chat` is how a rename looks half-done, so all three
+   move together. The one patch that is a bare rename rather than an anchored edit — the
+   string is upstream's own product name and may move around within those files.
+10. The empty state's logo and heading stacked rather than side by side, in
+    `thread/index.tsx`. Its own patch rather than another edit inside the rename above,
+    so a clone already carrying the rename still picks it up.
+11. A 🧪 (U+1F9EA TEST TUBE) beside the name, in `thread/index.tsx`. Both places the name
+    renders as a heading, so the two do not disagree; not the browser tab or the setup
+    form, where it would read as decoration in a sentence. U+2697 ALEMBIC is the literal
+    beaker but is text-presentation, so it renders monochrome and tiny on some platforms.
+
+`chat-ui-overlay/` is the other half of that split, and the answer to the question the patch
+list keeps raising. The eleven patches above are upstream-shaped — small, anchored, plausibly
+things upstream would take. Product surface is the opposite: no upstream counterpart, never
+converging, and the worst possible fit for a search-and-replace living inside a Python string.
+So it is ordinary `.tsx` files in this repo, tracked in git and reviewable in a diff, which
+`setup.py:ensure_overlay` copies into the clone's `src/` (the directory mirrors it, so a
+file's path here is where it lands) — leaving the anchored patch as the one line that mounts
+them. The copy is one-way: the clone is gitignored, so an edit made over there is a lost edit
+whatever happens, and losing it on the next launch beats keeping it and diverging silently.
+Fork upstream if an overlay component ever needs to *replace* `index.tsx` wholesale, or if
+the app's identity has to change; `UI_REPO` in `setup.py` is then the only line to move.
 
 There is no test suite; `evals/` is the closest thing to a regression check, and ruff is
 configured in `pyproject.toml` (`dev` group). Skip `scripts/build_snapshot.py` and runs still
@@ -124,8 +170,8 @@ research_agent/
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
-└── middleware/  artifacts.py uploads.py perf.py
-evals/  scripts/  ui/  docs/  data/
+└── middleware/  artifacts.py uploads.py perf.py progress.py
+evals/  scripts/  ui/  chat-ui-overlay/  docs/  data/
 ```
 
 `evals/` is deliberately outside the package — it measures the agent, it isn't part of it, and
@@ -195,6 +241,12 @@ That's the core economy of the design:
   checkpoint and in no model request, and the prompt gets a manifest — names, sizes, row counts,
   column names. Not under `out/`, which is swept and published: a file the user gave us would
   come back as a deliverable of their own question.
+
+`middleware/progress.py` is the run's only visible output while it works. Everything happens
+inside one `eval`, so the transcript shows a single unreturned tool call for minutes; the
+wrapped source tools emit a line each over LangGraph's `custom` stream mode, which the chat UI
+renders beside the typing dots. Wrappers rather than a middleware hook because the calls are
+made inside QuickJS, below the tool node, where no hook can see them.
 
 `middleware/uploads.py` is the one place where **the sandbox is not the storage**. A container is
 reaped after `IDLE_TTL_SECONDS` and the thread gets an empty replacement, so the durable copy
