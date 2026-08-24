@@ -44,9 +44,10 @@ are thin macOS/Linux shims whose one irreplaceable job is installing uv; `.gitat
 their line endings, since a CRLF checkout breaks a shebang. Preflight therefore lives in
 `_common.require_setup` and `cli.py:run`, so it applies on every platform.
 
-`dev.py` reuses either port already listening and opens `:3000` once it answers — polled,
-because a tab arriving before `next dev` binds shows a connection error. Each server gets its
-own process group so teardown kills the whole tree, and **all four of SIGINT, SIGTERM, SIGHUP
+`dev.py` reuses either port already listening and opens `:3000?hideToolCalls=true` once it
+answers — polled, because a tab arriving before `next dev` binds shows a connection error.
+The query param is nuqs state, so it is a default without a patch and the in-app toggle
+still turns it off. Each server gets its own process group so teardown kills the whole tree, and **all four of SIGINT, SIGTERM, SIGHUP
 and SIGQUIT are installed explicitly** (by `getattr`, since the last two are absent on
 Windows). Any one left out skips the teardown silently and leaves both ports held — and
 because reuse only asks whether *something* is listening, the next launch then serves the run
@@ -64,9 +65,13 @@ Next app in the deploy image (its comments list what must *not* be excluded).
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere. Setup also runs `npm ci` in `ui/`,
 whose components the *graph server* bundles: without those deps the bundler logs
 `Could not resolve "xlsx"`, answers `/ui/<graph>/entrypoint.js` with a 200 anyway, and the
-component is silently absent. Four patches, all reapplied by setup on every run so the
+component is silently absent. Six patches, all reapplied by setup on every run so the
 README's steps alone produce a working app, and each anchored on an exact upstream string
-that it prints rather than guesses past — a moved anchor must not clobber an upstream fix:
+that it prints rather than guesses past — a moved anchor must not clobber an upstream fix.
+Each leaves a mark behind, named in `setup.py:PATCH_MARKS`, which is also what its own
+early-out tests; `dev.py` checks those marks and re-applies on every launch, because the
+clone is gitignored and an un-patched one otherwise sits there with the feature simply
+absent and nothing saying so:
 
 1. A `/ui/:path*` rewrite in `next.config.mjs` pointing at `:2024`. Required — without it the
    artifact components silently never render (see the invariant below). Bails out if upstream
@@ -88,6 +93,11 @@ that it prints rather than guesses past — a moved anchor must not clobber an u
    composer input so a `.xls` reaches the toast telling the user to re-save it rather than
    being greyed out of the picker. `patch_uploads` accepts two baselines, upstream's and the
    earlier "nothing is accepted yet" patch, so an existing clone upgrades in place.
+5. A `RunProgressContext` in `src/providers/Stream.tsx`, fed from the `onCustomEvent` hook
+   that already handles UI messages, publishing the latest `{type: "progress"}` event.
+6. A status row in `src/components/thread/index.tsx` rendering it beside the typing dots,
+   which also stop being conditional on `firstTokenReceived` — that flips on the first
+   `eval`, seconds into a run that lasts minutes.
 
 There is no test suite; `evals/` is the closest thing to a regression check, and ruff is
 configured in `pyproject.toml` (`dev` group). Skip `scripts/build_snapshot.py` and runs still
@@ -124,7 +134,7 @@ research_agent/
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
-└── middleware/  artifacts.py uploads.py perf.py
+└── middleware/  artifacts.py uploads.py perf.py progress.py
 evals/  scripts/  ui/  docs/  data/
 ```
 
@@ -195,6 +205,12 @@ That's the core economy of the design:
   checkpoint and in no model request, and the prompt gets a manifest — names, sizes, row counts,
   column names. Not under `out/`, which is swept and published: a file the user gave us would
   come back as a deliverable of their own question.
+
+`middleware/progress.py` is the run's only visible output while it works. Everything happens
+inside one `eval`, so the transcript shows a single unreturned tool call for minutes; the
+wrapped source tools emit a line each over LangGraph's `custom` stream mode, which the chat UI
+renders beside the typing dots. Wrappers rather than a middleware hook because the calls are
+made inside QuickJS, below the tool node, where no hook can see them.
 
 `middleware/uploads.py` is the one place where **the sandbox is not the storage**. A container is
 reaped after `IDLE_TTL_SECONDS` and the thread gets an empty replacement, so the durable copy

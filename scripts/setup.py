@@ -175,6 +175,54 @@ def ensure_snapshot() -> None:
 # `langgraph build` uses the repo root as its Docker context, so .chat-ui has to be listed
 # in .dockerignore or a dev-only frontend ships in the deploy image.
 
+# What each patch leaves behind, and where. Every patch is idempotent because it looks for
+# its own mark before doing anything, and `unapplied_patches()` asks the same question from
+# outside — which is what lets `dev.py` verify the patches are *present* rather than that
+# setup once *ran*. The clone is gitignored, so nothing else records what the frontend is:
+# a hand-edited or half-upgraded .chat-ui otherwise sits un-patched while the repo believes
+# the feature shipped. One table rather than a literal in each function, so the two answers
+# cannot drift apart.
+#
+# Mapped to False where the patch works by *removing* something.
+PATCH_MARKS = {
+    "rewrite": ("next.config.mjs", "/ui/:path", True),
+    "svg": ("src/components/icons/langgraph.tsx", "clip-path=", False),
+    "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
+    "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
+    "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
+    "progress-row": ("src/components/thread/index.tsx", "useRunProgress", True),
+}
+
+
+def _marked(name: str) -> bool:
+    """Whether this patch's mark is where it left it.
+
+    A file that is not there counts as applied: upstream moving or renaming one is not drift
+    that re-running fixes, and the patch function itself is what says so — reporting it here
+    as well would put the same warning on every launch.
+    """
+    relative, mark, present = PATCH_MARKS[name]
+    path = chat_ui_dir() / relative
+    if not path.is_file():
+        return True
+    return (mark in path.read_text(encoding="utf-8", errors="replace")) is present
+
+
+def unapplied_patches() -> list[str]:
+    """Names of the patches whose mark is missing from the clone."""
+    return [name for name in PATCH_MARKS if not _marked(name)]
+
+
+def apply_patches() -> None:
+    """Every patch, in order. Safe to call on an already-patched clone."""
+    patch_next_config()
+    patch_svg_props()
+    patch_empty_ai_turns()
+    patch_uploads()
+    patch_progress_events()
+    patch_progress_row()
+
+
 REWRITE = """  // setup: artifact components load /ui/* from the page origin, so this proxy is
   // what makes them render at all. See CLAUDE.md.
   async rewrites() {
@@ -193,9 +241,9 @@ def patch_next_config() -> None:
     if not cfg.is_file():
         say(TAG, f"warning: no next.config.mjs in {chat_ui_dir()}; skipped the /ui/* rewrite.")
         return
-    text = cfg.read_text(encoding="utf-8")
-    if "/ui/:path" in text:
+    if _marked("rewrite"):
         return
+    text = cfg.read_text(encoding="utf-8")
 
     # Upstream currently has no `rewrites` key and one `const nextConfig = {` to insert
     # after. If either stops being true, print the snippet instead of guessing: a second
@@ -228,9 +276,9 @@ def patch_svg_props() -> None:
     icon = chat_ui_dir() / "src" / "components" / "icons" / "langgraph.tsx"
     if not icon.is_file():
         return
-    text = icon.read_text(encoding="utf-8")
-    if "clip-path=" not in text:
+    if _marked("svg"):
         return
+    text = icon.read_text(encoding="utf-8")
     icon.write_text(text.replace("clip-path=", "clipPath="), encoding="utf-8")
     say(TAG, "fixed the clip-path JSX warning in langgraph.tsx")
 
@@ -266,9 +314,9 @@ def patch_empty_ai_turns() -> None:
     ai = chat_ui_dir() / "src" / "components" / "thread" / "messages" / "ai.tsx"
     if not ai.is_file():
         return
-    text = ai.read_text(encoding="utf-8")
-    if "hasCustomComponents" in text:
+    if _marked("empty-turns"):
         return
+    text = ai.read_text(encoding="utf-8")
     if text.count(EMPTY_TURN_ANCHOR) != 1:
         say(TAG, f"warning: {ai} is not the shape expected. Add this to AssistantMessage, "
                  "after its `isToolResult && hideToolCalls` guard, by hand:")
@@ -500,7 +548,7 @@ def patch_uploads() -> None:
         return
 
     contents = {key: path.read_text(encoding="utf-8") for key, path in paths.items()}
-    if "isSpreadsheetUpload" in contents["hook"]:
+    if _marked("uploads"):
         return
 
     header = next(
@@ -531,6 +579,150 @@ def patch_uploads() -> None:
     for key, text in contents.items():
         paths[key].write_text(text, encoding="utf-8")
     say(TAG, "opened CSV/TSV/xlsx uploads in the chat UI")
+
+
+# The agent does its work inside one `eval` call, so the transcript shows a single tool call
+# that has not returned yet — and with tool calls hidden, nothing at all. The graph narrates
+# the calls happening inside it over the custom-event channel instead
+# (research_agent/middleware/progress.py); these two patches carry that line to the screen.
+# Split in two because they fail differently: without the first there is no event to read,
+# without the second the events arrive and nothing renders them.
+PROGRESS_TYPES = """\
+// setup: the agent orchestrates inside one `eval`, so a multi-minute run produces no visible
+// message until it is over. It narrates itself over the same custom-event channel the UI
+// components already use — see research_agent/middleware/progress.py — and the latest line
+// travels to the thread view through the context below.
+export type ProgressEvent = { type: "progress"; text: string };
+
+function isProgressEvent(event: unknown): event is ProgressEvent {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as { type?: unknown }).type === "progress" &&
+    typeof (event as { text?: unknown }).text === "string"
+  );
+}
+
+// A context of its own rather than another key on the stream value: that value is the SDK
+// hook's return, and spreading it to add one would fix whatever it computes per render.
+const RunProgressContext = createContext<string | null>(null);
+export const useRunProgress = (): string | null => useContext(RunProgressContext);
+
+"""
+
+PROGRESS_PROVIDER = """\
+  // A finished run's last line is not progress any more. Clearing on `isLoading` also covers
+  // the run that failed, where no completion event is coming.
+  useEffect(() => {
+    if (!streamValue.isLoading) setRunProgress(null);
+  }, [streamValue.isLoading]);
+
+  return (
+    <StreamContext.Provider value={streamValue}>
+      <RunProgressContext.Provider value={runProgress}>
+        {children}
+      </RunProgressContext.Provider>
+    </StreamContext.Provider>
+  );
+"""
+
+PROGRESS_EDITS = [
+    ("export type StateType = { messages: Message[]; ui?: UIMessage[] };\n\n",
+     "export type StateType = { messages: Message[]; ui?: UIMessage[] };\n\n" + PROGRESS_TYPES),
+    ("    CustomEventType: UIMessage | RemoveUIMessage;",
+     "    CustomEventType: UIMessage | RemoveUIMessage | ProgressEvent;"),
+    ('  const { getThreads, setThreads } = useThreads();',
+     '  const { getThreads, setThreads } = useThreads();\n'
+     '  const [runProgress, setRunProgress] = useState<string | null>(null);'),
+    ("    onCustomEvent: (event, options) => {\n"
+     "      if (isUIMessage(event) || isRemoveUIMessage(event)) {",
+     "    onCustomEvent: (event, options) => {\n"
+     "      if (isProgressEvent(event)) {\n"
+     "        setRunProgress(event.text);\n"
+     "        return;\n"
+     "      }\n"
+     "      if (isUIMessage(event) || isRemoveUIMessage(event)) {"),
+    ("  return (\n"
+     "    <StreamContext.Provider value={streamValue}>\n"
+     "      {children}\n"
+     "    </StreamContext.Provider>\n"
+     "  );\n",
+     PROGRESS_PROVIDER),
+]
+
+
+def patch_progress_events() -> None:
+    """Receive the graph's progress events and publish the latest one."""
+    stream = chat_ui_dir() / "src" / "providers" / "Stream.tsx"
+    if not stream.is_file():
+        return
+    if _marked("progress-events"):
+        return
+    text = stream.read_text(encoding="utf-8")
+    for old, _ in PROGRESS_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {stream} is not the shape expected; left run progress alone. "
+                     "Runs will show no status while they work. Missing anchor:")
+            print(old)
+            return
+    for old, new in PROGRESS_EDITS:
+        text = text.replace(old, new)
+    stream.write_text(text, encoding="utf-8")
+    say(TAG, "wired the graph's progress events into the chat UI")
+
+
+# Upstream drops the typing dots as soon as any AI message arrives, which here is the first
+# `eval` — about two seconds into a run that lasts minutes. Both halves of the row are
+# deliberate: the dots stay for the whole run because the run is still going, and the text is
+# what makes them mean something.
+PROGRESS_ROW = """\
+                  {isLoading && (
+                    <div className="mr-auto flex items-center gap-3">
+                      <AssistantMessageLoading />
+                      {runProgress && (
+                        <span className="animate-in fade-in-0 text-muted-foreground text-sm">
+                          {runProgress}
+                        </span>
+                      )}
+                    </div>
+                  )}
+"""
+
+PROGRESS_ROW_ANCHOR = """\
+                  {isLoading && !firstTokenReceived && (
+                    <AssistantMessageLoading />
+                  )}
+"""
+
+PROGRESS_ROW_EDITS = [
+    ('import { useStreamContext } from "@/providers/Stream";',
+     'import { useRunProgress, useStreamContext } from "@/providers/Stream";'),
+    ("  const isLoading = stream.isLoading;",
+     "  const isLoading = stream.isLoading;\n"
+     "  // setup: what the agent is doing inside the current `eval`. See providers/Stream.tsx.\n"
+     "  const runProgress = useRunProgress();"),
+    (PROGRESS_ROW_ANCHOR, PROGRESS_ROW),
+]
+
+
+def patch_progress_row() -> None:
+    """Render the latest progress line beside the typing dots."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("progress-row"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in PROGRESS_ROW_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the status row "
+                     "alone. Runs will show no status while they work. Missing anchor:")
+            print(old)
+            return
+    for old, new in PROGRESS_ROW_EDITS:
+        text = text.replace(old, new)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, "added the run status row to the chat UI")
 
 
 def ensure_node() -> None:
@@ -575,10 +767,7 @@ def ensure_chat_ui() -> None:
         say(TAG, f"cloning agent-chat-ui into {ui_dir}…")
         run(["git", "clone", "--depth", "1", "--quiet", UI_REPO, str(ui_dir)])
 
-    patch_next_config()
-    patch_svg_props()
-    patch_empty_ai_turns()
-    patch_uploads()
+    apply_patches()
 
     # Without this the UI opens on a form asking for a deployment URL and assistant id.
     # `.env.local` because Next reads it ahead of `.env` and upstream ignores `*.local`.
