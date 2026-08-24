@@ -178,15 +178,28 @@ def main() -> int:
         return 0
 
     say("dev", f"chat UI -> {UI_URL}   (Ctrl-C stops what this script started)")
-    # Both signals explicitly — the `trap cleanup INT TERM` the shell version had.
-    # SIGTERM because Python's default handler exits without unwinding, so the teardown
-    # below would be skipped and both servers would outlive us holding their ports. SIGINT
-    # because the default handler is not guaranteed to be installed: a process started in
-    # the background by a non-interactive shell inherits SIGINT as SIG_IGN, and Python
-    # keeps that disposition rather than raising KeyboardInterrupt. Setting it here means
-    # the teardown does not depend on how this was launched.
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(ValueError, AttributeError, OSError):
+    # Every signal explicitly — the `trap cleanup INT TERM` the shell version had, plus the
+    # two it was missing. Each default disposition skips the teardown below in its own way,
+    # and the cost is identical every time: both servers outlive us still holding their
+    # ports, and the *next* launch finds them listening and reuses them, so a stale stack
+    # silently serves the run.
+    #
+    # SIGTERM, SIGHUP and SIGQUIT because Python's default handler exits without unwinding.
+    # SIGHUP is the one that actually bites: closing the terminal signals the foreground
+    # process group, and the servers are deliberately in sessions of their own (see
+    # `spawn`), so the signal reaches only us — exactly the process whose job was to kill
+    # them. SIGINT because its default handler is not guaranteed to be installed at all: a
+    # process started in the background by a non-interactive shell inherits SIGINT as
+    # SIG_IGN, and Python keeps that disposition rather than raising KeyboardInterrupt.
+    #
+    # Looked up by name rather than named directly: SIGHUP and SIGQUIT do not exist on
+    # Windows, and `signal.SIGHUP` there is an AttributeError raised while building the
+    # loop's sequence, i.e. before any suppression inside it can apply.
+    for name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        with contextlib.suppress(ValueError, OSError):
             signal.signal(sig, _raise_interrupt)
     try:
         while True:

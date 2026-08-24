@@ -46,9 +46,14 @@ their line endings, since a CRLF checkout breaks a shebang. Preflight therefore 
 
 `dev.py` reuses either port already listening and opens `:3000` once it answers — polled,
 because a tab arriving before `next dev` binds shows a connection error. Each server gets its
-own process group so teardown kills the whole tree, and **SIGINT is installed explicitly, not
-just SIGTERM**: a background process in a non-interactive shell inherits SIGINT as `SIG_IGN`,
-Python keeps that disposition, and the teardown is then skipped silently with both ports held.
+own process group so teardown kills the whole tree, and **all four of SIGINT, SIGTERM, SIGHUP
+and SIGQUIT are installed explicitly** (by `getattr`, since the last two are absent on
+Windows). Any one left out skips the teardown silently and leaves both ports held — and
+because reuse only asks whether *something* is listening, the next launch then serves the run
+off that stale stack. SIGINT because its default handler may not be installed at all (a
+background process in a non-interactive shell inherits `SIG_IGN` and Python keeps that
+disposition); SIGHUP because closing the terminal signals only the foreground group, and the
+servers sit in sessions of their own — so it reaches just the process meant to kill them.
 The chat UI is not optional and has no flag; Node is the one thing setup will not install
 unasked, so it comes *last* — a machine without Node still gets a working `uv run agent`.
 
@@ -73,12 +78,16 @@ that it prints rather than guesses past — a moved anchor must not clobber an u
 3. `clip-path` → `clipPath` in `src/components/icons/langgraph.tsx`. Valid SVG, invalid JSX,
    so upstream's logo logs `Invalid DOM property` on every render and parks the dev overlay's
    error badge on a healthy app.
-4. An emptied upload allowlist in `src/hooks/use-file-upload.tsx`, the toast that explains it,
-   and `accept="*/*"` on the composer's file input so the attempt reaches that toast instead
-   of being greyed out of the picker. An attachment rides in model context and never reaches
-   the sandbox, so the CSV a user wants computed over is the one upload worth having and does
-   not work yet — upstream's message offered JPEG and PDF rather than saying so. Putting the
-   first real MIME type back in that list is what reopens uploads.
+4. A spreadsheet-only upload allowlist across `src/hooks/use-file-upload.tsx`,
+   `src/lib/multimodal-utils.ts` and `MultimodalPreview.tsx` — CSV/TSV/xlsx/xlsm ride in as
+   `type: "file"` blocks and `middleware/uploads.py` takes them back out; images and PDFs stay
+   refused, since an attachment the graph does not intercept is model context and nothing
+   else. Every call site tests `isSupportedUpload`/`isSpreadsheetUpload` rather than the MIME
+   list, because Windows with Excel installed reports a `.csv` as `application/vnd.ms-excel`
+   and some browsers report `""` — extension first, MIME second. `accept="*/*"` stays on the
+   composer input so a `.xls` reaches the toast telling the user to re-save it rather than
+   being greyed out of the picker. `patch_uploads` accepts two baselines, upstream's and the
+   earlier "nothing is accepted yet" patch, so an existing clone upgrades in place.
 
 There is no test suite; `evals/` is the closest thing to a regression check, and ruff is
 configured in `pyproject.toml` (`dev` group). Skip `scripts/build_snapshot.py` and runs still
@@ -115,7 +124,7 @@ research_agent/
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
-└── middleware/  artifacts.py perf.py
+└── middleware/  artifacts.py uploads.py perf.py
 evals/  scripts/  ui/  docs/  data/
 ```
 
@@ -181,6 +190,21 @@ That's the core economy of the design:
   every tool call and pushes bytes through the `ui` state key (components in `ui/ui.tsx`).
   The prompt forbids `read_file` on anything in `out/` — reading a PNG back cost more
   context than an entire run.
+- `/workspace/uploads/` (`paths.UPLOAD_DIR`) is the reverse trade: `UploadMiddleware` strips
+  each attachment out of the human message before the first model call, so the bytes sit in one
+  checkpoint and in no model request, and the prompt gets a manifest — names, sizes, row counts,
+  column names. Not under `out/`, which is swept and published: a file the user gave us would
+  come back as a deliverable of their own question.
+
+`middleware/uploads.py` is the one place where **the sandbox is not the storage**. A container is
+reaped after `IDLE_TTL_SECONDS` and the thread gets an empty replacement, so the durable copy
+lives in the LangGraph store, per thread, and `before_agent` re-materialises it every turn —
+reconciled by name and size, so a warm container costs one `ls`. Not graph state (re-serialised
+into every checkpoint, the cost `MAX_INLINE_BYTES` bounds) and not model context (a 2k-row CSV
+re-sent every turn, unusable without retyping it into `writeFile`). Without a store — the CLI —
+turn 2 says the file is gone rather than pretending. A declined attachment (`.xls`, oversize) is
+stripped too and replaced by the reason: left in, the block 400s the whole run at a provider
+with no such document type.
 
 ### Subagents
 

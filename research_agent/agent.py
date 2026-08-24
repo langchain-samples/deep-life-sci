@@ -28,6 +28,7 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 from research_agent.middleware.artifacts import ArtifactMiddleware
 from research_agent.middleware.perf import LoopLagProbe
+from research_agent.middleware.uploads import UploadMiddleware
 from research_agent.models import root_model, subagent_model
 from research_agent.prompts import (
     ABSTRACT_ANALYST,
@@ -125,6 +126,11 @@ def build_agent(backend):
         ],
         backend=backend,
         middleware=[
+            # First, because its `before_agent` is what puts the user's own files on disk
+            # under /workspace/uploads before any tool can look for them — and because it
+            # strips the upload payload out of the human message, which has to happen
+            # before the first model call rather than before the first tool call.
+            UploadMiddleware(backend),
             CodeInterpreterMiddleware(
                 # Tools reach JS camelCased: pubmed_search -> tools.pubmedSearch.
                 # `execute` is what lets one eval call finish a whole analysis.

@@ -64,6 +64,15 @@ WORKSPACE = "/workspace"
 # and publishes what it finds, so anything landing here reaches the user.
 OUT_DIR = f"{WORKSPACE}/out"
 
+# Where files the user attached are materialised, by `middleware/uploads.py`. Deliberately
+# not under `OUT_DIR`: that directory is swept and published, so a file the user gave us
+# would be handed straight back to them as a deliverable of their own question.
+#
+# Nothing here is durable. The durable copy of an upload lives in the LangGraph store and
+# this directory is rebuilt from it on every turn, because a container reaped by
+# IDLE_TTL_SECONDS is replaced by an empty one. See `middleware/uploads.py`.
+UPLOAD_DIR = f"{WORKSPACE}/uploads"
+
 __all__ = [
     "ABSTRACT_CACHE",
     "CACHE_ROOTS",
@@ -73,5 +82,6 @@ __all__ = [
     "OUT_DIR",
     "PMC_CACHE",
     "REPO_ROOT",
+    "UPLOAD_DIR",
     "WORKSPACE",
 ]

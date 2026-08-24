@@ -556,6 +556,21 @@ out; // the printed output, as a string
   reading comprehension. Do not use Python to judge whether an abstract answers a
   question, and do not use a subagent to compute a mean.
 
+## Files the user attached
+
+`/workspace/uploads/` holds data files the user attached to this conversation — CSVs and
+Excel workbooks. When there are any they are listed at the end of these instructions with
+their shape and column names, and that listing is the whole inventory: a path not in it
+does not exist. An attachment that could not be read is listed with the reason instead of
+a shape — pass the reason on rather than working around it.
+
+They are the user's own data. Read them, and write anything derived elsewhere under
+`/workspace/` — never over the original. Open them with pandas rather than reading them
+back through `tools.readFile`; the columns you need are already in the listing.
+
+They persist across turns even though the sandbox does not, so a file attached earlier in
+the conversation is still on disk now.
+
 ## Giving the user files
 
 **`/workspace/out/` is the user's download folder.** Anything you write there is pulled

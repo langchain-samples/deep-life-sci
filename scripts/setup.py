@@ -279,16 +279,18 @@ def patch_empty_ai_turns() -> None:
     say(TAG, "collapsed the empty thinking-only AI turns in ai.tsx")
 
 
-# Upstream accepts JPEG/PNG/GIF/WEBP and PDF. This agent accepts nothing yet: an attachment
-# would ride in model context rather than land in the sandbox, so there is no useful thing
-# to do with one. What the demo actually wants is a spreadsheet or CSV written into
-# /workspace for `execute` to compute over, and that path does not exist yet.
+# Upstream accepts JPEG/PNG/GIF/WEBP and PDF, all of which ride in model context and nothing
+# more. This agent accepts CSV/TSV/xlsx instead, because those are the attachments it can
+# actually compute over: `middleware/uploads.py` lifts the payload out of the human message
+# before the first model call, stores it per thread, and materialises it in the sandbox at
+# /workspace/uploads. So the block travelling through the message is transport, not context.
 #
-# So the allowlist is emptied and the existing invalid-type toast — already wired to the
-# picker, drag-and-drop and paste — is made to say which of those two facts the user hit.
-# Reopening uploads later is putting the first real MIME type back in this list and
-# rewording the toast; both live in the one file.
-UPLOAD_TYPES_ANCHOR = """export const SUPPORTED_FILE_TYPES = [
+# Images and PDFs stay refused — reopening them means giving them somewhere to go first.
+#
+# Two baselines have to work: upstream, and a clone already carrying the earlier "nothing is
+# accepted yet" patch. The header anchor therefore matches either, and the toast/composer
+# rewrites are skipped when that earlier patch already made them.
+UPLOAD_HEADER_UPSTREAM = """export const SUPPORTED_FILE_TYPES = [
   "image/jpeg",
   "image/png",
   "image/gif",
@@ -296,7 +298,7 @@ UPLOAD_TYPES_ANCHOR = """export const SUPPORTED_FILE_TYPES = [
   "application/pdf",
 ];"""
 
-UPLOAD_TYPES_PATCH = """\
+UPLOAD_HEADER_REFUSED = """\
 // setup: nothing is accepted yet. An attachment reaches the model as context and never
 // reaches the sandbox, so a CSV cannot be computed over — which is the only upload worth
 // having here. Emptying the list routes every attempt into the toast below, which says so
@@ -308,54 +310,227 @@ export const UNSUPPORTED_FILE_BODY =
   "Spreadsheet and CSV upload is coming soon. Papers, figures and trial records the " +
   "agent fetches for itself — just ask for them.";"""
 
-# The two upstream messages, one for the picker and drop handlers and one for paste. Only
-# the literal is replaced, because the three call sites are indented differently.
-UPLOAD_MESSAGES = {
-    '"You have uploaded invalid file type. Please upload a JPEG, PNG, GIF, WEBP image or a PDF."':
-        "UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY }",
-    '"You have pasted an invalid file type. Please paste a JPEG, PNG, GIF, WEBP image or a PDF."':
-        "UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY }",
+UPLOAD_HEADER = """\
+// setup: CSV/TSV/xlsx only. Those are the attachments the agent can do something with —
+// they do not stay in model context, `research_agent/middleware/uploads.py` moves them into
+// the sandbox at /workspace/uploads and keeps them there across turns. An image or a PDF
+// would be context and nothing else, so both stay refused. See CLAUDE.md.
+export const SUPPORTED_FILE_TYPES: string[] = [...SPREADSHEET_TYPES];
+
+// Every call site below tests these rather than the list, because a MIME-only check rejects
+// the file the user came to attach: Windows with Excel installed reports a .csv as
+// `application/vnd.ms-excel`, and some browsers report "" or application/octet-stream.
+export function isSupportedUpload(file: File): boolean {
+  return isSpreadsheetUpload(file);
 }
 
-# The composer's own promises. `accept` has to go: with it, the file picker greys out the
-# CSV the user came to attach, so the attempt never happens and no message is ever shown —
-# the silent dead end this patch exists to remove.
-UPLOAD_COMPOSER = {
-    'accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"': 'accept="*/*"',
-    "Upload PDF or Image": "Attach a file",
+// Which uploads become a `type: "file"` block rather than an image one. Everything accepted
+// here is one, so the image branch beside each call site is now unreachable rather than
+// wrong; the name is what keeps those call sites legible if an image type ever comes back.
+export function isFileBlockUpload(file: File): boolean {
+  return isSpreadsheetUpload(file);
 }
 
+export const UNSUPPORTED_FILE_TITLE = "That file type isn't supported";
+export const UNSUPPORTED_FILE_BODY = "Upload types limited to CSV, TSV or .xlsx"
 
-def patch_upload_messaging() -> None:
-    """Tell the user why an attachment bounced, instead of listing types we don't want."""
-    hook = chat_ui_dir() / "src" / "hooks" / "use-file-upload.tsx"
-    composer = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
-    if not hook.is_file() or not composer.is_file():
+# The helpers live in lib/ rather than in the hook because `fileToContentBlock` needs them
+# too and the hook already imports from there — the other direction would be a cycle.
+UPLOAD_HELPERS = """\
+// setup: a spreadsheet is the one attachment worth having here, and it does not reach the
+// model. It rides in as a file block carrying its filename, and the graph takes it back out
+// (see research_agent/middleware/uploads.py).
+//
+// Extension first and MIME second, deliberately — see the note in use-file-upload.tsx.
+// `.xls` is in neither list: reading it needs xlrd, which is not in the sandbox snapshot,
+// and the sandbox blocks runtime installs, so it is refused at the composer rather than
+// failing deep inside a run. `application/vnd.ms-excel` is left out for the same reason,
+// even though a Windows .csv arrives claiming it — the extension check has already passed
+// that one by the time MIME is consulted.
+export const SPREADSHEET_SUFFIXES = [".csv", ".tsv", ".xlsx", ".xlsm"];
+
+export const SPREADSHEET_TYPES = [
+  "text/csv",
+  "text/tab-separated-values",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroEnabled.12",
+];
+
+export function isSpreadsheetUpload(file: File): boolean {
+  const name = file.name.toLowerCase();
+  if (SPREADSHEET_SUFFIXES.some((suffix) => name.endsWith(suffix))) return true;
+  return SPREADSHEET_TYPES.includes(file.type);
+}
+
+// Normalised off the extension, because the browser's value is the unreliable half and the
+// server keys on the extension as well.
+export function spreadsheetMimeType(file: File): string {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".xlsx"))
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".xlsm")) return "application/vnd.ms-excel.sheet.macroEnabled.12";
+  if (name.endsWith(".tsv")) return "text/tab-separated-values";
+  return "text/csv";
+}
+
+"""
+
+_LIB_ANCHOR = (
+    "// Returns a Promise of a typed multimodal block for images or PDFs\n"
+    "export async function fileToContentBlock("
+)
+
+# Anchors that must be present whichever baseline we start from. Order matters only in that
+# the header goes in before anything references the helpers it declares.
+UPLOAD_EDITS = [
+    # The hook reaches the helpers through the import it already has.
+    (
+        "hook",
+        'import { fileToContentBlock } from "@/lib/multimodal-utils";',
+        "import {\n"
+        "  fileToContentBlock,\n"
+        "  isSpreadsheetUpload,\n"
+        "  spreadsheetMimeType,\n"
+        "  SPREADSHEET_TYPES,\n"
+        '} from "@/lib/multimodal-utils";',
+    ),
+    # Eight call sites — picker, drop and paste each filter twice, plus the two duplicate
+    # checks. One literal covers them all, which is why the helper exists at all.
+    ("hook", "SUPPORTED_FILE_TYPES.includes(file.type)", "isSupportedUpload(file)"),
+    # The duplicate checks: upstream's file-block branch is PDF-only, and its inner
+    # comparison hardcodes the same type. Both appear twice, in `isDuplicate` and again in
+    # the copy inlined into the paste handler.
+    ("hook", 'file.type === "application/pdf"', "isFileBlockUpload(file)"),
+    # `file.type` would be the obvious replacement and is the one thing that cannot go here:
+    # the block was built with the normalised type, so on the Windows .csv that arrives as
+    # `application/vnd.ms-excel` the two sides never match and the dedupe silently stops.
+    (
+        "hook",
+        'b.mimeType === "application/pdf" &&',
+        "b.mimeType === spreadsheetMimeType(file) &&",
+    ),
+    # lib: the helpers, then the branch that turns a spreadsheet into a file block.
+    # Anchored on upstream's comment as well as the signature, so the helpers go in above it
+    # rather than between it and the function it describes.
+    (
+        "lib",
+        _LIB_ANCHOR,
+        UPLOAD_HELPERS + _LIB_ANCHOR,
+    ),
+    (
+        "lib",
+        '  const supportedFileTypes = [...supportedImageTypes, "application/pdf"];\n'
+        "\n"
+        "  if (!supportedFileTypes.includes(file.type)) {",
+        '  const supportedFileTypes = [...supportedImageTypes, "application/pdf"];\n'
+        "\n"
+        "  if (isSpreadsheetUpload(file)) {\n"
+        "    return {\n"
+        '      type: "file",\n'
+        "      mimeType: spreadsheetMimeType(file),\n"
+        "      data: await fileToBase64(file),\n"
+        "      metadata: { filename: file.name },\n"
+        "    };\n"
+        "  }\n"
+        "\n"
+        "  if (!supportedFileTypes.includes(file.type)) {",
+    ),
+    # Without this the composer shows no chip for an attached CSV: the preview is filtered
+    # through this guard, and a spreadsheet block satisfies neither existing branch.
+    (
+        "lib",
+        "  // file type (legacy)",
+        "  // spreadsheet type — transport for the graph rather than model context\n"
+        "  if (\n"
+        '    (block as { type: unknown }).type === "file" &&\n'
+        '    "mimeType" in block &&\n'
+        '    typeof (block as { mimeType?: unknown }).mimeType === "string" &&\n'
+        "    SPREADSHEET_TYPES.includes((block as { mimeType: string }).mimeType)\n"
+        "  ) {\n"
+        "    return true;\n"
+        "  }\n"
+        "  // file type (legacy)",
+    ),
+    # The chip. Generalising the PDF branch to any file block is a strict widening — a PDF
+    # still lands in it — and it is the whole of what a CSV needs to render by name.
+    (
+        "preview",
+        '  // PDF block\n  if (block.type === "file" && block.mimeType === "application/pdf") {',
+        "  // Any file block: PDF, or a spreadsheet on its way to the sandbox\n"
+        '  if (block.type === "file" && typeof block.mimeType === "string") {',
+    ),
+    ("preview", '|| "PDF file";', '|| "attached file";'),
+    ("preview", 'aria-label="Remove PDF"', 'aria-label="Remove file"'),
+]
+
+# Applied only from the upstream baseline; the earlier patch already made all four. `accept`
+# has to stay `*/*` in both: with a real list the picker greys out the .xls a user is about
+# to be told to re-save, so the attempt never happens and no message is ever shown.
+# One per call site: the picker and drop handlers share one message, paste has its own.
+_UPSTREAM_TOAST_UPLOAD = (
+    '"You have uploaded invalid file type. Please upload a JPEG, PNG, GIF, WEBP image or a PDF."'
+)
+_UPSTREAM_TOAST_PASTE = (
+    '"You have pasted an invalid file type. Please paste a JPEG, PNG, GIF, WEBP image or a PDF."'
+)
+_TOAST_REPLACEMENT = "UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY }"
+
+UPLOAD_EDITS_FROM_UPSTREAM = [
+    ("hook", _UPSTREAM_TOAST_UPLOAD, _TOAST_REPLACEMENT),
+    ("hook", _UPSTREAM_TOAST_PASTE, _TOAST_REPLACEMENT),
+    (
+        "composer",
+        'accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"',
+        'accept="*/*"',
+    ),
+    ("composer", "Upload PDF or Image", "Attach a file"),
+]
+
+
+def patch_uploads() -> None:
+    """Open the composer to the one attachment the agent can use: a CSV or a spreadsheet."""
+    paths = {
+        "hook": chat_ui_dir() / "src" / "hooks" / "use-file-upload.tsx",
+        "lib": chat_ui_dir() / "src" / "lib" / "multimodal-utils.ts",
+        "preview": chat_ui_dir() / "src" / "components" / "thread" / "MultimodalPreview.tsx",
+        "composer": chat_ui_dir() / "src" / "components" / "thread" / "index.tsx",
+    }
+    if any(not path.is_file() for path in paths.values()):
+        say(TAG, "warning: the chat UI is not the shape expected; left file uploads alone.")
         return
-    text = hook.read_text(encoding="utf-8")
-    if "UNSUPPORTED_FILE_TITLE" in text:
+
+    contents = {key: path.read_text(encoding="utf-8") for key, path in paths.items()}
+    if "isSpreadsheetUpload" in contents["hook"]:
         return
 
-    edits = [(hook, UPLOAD_TYPES_ANCHOR, UPLOAD_TYPES_PATCH)]
-    edits += [(hook, old, new) for old, new in UPLOAD_MESSAGES.items()]
-    edits += [(composer, old, new) for old, new in UPLOAD_COMPOSER.items()]
+    header = next(
+        (h for h in (UPLOAD_HEADER_UPSTREAM, UPLOAD_HEADER_REFUSED) if h in contents["hook"]),
+        None,
+    )
+    if header is None:
+        say(TAG, f"warning: {paths['hook']} is not the shape expected; left file uploads "
+                 "alone. CSV and spreadsheet attachments will bounce. Missing anchor:")
+        print(UPLOAD_HEADER_UPSTREAM)
+        return
 
-    # All or nothing. A half-applied patch is the bad case here: the allowlist emptied but
-    # the old toast still naming JPEG and PDF reads as a bug in the app rather than a
-    # deliberate refusal.
-    contents = {hook: text, composer: composer.read_text(encoding="utf-8")}
-    for path, old, _ in edits:
-        if old not in contents[path]:
-            say(TAG, f"warning: {path} is not the shape expected; left the upload messaging "
-                     f"alone. It still offers JPEG/PNG/GIF/WEBP/PDF uploads, which the agent "
-                     f"cannot use. Missing anchor:")
+    edits = [("hook", header, UPLOAD_HEADER), *UPLOAD_EDITS]
+    if header is UPLOAD_HEADER_UPSTREAM:
+        edits += UPLOAD_EDITS_FROM_UPSTREAM
+
+    # All or nothing, and for a sharper reason than the other patches: half of this is the
+    # UI accepting a file and the other half is the graph being told about it. A partial
+    # apply is an upload that silently goes nowhere.
+    for key, old, _ in edits:
+        if old not in contents[key]:
+            say(TAG, f"warning: {paths[key]} is not the shape expected; left file uploads "
+                     "alone. CSV and spreadsheet attachments will bounce. Missing anchor:")
             print(old)
             return
-    for path, old, new in edits:
-        contents[path] = contents[path].replace(old, new)
-    for path, updated in contents.items():
-        path.write_text(updated, encoding="utf-8")
-    say(TAG, "replaced the upload allowlist and its message in the chat UI")
+    for key, old, new in edits:
+        contents[key] = contents[key].replace(old, new)
+    for key, text in contents.items():
+        paths[key].write_text(text, encoding="utf-8")
+    say(TAG, "opened CSV/TSV/xlsx uploads in the chat UI")
 
 
 def ensure_node() -> None:
@@ -403,7 +578,7 @@ def ensure_chat_ui() -> None:
     patch_next_config()
     patch_svg_props()
     patch_empty_ai_turns()
-    patch_upload_messaging()
+    patch_uploads()
 
     # Without this the UI opens on a form asking for a deployment URL and assistant id.
     # `.env.local` because Next reads it ahead of `.env` and upstream ignores `*.local`.
