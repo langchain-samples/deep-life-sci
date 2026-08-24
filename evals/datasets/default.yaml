@@ -1,4 +1,4 @@
-# Seeds for the LangSmith dataset `pubmed-agent-default`. Pushed by `evals/sync.py`,
+# Seeds for the LangSmith dataset `deep-life-sci-default`. Pushed by `evals/sync.py`,
 # which matches on `id` — rewording a question updates its example rather than replacing
 # it, so keep ids stable even when the text around them changes.
 #

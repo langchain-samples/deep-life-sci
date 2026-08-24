@@ -3,5 +3,5 @@
 # interpreter name — so their line endings are pinned regardless of core.autocrlf.
 * text=auto
 *.sh text eol=lf
-setup_sci_agent text eol=lf
-run_sci_agent text eol=lf
+setup_deep_life_sci text eol=lf
+run_deep_life_sci text eol=lf

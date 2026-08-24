@@ -140,7 +140,7 @@ class PubMedError(RuntimeError):
 
 def _common_params() -> dict[str, str]:
     params = {
-        "tool": os.environ.get("NCBI_TOOL", "pubmed_agent"),
+        "tool": os.environ.get("NCBI_TOOL", "deep_life_sci"),
         "email": os.environ.get("NCBI_EMAIL", ""),
     }
     if key := os.environ.get("NCBI_API_KEY"):

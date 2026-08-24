@@ -115,7 +115,7 @@ configuring at the root either.
 
 ## Scoring the root pair
 
-Two eval sweeps over the 11-example `pubmed-agent-default` dataset, run back-to-back on
+Two eval sweeps over the 11-example `deep-life-sci-default` dataset, run back-to-back on
 2026-08-23, varying only the root: `claude-sonnet-5` against `openai/gpt-5.6-terra`, both
 at `ROOT_EFFORT=medium`, both over the default Haiku leaves and the pinned luna judge, one
 example at a time.

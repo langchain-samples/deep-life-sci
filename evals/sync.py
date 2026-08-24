@@ -36,7 +36,7 @@ from langsmith import Client  # noqa: E402
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
 # One LangSmith dataset per seed file, named for the file.
-DATASET_PREFIX = "pubmed-agent"
+DATASET_PREFIX = "deep-life-sci"
 
 
 def _load(path: Path) -> list[dict]:

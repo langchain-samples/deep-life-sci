@@ -39,7 +39,7 @@ when already done; dev *verifies* them instead. Setup is the only thing that wri
 a new required setting needs a prompt there plus a line in `.env.example`.
 
 Python rather than shell because Windows users run them directly, and a port check, a browser
-and killing a process tree have no portable shell spelling. `setup_sci_agent`/`run_sci_agent`
+and killing a process tree have no portable shell spelling. `setup_deep_life_sci`/`run_deep_life_sci`
 are thin macOS/Linux shims whose one irreplaceable job is installing uv; `.gitattributes` pins
 their line endings, since a CRLF checkout breaks a shebang. Preflight therefore lives in
 `_common.require_setup` and `cli.py:run`, so it applies on every platform.
@@ -114,7 +114,10 @@ absent and nothing saying so:
    `thread/index.tsx`. The header and empty-state heading are what a user reads, but a
    browser tab still saying `Agent Chat` is how a rename looks half-done, so all three
    move together. The one patch that is a bare rename rather than an anchored edit — the
-   string is upstream's own product name and may move around within those files.
+   string is upstream's own product name and may move around within those files. It
+   replaces `setup.py:PRIOR_APP_NAMES` too: a clone patched under an earlier name has no
+   `Agent Chat` left to match, and the clone is gitignored, so that list is the only record
+   the rename has. Changing `APP_NAME` means appending the old one there.
 10. The empty state's logo and heading stacked rather than side by side, in
     `thread/index.tsx`. Its own patch rather than another edit inside the rename above,
     so a clone already carrying the rename still picks it up.

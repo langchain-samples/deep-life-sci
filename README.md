@@ -1,4 +1,4 @@
-# R&D research assistant
+# Deep Life Sci
 
 A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for 
 life scientists and chemists. The agent searches PubMed, PMC full texts, and ClinicalTrials.gov 
@@ -60,14 +60,14 @@ uv run scripts/dev.py                        # opens the chat UI in your browser
 uv run agent "which papers base-edit PCSK9?" # runs headlessly in CLI
 ```
 
-`./run_sci_agent` and `./run_sci_agent "question"` are shorthands for those two on macOS
+`./run_deep_life_sci` and `./run_deep_life_sci "question"` are shorthands for those two on macOS
 and Linux. `NO_BROWSER=1` leaves the browser tab closed; Ctrl-C stops both servers.
 
 ## Layout
 
 ```
 scripts/              setup.py (one-time setup), dev.py (chat stack), build_snapshot.py
-setup_sci_agent       macOS/Linux shorthands for those two
+setup_deep_life_sci   macOS/Linux shorthands for those two
 research_agent/       the agent: assembly, entry points, tools, prompts, middleware
 evals/                LangSmith datasets + evaluators (the closest thing to a test suite)
 ui/                   artifact components rendered by the chat frontend

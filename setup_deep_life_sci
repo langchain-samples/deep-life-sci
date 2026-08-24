@@ -4,8 +4,8 @@
 # have it, then hands over to `scripts/setup.py`, which is where the actual work lives and
 # is what Windows users run directly.
 #
-#   ./setup_sci_agent        prompt for the two API keys, install everything
-#   ./setup_sci_agent -y     never prompt; for CI and containers
+#   ./setup_deep_life_sci        prompt for the two API keys, install everything
+#   ./setup_deep_life_sci -y     never prompt; for CI and containers
 #
 # Safe to re-run: every step is skipped when already done.
 set -euo pipefail

@@ -4,11 +4,11 @@
 # users run directly; the preflight checks these used to do now live in Python, so they
 # apply on every platform.
 #
-#   ./run_sci_agent                          chat UI + graph server, Ctrl-C stops both
-#   ./run_sci_agent "does X bind Y?"         one headless question, answer on stdout
+#   ./run_deep_life_sci                          chat UI + graph server, Ctrl-C stops both
+#   ./run_deep_life_sci "does X bind Y?"         one headless question, answer on stdout
 #
 # The chat UI opens in your browser once it is up; NO_BROWSER=1 leaves it closed.
-# Environment passes through, so ROOT_MODEL=openai/gpt-5.6-terra ./run_sci_agent ... swaps
+# Environment passes through, so ROOT_MODEL=openai/gpt-5.6-terra ./run_deep_life_sci ... swaps
 # the root model (SUBAGENT_/JUDGE_ too; see research_agent/models.py).
 set -euo pipefail
 
@@ -19,7 +19,7 @@ if ! command -v uv >/dev/null 2>&1; then
   # shellcheck disable=SC1091
   [[ -f "$HOME/.local/bin/env" ]] && source "$HOME/.local/bin/env"
   command -v uv >/dev/null 2>&1 \
-    || { echo "[run] uv is not on your PATH. Run ./setup_sci_agent first." >&2; exit 1; }
+    || { echo "[run] uv is not on your PATH. Run ./setup_deep_life_sci first." >&2; exit 1; }
 fi
 
 case "${1:-}" in

@@ -186,7 +186,13 @@ def ensure_snapshot() -> None:
 # Mapped to False where the patch works by *removing* something.
 # The name this agent goes by in the UI. Upstream ships its own throughout, and a
 # half-renamed app is worse than an unrenamed one, so every occurrence moves together.
-APP_NAME = "Life Sci Agent"
+APP_NAME = "Deep Life Sci"
+
+# Names this agent used to go by. The rename patch is a search-and-replace on upstream's own
+# product name, so a clone patched under an earlier name has no `Agent Chat` left to replace
+# and would sit there half-renamed with nothing saying so — the clone is gitignored, so its
+# only history is this list. Append here whenever APP_NAME changes.
+PRIOR_APP_NAMES = ("Life Sci Agent",)
 
 # The empty state's logo and heading, stacked rather than side by side. Its own patch rather
 # than another edit inside patch_app_name, so a clone already carrying the rename picks it up.
@@ -892,7 +898,8 @@ def patch_app_name() -> None:
         text = original = path.read_text(encoding="utf-8")
         for old, new in extra:
             text = text.replace(old, new)
-        text = text.replace("Agent Chat", APP_NAME)
+        for stale in ("Agent Chat", *PRIOR_APP_NAMES):
+            text = text.replace(stale, APP_NAME)
         if text != original:
             path.write_text(text, encoding="utf-8")
             touched = True
