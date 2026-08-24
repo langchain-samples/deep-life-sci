@@ -95,9 +95,24 @@ absent and nothing saying so:
    earlier "nothing is accepted yet" patch, so an existing clone upgrades in place.
 5. A `RunProgressContext` in `src/providers/Stream.tsx`, fed from the `onCustomEvent` hook
    that already handles UI messages, publishing the latest `{type: "progress"}` event.
-6. A status row in `src/components/thread/index.tsx` rendering it beside the typing dots,
-   which also stop being conditional on `firstTokenReceived` — that flips on the first
-   `eval`, seconds into a run that lasts minutes.
+6. `<RunStatus />` in `src/components/thread/index.tsx`, replacing the typing dots — which
+   upstream stops showing once any AI message arrives, i.e. seconds into a run that lasts
+   minutes. The component itself is ours; see the overlay below. This is the one patch that
+   *deletes* upstream code: `firstTokenReceived` and `prevMessageLength` existed only to hide
+   those dots, so with them gone both are written on three paths and read on none — left in,
+   they read as if they still govern the loading indicator.
+
+`chat-ui-overlay/` is the other half of that split, and the answer to the question the patch
+list keeps raising. The six patches above are upstream-shaped — small, anchored, plausibly
+things upstream would take. Product surface is the opposite: no upstream counterpart, never
+converging, and the worst possible fit for a search-and-replace living inside a Python string.
+So it is ordinary `.tsx` files in this repo, tracked in git and reviewable in a diff, which
+`setup.py:ensure_overlay` copies into the clone's `src/` (the directory mirrors it, so a
+file's path here is where it lands) — leaving the anchored patch as the one line that mounts
+them. The copy is one-way: the clone is gitignored, so an edit made over there is a lost edit
+whatever happens, and losing it on the next launch beats keeping it and diverging silently.
+Fork upstream if an overlay component ever needs to *replace* `index.tsx` wholesale, or if
+the app's identity has to change; `UI_REPO` in `setup.py` is then the only line to move.
 
 There is no test suite; `evals/` is the closest thing to a regression check, and ruff is
 configured in `pyproject.toml` (`dev` group). Skip `scripts/build_snapshot.py` and runs still
@@ -135,7 +150,7 @@ research_agent/
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
 └── middleware/  artifacts.py uploads.py perf.py progress.py
-evals/  scripts/  ui/  docs/  data/
+evals/  scripts/  ui/  chat-ui-overlay/  docs/  data/
 ```
 
 `evals/` is deliberately outside the package — it measures the agent, it isn't part of it, and

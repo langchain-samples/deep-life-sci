@@ -14,6 +14,8 @@
 # the first four are the build inputs, ui/ is the artifact components the graph bundles,
 # and pyproject declares `readme = "README.md"`, so excluding it fails the build outright.
 .chat-ui/
+# Frontend sources for that same dev-only app; setup copies them into .chat-ui/src.
+chat-ui-overlay/
 .venv/
 data/
 .git/

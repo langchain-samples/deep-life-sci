@@ -32,7 +32,7 @@ import webbrowser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _common import REPO_ROOT, chat_ui_dir, die, listening, require_setup, say, tool
-from setup import apply_patches, unapplied_patches
+from setup import apply_patches, ensure_overlay, unapplied_patches
 
 # `hideToolCalls` is a nuqs query param, so opening the tab with it set is a default
 # without a patch: nuqs keeps it across thread switches, and the in-app toggle still
@@ -153,6 +153,10 @@ def main() -> int:
     # *ran* does not catch that — a `git pull` bringing a new patch, or an upgraded clone,
     # both land here already un-patched. Re-applying is cheap and each patch no-ops when its
     # mark is present, so this is a check by doing rather than a prompt to go and re-run.
+    copied = ensure_overlay()
+    if copied:
+        say("dev", f"refreshed {len(copied)} overlay component(s) in the chat UI")
+
     missing = unapplied_patches()
     if missing:
         say("dev", f"chat UI patches missing ({', '.join(missing)}) — reapplying…")

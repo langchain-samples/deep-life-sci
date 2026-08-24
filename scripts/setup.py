@@ -190,7 +190,7 @@ PATCH_MARKS = {
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
     "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
-    "progress-row": ("src/components/thread/index.tsx", "useRunProgress", True),
+    "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
 }
 
 
@@ -672,41 +672,53 @@ def patch_progress_events() -> None:
 
 
 # Upstream drops the typing dots as soon as any AI message arrives, which here is the first
-# `eval` — about two seconds into a run that lasts minutes. Both halves of the row are
-# deliberate: the dots stay for the whole run because the run is still going, and the text is
-# what makes them mean something.
-PROGRESS_ROW = """\
-                  {isLoading && (
-                    <div className="mr-auto flex items-center gap-3">
-                      <AssistantMessageLoading />
-                      {runProgress && (
-                        <span className="animate-in fade-in-0 text-muted-foreground text-sm">
-                          {runProgress}
-                        </span>
-                      )}
-                    </div>
-                  )}
-"""
-
+# `eval` — about two seconds into a run that lasts minutes. The replacement is a component of
+# ours rather than JSX spliced in here: see `ensure_overlay` below for why. What is left is
+# the smallest anchored change that can mount it.
 PROGRESS_ROW_ANCHOR = """\
                   {isLoading && !firstTokenReceived && (
                     <AssistantMessageLoading />
                   )}
 """
 
+# `firstTokenReceived` existed to hide those dots, and `prevMessageLength` existed to set it;
+# with the dots gone every reader of both is gone too, and what is left is state that is
+# written on three paths and read on none. Removed rather than left in place — it looks like
+# it still governs the loading indicator, and the next person to touch this file would have
+# to work out that it does not.
 PROGRESS_ROW_EDITS = [
     ('import { useStreamContext } from "@/providers/Stream";',
-     'import { useRunProgress, useStreamContext } from "@/providers/Stream";'),
-    ("  const isLoading = stream.isLoading;",
-     "  const isLoading = stream.isLoading;\n"
-     "  // setup: what the agent is doing inside the current `eval`. See providers/Stream.tsx.\n"
-     "  const runProgress = useRunProgress();"),
-    (PROGRESS_ROW_ANCHOR, PROGRESS_ROW),
+     'import { useStreamContext } from "@/providers/Stream";\n'
+     'import { RunStatus } from "./RunStatus";'),
+    ('import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";',
+     'import { AssistantMessage } from "./messages/ai";'),
+    ("  const [firstTokenReceived, setFirstTokenReceived] = useState(false);\n", ""),
+    ("""  // TODO: this should be part of the useStream hook
+  const prevMessageLength = useRef(0);
+  useEffect(() => {
+    if (
+      messages.length !== prevMessageLength.current &&
+      messages?.length &&
+      messages[messages.length - 1].type === "ai"
+    ) {
+      setFirstTokenReceived(true);
+    }
+
+    prevMessageLength.current = messages.length;
+  }, [messages]);
+
+""", ""),
+    ("      return;\n    setFirstTokenReceived(false);\n", "      return;\n"),
+    ("""    // Do this so the loading state is correct
+    prevMessageLength.current = prevMessageLength.current - 1;
+    setFirstTokenReceived(false);
+""", ""),
+    (PROGRESS_ROW_ANCHOR, "                  <RunStatus />\n"),
 ]
 
 
 def patch_progress_row() -> None:
-    """Render the latest progress line beside the typing dots."""
+    """Mount the run status component, and clear out what upstream's dots left behind."""
     thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
     if not thread.is_file():
         return
@@ -722,7 +734,47 @@ def patch_progress_row() -> None:
     for old, new in PROGRESS_ROW_EDITS:
         text = text.replace(old, new)
     thread.write_text(text, encoding="utf-8")
-    say(TAG, "added the run status row to the chat UI")
+    say(TAG, "mounted the run status row in the chat UI")
+
+
+# Components this repo owns, copied into the clone rather than patched into it.
+#
+# The four fixes above are upstream-shaped: small, anchored, and things upstream might
+# plausibly want. Product surface is the opposite — it has no upstream counterpart, will never
+# converge, and is exactly what a search-and-replace inside a Python string is worst at. So it
+# lives here as ordinary .tsx files: in git, reviewable in a diff, linted and edited like code,
+# with the anchored patch reduced to the one line that mounts them.
+#
+# The directory mirrors the clone's `src/`, so a file's path here is where it lands. The copy
+# is one-way and unconditional: the clone is gitignored and this is the original, so an edit
+# made over there is a lost edit either way — better lost on the next launch than silently
+# kept and diverging.
+OVERLAY_DIR = REPO_ROOT / "chat-ui-overlay"
+
+
+def ensure_overlay() -> list[str]:
+    """Copy the overlay into the clone. Returns the files it actually had to write."""
+    if not OVERLAY_DIR.is_dir():
+        return []
+    src = chat_ui_dir() / "src"
+    if not src.is_dir():
+        say(TAG, f"warning: no src/ in {chat_ui_dir()}; left the overlay components out.")
+        return []
+
+    written: list[str] = []
+    for path in sorted(OVERLAY_DIR.rglob("*")):
+        if not path.is_file() or path.suffix not in (".ts", ".tsx"):
+            continue
+        target = src / path.relative_to(OVERLAY_DIR)
+        content = path.read_text(encoding="utf-8")
+        # Compared rather than always written, so `next dev` is not handed a changed mtime and
+        # a rebuild on every launch of an unchanged app.
+        if target.is_file() and target.read_text(encoding="utf-8") == content:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written.append(str(target.relative_to(chat_ui_dir())))
+    return written
 
 
 def ensure_node() -> None:
@@ -767,6 +819,9 @@ def ensure_chat_ui() -> None:
         say(TAG, f"cloning agent-chat-ui into {ui_dir}…")
         run(["git", "clone", "--depth", "1", "--quiet", UI_REPO, str(ui_dir)])
 
+    copied = ensure_overlay()
+    if copied:
+        say(TAG, f"copied {len(copied)} overlay component(s) into the chat UI")
     apply_patches()
 
     # Without this the UI opens on a form asking for a deployment URL and assistant id.
