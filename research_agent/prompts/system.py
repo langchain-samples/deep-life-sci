@@ -59,9 +59,9 @@ address the question, say so rather than inferring.
 ## Searching
 
 **Shape the query until the result set is the right size. Never pick an arbitrary
-`retmax` and take the first N--this risks leaving out relevant results.**
+`retmax` and take the first N — this risks leaving out relevant results.**
 
-Example pattern for initial searches: probe with `retmax: 0`.** 
+**Example pattern for initial searches: probe with `retmax: 0`.**
 Returns `count`, `query_translation` and `warnings` without fetching records, so it is cheap. 
 Iterate here.
 
@@ -119,7 +119,7 @@ If a query cannot get to the appropriate number without cutting something the us
 stop and say so, then proceed with the most defensible narrowing and tell the user exactly what you 
 excluded and how many papers matched in total.
 
-**Fetching records once you've appropriately narrowed your search:
+**Fetching records once you've appropriately narrowed your search:**
 
 ```js
 const res = await tools.pubmedSearch({ term, sort: "relevance" });
@@ -289,8 +289,8 @@ papers with full text are in this category, so check rather than assume.
 
 ## Clinical trials
 
-`tools.ctgovSearch` and `tools.ctgovFetch` reach the ClinicalTrials.gov registry, 
-including the ones that never produced a paper**.
+`tools.ctgovSearch` and `tools.ctgovFetch` reach the ClinicalTrials.gov registry,
+**including the trials that never produced a paper**.
 
 A registry record is a plan, not a result. Enrollment may be a target
 (`enrollment_type: "ESTIMATED"`), completion dates on an unfinished trial are projections,
@@ -560,6 +560,21 @@ out; // the printed output, as a string
 - Use Python for counting, grouping and statistics. Use `abstract-analyst` subagents for
   reading comprehension. Do not use Python to judge whether an abstract answers a
   question, and do not use a subagent to compute a mean.
+
+## Files the user attached
+
+`/workspace/uploads/` holds data files the user attached to this conversation — CSVs and
+Excel workbooks. When there are any they are listed at the end of these instructions with
+their shape and column names, and that listing is the whole inventory: a path not in it
+does not exist. An attachment that could not be read is listed with the reason instead of
+a shape — pass the reason on rather than working around it.
+
+They are the user's own data. Read them, and write anything derived elsewhere under
+`/workspace/` — never over the original. Open them with pandas rather than reading them
+back through `tools.readFile`; the columns you need are already in the listing.
+
+They persist across turns even though the sandbox does not, so a file attached earlier in
+the conversation is still on disk now.
 
 ## Giving the user files
 

@@ -1,85 +1,34 @@
 #!/usr/bin/env bash
 #
-# Run the agent (`--help` for the invocations). Bare opens the chat UI, which is how this
-# is meant to be used; a question on the command line is the headless path. Assumes
-# ./setup_sci_agent has been run once; it verifies that rather than doing setup itself, so
-# a launch never surprises anyone with an install.
+# Run the agent, for macOS and Linux. A convenience wrapper over the two commands Windows
+# users run directly; the preflight checks these used to do now live in Python, so they
+# apply on every platform.
+#
+#   ./run_sci_agent                          chat UI + graph server, Ctrl-C stops both
+#   ./run_sci_agent "does X bind Y?"         one headless question, answer on stdout
+#
+# The chat UI opens in your browser once it is up; NO_BROWSER=1 leaves it closed.
+# Environment passes through, so ROOT_MODEL=openai/gpt-5.6-terra ./run_sci_agent ... swaps
+# the root model (SUBAGENT_/JUDGE_ too; see research_agent/models.py).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-ENV_FILE="$ROOT/.env"
-
-# Duplicated from setup_sci_agent rather than sourced, so either script works alone. The
-# placeholder rule in `env_value` must stay identical in both.
-say() { echo "[run] $*"; }
-die() { echo "[run] $*" >&2; exit 1; }
-
-env_value() {  # env_value <KEY> — the value in .env, empty if unset or still a placeholder
-  local v
-  v="$(sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1)"
-  [[ $v == *... ]] && v=""
-  printf '%s' "$v"
-}
-
-needs_setup() { die "$1 Run ./setup_sci_agent first."; }
-
-usage() {
-  cat <<'EOF'
-Run the PubMed/PMC research agent. Needs ./setup_sci_agent run once first.
-
-  ./run_sci_agent                          chat UI + graph server, Ctrl-C stops both
-  ./run_sci_agent "does X bind Y?"         one headless question, answer on stdout
-
-Environment passes through, so ROOT_MODEL=openai/gpt-5.6-terra ./run_sci_agent ...
-swaps the root model (SUBAGENT_/JUDGE_ too; see research_agent/models.py).
-EOF
-}
-
-# Anything that isn't a known mode is the question, so an unquoted one still works. A
-# question is what selects the headless path; with nothing to answer, the UI is the only
-# sensible thing to do.
-MODE=chat
-QUESTION=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -h|--help) usage; exit 0 ;;
-    chat|ui) MODE=chat ;;
-    *) QUESTION+=("$1"); MODE=cli ;;
-  esac
-  shift
-done
-
-# Preflight, cheapest check first. Each of these is a setup step that did not happen, and
-# each fails later in a way that does not name the cause: no uv is `command not found`, no
-# .venv is uv silently installing mid-run, a missing key is an SDK auth error 200 lines
-# deep. The snapshot is deliberately *not* checked — a missing one only makes runs slower
-# (sandbox.py installs at runtime), and confirming it costs a LangSmith round trip on
-# every single question.
-command -v uv >/dev/null 2>&1 || {
+if ! command -v uv >/dev/null 2>&1; then
   # shellcheck disable=SC1091
   [[ -f "$HOME/.local/bin/env" ]] && source "$HOME/.local/bin/env"
-  command -v uv >/dev/null 2>&1 || needs_setup "uv is not on your PATH."
-}
-[[ -f $ENV_FILE ]] || needs_setup "no .env in $ROOT."
-[[ -d $ROOT/.venv ]] || needs_setup "no virtualenv in $ROOT."
-for key in OPENAI_API_KEY LANGSMITH_API_KEY; do
-  [[ -n "$(env_value "$key")" ]] || needs_setup "$key is not set in .env."
-done
-
-if [[ $MODE == chat ]]; then
-  # Checked here rather than left to dev.sh, where a missing pnpm surfaces as `command not
-  # found` inside a backgrounded subshell after the agent server has already started.
-  command -v pnpm >/dev/null 2>&1 || needs_setup "pnpm is not on your PATH."
-  # node_modules rather than just the directory: a clone whose install failed half way is
-  # the more confusing state of the two.
-  CHAT_UI_DIR="${AGENT_CHAT_UI:-$ROOT/.chat-ui}"
-  [[ -d $CHAT_UI_DIR/node_modules ]] \
-    || needs_setup "no chat UI installed at $CHAT_UI_DIR."
-  say "starting the chat UI and graph server…"
-  # exec so Ctrl-C reaches dev.sh's own trap, which is what stops both halves.
-  exec ./scripts/dev.sh
+  command -v uv >/dev/null 2>&1 \
+    || { echo "[run] uv is not on your PATH. Run ./setup_sci_agent first." >&2; exit 1; }
 fi
 
-exec uv run agent "${QUESTION[@]}"
+case "${1:-}" in
+  -h|--help) sed -n '3,12p' "$0" | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
+esac
+
+# A question is what selects the headless path; with nothing to answer, the UI is the only
+# sensible thing to do.
+if [[ $# -gt 0 && ${1:-} != chat && ${1:-} != ui ]]; then
+  exec uv run agent "$@"
+fi
+exec uv run scripts/dev.py

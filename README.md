@@ -1,22 +1,41 @@
-# Bio/chem research assistant
+# R&D research assistant
 
 A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for 
 life scientists and chemists. The agent searches PubMed, PMC full texts, and ClinicalTrials.gov 
 to answer questions and generate figures. Note that full text journal articles are only available
-if present in open-access subset. Only abstracts are available for paywalled papers.
+if present in the open-access subset. Only abstracts are available for paywalled papers.
 
 ## Quickstart
 
-### 1. Setup
+### 1. Get the code
 
 ```bash
-./setup_sci_agent                                # once per clone: keys, deps, sandbox, chat UI
+git clone https://github.com/mcunningham1440/pubmed_agent.git
+cd pubmed_agent
 ```
 
-`setup_sci_agent` installs [uv](https://docs.astral.sh/uv/) if you don't have it (uv brings
-its own Python), writes `.env`, installs dependencies, builds the sandbox the agent's Python
-runs in, and sets up the chat UI. Re-running it is cheap and skips whatever is already done.
-`run_sci_agent` only runs the agent — it never installs.
+Needs [git](https://git-scm.com/downloads), which setup also uses to fetch the chat UI.
+
+### 2. Setup
+
+You need [uv](https://docs.astral.sh/uv/) — it brings its own Python, so it is the only
+prerequisite:
+
+On macOS / Linux:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+On Windows: 
+```bash
+irm https://astral.sh/uv/install.ps1 | iex
+```
+
+Then, from the repo:
+
+```bash
+uv run scripts/setup.py
+```
 
 You need a [LangSmith](https://smith.langchain.com) account. Setup prompts for two keys
 from [Settings](https://smith.langchain.com/settings), which are **not** interchangeable:
@@ -25,29 +44,32 @@ from [Settings](https://smith.langchain.com/settings), which are **not** interch
   OpenAI key. Every model call goes through the LangSmith LLM gateway.
 - **`LANGSMITH_API_KEY`** is for tracing, and for provisioning the sandbox.
 
-`ROOT_MODEL=openai/gpt-5.6-terra ./run_sci_agent ...` swaps a model (see
-`research_agent/models.py`). `--help` on either script covers the rest.
+`ROOT_MODEL=openai/gpt-5.6-terra` in front of either command below swaps a model (see
+`research_agent/models.py`).
 
 The UI is a clone of [`agent-chat-ui`](https://github.com/langchain-ai/agent-chat-ui) in
 `.chat-ui/` (gitignored), pointed at the local server. It needs [Node](https://nodejs.org)
 20+, the one thing setup won't install for you: everything else finishes without it, so
 install Node and re-run to add the UI. `AGENT_CHAT_UI=<path>` uses your own checkout.
 
-### 2. Running
+### 3. Running
 
 ```bash
-./run_sci_agent                                    # runs with browser UI (recommended)
+uv run scripts/dev.py                        # opens the chat UI in your browser (recommended)
 
-./run_sci_agent "which papers base-edit PCSK9?"    # runs headlessly in CLI
+uv run agent "which papers base-edit PCSK9?" # runs headlessly in CLI
 ```
+
+`./run_sci_agent` and `./run_sci_agent "question"` are shorthands for those two on macOS
+and Linux. `NO_BROWSER=1` leaves the browser tab closed; Ctrl-C stops both servers.
 
 ## Layout
 
 ```
-setup_sci_agent       one-time setup; run_sci_agent starts the agent
+scripts/              setup.py (one-time setup), dev.py (chat stack), build_snapshot.py
+setup_sci_agent       macOS/Linux shorthands for those two
 research_agent/       the agent: assembly, entry points, tools, prompts, middleware
 evals/                LangSmith datasets + evaluators (the closest thing to a test suite)
-scripts/              dev.sh, build_snapshot.py
 ui/                   artifact components rendered by the chat frontend
 docs/                 design notes and demo questions
 data/                 host-side abstract/PMC cache (gitignored)

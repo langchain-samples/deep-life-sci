@@ -18,14 +18,13 @@ for the user to set up the repo and understand what it is and how to use it.
 ## Commands
 
 ```bash
-./setup_sci_agent                      # once per clone: uv, .env, deps, snapshot, chat UI
-./run_sci_agent                        # the chat stack, via scripts/dev.sh
-./run_sci_agent "question"             # headless; execs `uv run agent`
+uv run scripts/setup.py                # once per clone: .env, deps, snapshot, chat UI
+uv run scripts/dev.py                  # the chat stack, both halves, Ctrl-C stops both
+                                       # NO_BROWSER=1 skips opening the browser tab
 uv run agent ["question"]              # bare = DEMO_QUESTION
 ROOT_MODEL=openai/gpt-5.6-terra uv run agent   # swap one role; SUBAGENT_/JUDGE_ too
 uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
                                        # into the sandbox snapshot (~100s, rdkit is most of it)
-./scripts/dev.sh                       # both halves of the chat stack, Ctrl-C stops both
 uv run langgraph dev                   # just the graph, on :2024
 cd .chat-ui && pnpm dev                # just the UI, on :3000 -> http://localhost:2024
 
@@ -34,17 +33,29 @@ uv run python -m evals.run --structural --limit 3   # score, no judge model
 uvx ruff check .                       # config lives in pyproject.toml
 ```
 
-`setup_sci_agent` and `run_sci_agent` are the front door, split so starting the agent never
-triggers an install: setup does uv, `.env`, `uv sync`, the snapshot and the frontend, each
-skipped when already done; run *verifies* them instead. Setup is the only thing that writes
-`.env`, so a new required setting needs a prompt there plus a line in `.env.example`; both
-scripts copy `env_value`, whose placeholder rule must stay identical.
+`scripts/setup.py` and `scripts/dev.py` are the front door, split so starting the agent never
+triggers an install: setup does `.env`, `uv sync`, the snapshot and the frontend, each skipped
+when already done; dev *verifies* them instead. Setup is the only thing that writes `.env`, so
+a new required setting needs a prompt there plus a line in `.env.example`.
 
-The chat UI has no flag and is not optional — it is the assumed way in, with a bare
-`./run_sci_agent` opening it (via `scripts/dev.sh`, which starts both halves, prefixes their
-logs, and reuses either port already listening) and a question on the command line selecting
-the headless path. Node is the one prerequisite setup will not install unasked, so it comes
-*last*: a machine without Node still finishes with a working `uv run agent`.
+Python rather than shell because Windows users run them directly, and a port check, a browser
+and killing a process tree have no portable shell spelling. `setup_sci_agent`/`run_sci_agent`
+are thin macOS/Linux shims whose one irreplaceable job is installing uv; `.gitattributes` pins
+their line endings, since a CRLF checkout breaks a shebang. Preflight therefore lives in
+`_common.require_setup` and `cli.py:run`, so it applies on every platform.
+
+`dev.py` reuses either port already listening and opens `:3000` once it answers — polled,
+because a tab arriving before `next dev` binds shows a connection error. Each server gets its
+own process group so teardown kills the whole tree, and **all four of SIGINT, SIGTERM, SIGHUP
+and SIGQUIT are installed explicitly** (by `getattr`, since the last two are absent on
+Windows). Any one left out skips the teardown silently and leaves both ports held — and
+because reuse only asks whether *something* is listening, the next launch then serves the run
+off that stale stack. SIGINT because its default handler may not be installed at all (a
+background process in a non-interactive shell inherits `SIG_IGN` and Python keeps that
+disposition); SIGHUP because closing the terminal signals only the foreground group, and the
+servers sit in sessions of their own — so it reaches just the process meant to kill them.
+The chat UI is not optional and has no flag; Node is the one thing setup will not install
+unasked, so it comes *last* — a machine without Node still gets a working `uv run agent`.
 
 The UI is a clone of `langchain-ai/agent-chat-ui` vendored at `.chat-ui/`, inside the repo so
 nothing needs a writable directory beside it — which is what `.dockerignore` is for, since
@@ -53,16 +64,30 @@ Next app in the deploy image (its comments list what must *not* be excluded).
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere. Setup also runs `npm ci` in `ui/`,
 whose components the *graph server* bundles: without those deps the bundler logs
 `Could not resolve "xlsx"`, answers `/ui/<graph>/entrypoint.js` with a 200 anyway, and the
-component is silently absent. Two patches:
+component is silently absent. Four patches, all reapplied by setup on every run so the
+README's steps alone produce a working app, and each anchored on an exact upstream string
+that it prints rather than guesses past — a moved anchor must not clobber an upstream fix:
 
 1. A `/ui/:path*` rewrite in `next.config.mjs` pointing at `:2024`. Required — without it the
-   artifact components silently never render (see the invariant below). Setup reapplies it on
-   every run, and prints the snippet instead of editing if upstream ever grows a `rewrites`
-   key, since a second one would silently shadow the first.
-2. An empty-message early return in `src/components/thread/messages/ai.tsx`, left manual
-   because it is cosmetic and edits a component body: an AI turn that is pure `thinking` +
-   `tool_use` still renders its hover CommandBar, and our runs are dozens of such turns, so
-   unpatched the first visible output sits ~900px of whitespace below the question.
+   artifact components silently never render (see the invariant below). Bails out if upstream
+   ever grows a `rewrites` key, since a second one would silently shadow the first.
+2. An empty-message early return in `src/components/thread/messages/ai.tsx`: an AI turn that
+   is pure `thinking` + `tool_use` still renders its hover CommandBar, and our runs are dozens
+   of such turns, so unpatched the first visible output sits ~900px of whitespace below the
+   question.
+3. `clip-path` → `clipPath` in `src/components/icons/langgraph.tsx`. Valid SVG, invalid JSX,
+   so upstream's logo logs `Invalid DOM property` on every render and parks the dev overlay's
+   error badge on a healthy app.
+4. A spreadsheet-only upload allowlist across `src/hooks/use-file-upload.tsx`,
+   `src/lib/multimodal-utils.ts` and `MultimodalPreview.tsx` — CSV/TSV/xlsx/xlsm ride in as
+   `type: "file"` blocks and `middleware/uploads.py` takes them back out; images and PDFs stay
+   refused, since an attachment the graph does not intercept is model context and nothing
+   else. Every call site tests `isSupportedUpload`/`isSpreadsheetUpload` rather than the MIME
+   list, because Windows with Excel installed reports a `.csv` as `application/vnd.ms-excel`
+   and some browsers report `""` — extension first, MIME second. `accept="*/*"` stays on the
+   composer input so a `.xls` reaches the toast telling the user to re-save it rather than
+   being greyed out of the picker. `patch_uploads` accepts two baselines, upstream's and the
+   earlier "nothing is accepted yet" patch, so an existing clone upgrades in place.
 
 There is no test suite; `evals/` is the closest thing to a regression check, and ruff is
 configured in `pyproject.toml` (`dev` group). Skip `scripts/build_snapshot.py` and runs still
@@ -72,7 +97,7 @@ installing at runtime when nothing matches, so a missing snapshot is slow rather
 
 ## Environment
 
-`setup_sci_agent` writes `.env`; the trip-up it exists to prevent is that
+`scripts/setup.py` writes `.env`; the trip-up it exists to prevent is that
 **`OPENAI_API_KEY` is the LangSmith gateway service key (`lsv2_sk_...`), not an OpenAI
 key** — all model calls go through the LangSmith LLM gateway. `LANGSMITH_API_KEY` is for
 tracing and sandbox provisioning.
@@ -98,16 +123,16 @@ research_agent/
 ├── sandbox.py                            sandbox lifecycle + WebSocket retry
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
-├── sources/     pubmed.py pmc.py ctgov.py cache_io.py
-└── middleware/  artifacts.py perf.py
+├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
+└── middleware/  artifacts.py uploads.py perf.py
 evals/  scripts/  ui/  docs/  data/
 ```
 
 `evals/` is deliberately outside the package — it measures the agent, it isn't part of it, and
 nothing shipped at deploy time should carry a test framework. Its entry points run with `-m`
 from the repo root (`uv run python -m evals.run`), which puts the root on `sys.path` so
-`evals.evaluators` resolves. Seeds live in git as JSONL and LangSmith is the mirror; `sync.py`
-matches on `seed_id` and never deletes.
+`evals.evaluators` resolves. Seeds live in git as YAML and LangSmith is the mirror; `sync.py`
+matches each seed's `id` (carried into example metadata as `seed_id`) and never deletes.
 
 Three entry points build the **same** agent via `agent.py:build_agent(backend)`. It only
 assembles — it owns no sandbox and no I/O, which is what lets all three share it:
@@ -165,6 +190,21 @@ That's the core economy of the design:
   every tool call and pushes bytes through the `ui` state key (components in `ui/ui.tsx`).
   The prompt forbids `read_file` on anything in `out/` — reading a PNG back cost more
   context than an entire run.
+- `/workspace/uploads/` (`paths.UPLOAD_DIR`) is the reverse trade: `UploadMiddleware` strips
+  each attachment out of the human message before the first model call, so the bytes sit in one
+  checkpoint and in no model request, and the prompt gets a manifest — names, sizes, row counts,
+  column names. Not under `out/`, which is swept and published: a file the user gave us would
+  come back as a deliverable of their own question.
+
+`middleware/uploads.py` is the one place where **the sandbox is not the storage**. A container is
+reaped after `IDLE_TTL_SECONDS` and the thread gets an empty replacement, so the durable copy
+lives in the LangGraph store, per thread, and `before_agent` re-materialises it every turn —
+reconciled by name and size, so a warm container costs one `ls`. Not graph state (re-serialised
+into every checkpoint, the cost `MAX_INLINE_BYTES` bounds) and not model context (a 2k-row CSV
+re-sent every turn, unusable without retyping it into `writeFile`). Without a store — the CLI —
+turn 2 says the file is gone rather than pretending. A declined attachment (`.xls`, oversize) is
+stripped too and replaced by the reason: left in, the block 400s the whole run at a provider
+with no such document type.
 
 ### Subagents
 
@@ -240,10 +280,16 @@ path, which the gateway answers with a 501 that looks like an outage.
   Measured at roughly a 10-token bucket refilling at ~1 req/sec — 12 concurrent requests
   returned ten 429s — and **the 429 carries no `Retry-After`**, so client-side backoff is the
   only thing between a fan-out and a dead run. No API key raises it.
-  `sources/ctgov.py:_throttle` serialises every request in the process, which is why that
+  `ctgov.py`'s `Throttle` (from `sources/_http.py`) serialises every request in the
+  process, which is why that
   module needs no concurrency semaphore the way `pmc.py` does. The design response is to make
   per-trial fetching unnecessary rather than merely discouraged: `pageSize` reaches 1,000 and
   `filter.ids` takes 300, so a 1,000-trial corpus is four requests.
+- **`sources/_http.py` holds the shared pacing/backoff mechanism, but each caller keeps
+  its own `Throttle`.** The two APIs meter independently, so a shared `_last_call` would
+  make a PubMed search delay a registry fetch for nothing. Each module also keeps its own
+  `_request` — the POST branch, 4xx handling and exception types genuinely differ.
+  `pmc.py` uses none of it; S3 caps concurrency with a semaphore instead.
 - **`sources/ctgov.py` inverts `pubmed.py`'s validation story on purpose.** This API
   answers a bad field, enum, area, sort or id with an HTTP 400 naming the token, so 4xx
   bodies are surfaced verbatim and there is no local `check_field_tags()` analog. Do not

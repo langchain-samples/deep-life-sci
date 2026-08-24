@@ -85,9 +85,6 @@ SANDBOX_SUPPLEMENTARY_DIR = "/workspace/supplementary"
 
 XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 
-PMCID_RE = re.compile(r"^PMC\d+$")
-
-IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp")
 DATA_SUFFIXES = (".xlsx", ".xls", ".csv", ".tsv", ".txt", ".docx", ".pdf", ".zip", ".pptx")
 
 
@@ -576,7 +573,7 @@ async def _gather(pmcids: list[str], fn) -> tuple[dict, list[str], list[str]]:
         results = await asyncio.gather(
             *(fn(client, p) for p in normalized), return_exceptions=True
         )
-    for pmcid, result in zip(normalized, results):
+    for pmcid, result in zip(normalized, results, strict=True):
         if isinstance(result, Exception):
             unavailable.append(f"{pmcid} (error: {result})")
         elif result is None:
@@ -806,7 +803,7 @@ def make_sandbox_tools(backend: Any) -> list:
 
         if uploads:
             responses = await backend.aupload_files(uploads)
-            for entry, response in zip(staged[:], responses):
+            for entry, response in zip(staged[:], responses, strict=True):
                 if getattr(response, "error", None):
                     staged.remove(entry)
                     skipped.append({**entry, "reason": f"sandbox upload failed: {response.error}"})
@@ -857,7 +854,10 @@ def make_sandbox_tools(backend: Any) -> list:
         ) as client:
             loaded = await _load(client, normalized)
         if loaded is None:
-            return {"staged": [], "skipped": [{"pmcid": normalized, "reason": "no full text in PMC"}]}
+            return {
+                "staged": [],
+                "skipped": [{"pmcid": normalized, "reason": "no full text in PMC"}],
+            }
         _, sidecar, parsed = loaded
 
         # Index every figure, including the unusable ones, so a request for one gets the
@@ -873,7 +873,10 @@ def make_sandbox_tools(backend: Any) -> list:
         for raw in files:
             fig = index.get(str(raw).strip().lower())
             if fig is None:
-                known = sorted({f["label"] or f["fig_id"] or f["file"] for f in parsed["figures"]} - {None})
+                known = sorted(
+                    {f["label"] or f["fig_id"] or f["file"] for f in parsed["figures"]}
+                    - {None}
+                )
                 skipped.append(
                     {"pmcid": normalized, "file": raw,
                      "reason": f"no such figure; this paper has {known[:10] or 'none'}"}
@@ -934,7 +937,10 @@ def make_sandbox_tools(backend: Any) -> list:
         ) as client:
             loaded = await _load(client, normalized)
         if loaded is None:
-            return {"staged": [], "skipped": [{"pmcid": normalized, "reason": "no full text in PMC"}]}
+            return {
+                "staged": [],
+                "skipped": [{"pmcid": normalized, "reason": "no full text in PMC"}],
+            }
         package, sidecar, parsed = loaded
 
         # Supplementary hrefs are less reliable than figure hrefs, so fall back to

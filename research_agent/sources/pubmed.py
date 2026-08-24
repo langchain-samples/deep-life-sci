@@ -20,9 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import random
 import re
-import time
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -33,6 +31,7 @@ from langchain_core.tools import tool
 # getting that wrong starts a second empty cache instead of failing.
 from research_agent.paths import ABSTRACT_CACHE
 from research_agent.sources import cache_io
+from research_agent.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 
@@ -54,35 +53,40 @@ FIELD_TAG_RE = re.compile(r"\[([^\[\]]+)\]")
 # locally is the only way to catch it, and catching it before the request is better than
 # detecting it after. A tag missing from this set produces a warning, not a failure, so
 # a newly-added PubMed tag degrades to noise rather than a broken search.
-FIELD_TAGS = frozenset(
+# Two halves, both explicit. An earlier version generated the long forms by splitting a
+# `|`-separated string on whitespace, which shredded every multi-word name into its
+# component words and let `[date]`, `[terms]`, `[of]` and `[type]` through as valid.
+# Nothing here may be built by splitting a string that contains a multi-word name.
+# (The SIM905 suppression keeps this table wrapped; ruff's rewrite is 76 quoted items
+# on one line. Splitting is safe here precisely because every token is one word.)
+_SHORT_TAGS = frozenset(
     """
     1au ad affl aid all au auid book cdat cn cntys cois coln crdt dcom dp ecno ed edat
     epdt fau filt fir full grnt gr invr ip isbn iss issn jid jour la lang lastau lid lr
     majr mesh mh mhda nm ot otitle pa page papx pdat pg pid pl pmc pmcid pmid ppdt ps pt
     ptyp pubn rn sb sh si so subh subs ta ti tiab titl tt uid vi vol word
-    all fields|article identifier|affiliation|author|author identifier|book
-    completion date|conflict of interest statement|corporate author|create date
-    date - publication|ec/rn number|editor|entry date|filter|first author name
-    full author name|full investigator name|grants and funding|investigator|isbn|issue
-    journal|language|last author name|location id|mesh date|mesh major topic
-    mesh subheadings|mesh terms|modification date|nlm unique id|other term|pagination
-    personal name as subject|pharmacological action|place of publication|pmid
-    publication date|publication type|publisher|secondary source id|subset
-    supplementary concept|text words|title|title/abstract|transliterated title|volume
-    """.replace("|", " ").split()
-) | {
-    # multi-word long forms, which the whitespace split above would break apart
-    "all fields", "article identifier", "author identifier", "completion date",
-    "conflict of interest statement", "corporate author", "create date",
-    "date - publication", "ec/rn number", "entry date", "first author name",
-    "full author name", "full investigator name", "grants and funding",
-    "last author name", "location id", "mesh date", "mesh major topic",
-    "mesh subheadings", "mesh terms", "modification date", "nlm unique id",
-    "other term", "personal name as subject", "pharmacological action",
-    "place of publication", "publication date", "publication type",
-    "secondary source id", "supplementary concept", "text words", "title/abstract",
-    "transliterated title",
-}
+    """.split()  # noqa: SIM905
+)
+
+_LONG_TAGS = frozenset(
+    {
+        "affiliation", "all fields", "article identifier", "author",
+        "author identifier", "book", "completion date",
+        "conflict of interest statement", "corporate author", "create date",
+        "date - publication", "ec/rn number", "editor", "entry date", "filter",
+        "first author name", "full author name", "full investigator name",
+        "grants and funding", "investigator", "isbn", "issue", "journal", "language",
+        "last author name", "location id", "mesh date", "mesh major topic",
+        "mesh subheadings", "mesh terms", "modification date", "nlm unique id",
+        "other term", "pagination", "personal name as subject",
+        "pharmacological action", "place of publication", "pmid", "publication date",
+        "publication type", "publisher", "secondary source id", "subset",
+        "supplementary concept", "text words", "title", "title/abstract",
+        "transliterated title", "volume",
+    }
+)
+
+FIELD_TAGS = _SHORT_TAGS | _LONG_TAGS
 
 
 def check_field_tags(term: str) -> list[str]:
@@ -127,49 +131,15 @@ def _min_interval() -> float:
     return 0.11 if os.environ.get("NCBI_API_KEY") else 0.34
 
 
-# _throttle only paces *this* process; NCBI counts per api_key/IP, so a 429 still
-# arrives whenever something else is sharing the quota. One fixed 1.5s retry was not
-# enough — a 429 mid-fan-out propagated out of the PTC bridge and killed a whole run.
-RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+# The throttle paces *this* process; NCBI counts per api_key/IP, so a 429 still arrives
+# whenever something else is sharing the quota. One fixed 1.5s retry was not enough — a
+# 429 mid-fan-out propagated out of the PTC bridge and killed a whole run.
 RETRY_ATTEMPTS = 4
 RETRY_BASE_DELAY = 1.0
 RETRY_MAX_DELAY = 30.0
 
-_rate_lock = asyncio.Lock()
-_last_call = 0.0
-
-
-async def _throttle() -> None:
-    global _last_call
-    async with _rate_lock:
-        wait = _min_interval() - (time.monotonic() - _last_call)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _last_call = time.monotonic()
-
-
-def _retry_after(resp: httpx.Response) -> float | None:
-    """Seconds from a Retry-After header, if it carries a usable delta-seconds value."""
-    raw = resp.headers.get("Retry-After")
-    if not raw:
-        return None
-    try:
-        return max(0.0, float(raw.strip()))
-    except ValueError:
-        # The HTTP-date form is legal too; not worth parsing for a delay we already
-        # have a sane default for.
-        return None
-
-
-def _backoff_delay(attempt: int, resp: httpx.Response) -> float:
-    """Seconds to wait before retry `attempt` + 1. Server's Retry-After wins if sent."""
-    after = _retry_after(resp)
-    if after is not None:
-        return min(after, RETRY_MAX_DELAY)
-    ceiling = min(RETRY_BASE_DELAY * 2 ** (attempt - 1), RETRY_MAX_DELAY)
-    # Jitter, because the callers that trip a 429 are concurrent by construction: a
-    # fan-out's searches would otherwise back off in lockstep and collide again.
-    return random.uniform(ceiling / 2, ceiling)
+# NCBI's own bucket, separate from the registry's in ctgov.py.
+_throttle = Throttle(_min_interval)
 
 
 async def _request(util: str, **params: Any) -> httpx.Response:
@@ -186,7 +156,7 @@ async def _request(util: str, **params: Any) -> httpx.Response:
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         for attempt in range(1, RETRY_ATTEMPTS + 1):
-            await _throttle()
+            await _throttle.wait()
             if use_post:
                 resp = await client.post(url, data=payload)
             else:
@@ -195,7 +165,11 @@ async def _request(util: str, **params: Any) -> httpx.Response:
                 return resp
             retryable = resp.status_code in RETRY_STATUSES
             if retryable and attempt < RETRY_ATTEMPTS:
-                await asyncio.sleep(_backoff_delay(attempt, resp))
+                await asyncio.sleep(
+                    backoff_delay(
+                        attempt, base=RETRY_BASE_DELAY, maximum=RETRY_MAX_DELAY, resp=resp
+                    )
+                )
                 continue
             raise PubMedError(
                 f"{util} returned HTTP {resp.status_code}"
@@ -229,11 +203,6 @@ def normalize_pmcid(raw: Any) -> str | None:
     # the bucket listing, never taken on faith from the caller.
     s = s.split(".", 1)[0]
     return f"PMC{s}" if s.isdigit() else None
-
-
-def _chunks(items: list[str], size: int):
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
 
 
 # --------------------------------------------------------------------------------
@@ -272,7 +241,7 @@ def _collect_warnings(result: dict) -> list[str]:
 async def _esummary(pmids: list[str]) -> dict[str, dict]:
     """Fetch citation metadata, chunked under the 500-UID cap."""
     records: dict[str, dict] = {}
-    for chunk in _chunks(pmids, SUMMARY_CHUNK):
+    for chunk in chunks(pmids, SUMMARY_CHUNK):
         resp = await _request("esummary", db="pubmed", id=",".join(chunk), retmode="json")
         payload = resp.json()
         # Over-cap and malformed requests come back as HTTP 200 with an `error` key
@@ -569,7 +538,7 @@ async def fetch_abstracts(pmids: list[str]) -> dict:
     # that outright — see cache_io for why it matters in production too.
     records, from_cache, to_fetch = await asyncio.to_thread(_scan_cache, valid)
 
-    for chunk in _chunks(to_fetch, FETCH_CHUNK):
+    for chunk in chunks(to_fetch, FETCH_CHUNK):
         # retmode=xml, never the text mode: text concatenates every abstract behind a
         # positional counter that renumbers when records drop, so it can't be mapped
         # back to the requested ids. Never pass retmax — it truncates silently.
