@@ -65,7 +65,7 @@ Next app in the deploy image (its comments list what must *not* be excluded).
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere. Setup also runs `npm ci` in `ui/`,
 whose components the *graph server* bundles: without those deps the bundler logs
 `Could not resolve "xlsx"`, answers `/ui/<graph>/entrypoint.js` with a 200 anyway, and the
-component is silently absent. Six patches, all reapplied by setup on every run so the
+component is silently absent. Eleven patches, all reapplied by setup on every run so the
 README's steps alone produce a working app, and each anchored on an exact upstream string
 that it prints rather than guesses past — a moved anchor must not clobber an upstream fix.
 Each leaves a mark behind, named in `setup.py:PATCH_MARKS`, which is also what its own
@@ -101,9 +101,30 @@ absent and nothing saying so:
    *deletes* upstream code: `firstTokenReceived` and `prevMessageLength` existed only to hide
    those dots, so with them gone both are written on three paths and read on none — left in,
    they read as if they still govern the loading indicator.
+7. `devIndicators: false` in `next.config.mjs`, hiding Next's dev-overlay button in the
+   bottom-left corner: this app is run by end users through `dev.py`, not by anyone working
+   on the frontend. Its own patch rather than a second line in the rewrite above, so a clone
+   that already has the rewrite still picks it up.
+8. The header's link to `langchain-ai/agent-chat-ui` removed from
+   `src/components/thread/index.tsx` — it points at the chat client, so to a user here it is
+   a link to someone else's project. Takes the `OpenGitHubRepo` component and its now-unused
+   imports with it, since a component with no call site is a lint error rather than harmless
+   dead code; `src/components/icons/github.tsx` is left alone as untouched upstream.
+9. `Agent Chat` → `setup.py:APP_NAME` across `layout.tsx`, `Stream.tsx` and
+   `thread/index.tsx`. The header and empty-state heading are what a user reads, but a
+   browser tab still saying `Agent Chat` is how a rename looks half-done, so all three
+   move together. The one patch that is a bare rename rather than an anchored edit — the
+   string is upstream's own product name and may move around within those files.
+10. The empty state's logo and heading stacked rather than side by side, in
+    `thread/index.tsx`. Its own patch rather than another edit inside the rename above,
+    so a clone already carrying the rename still picks it up.
+11. A 🧪 (U+1F9EA TEST TUBE) beside the name, in `thread/index.tsx`. Both places the name
+    renders as a heading, so the two do not disagree; not the browser tab or the setup
+    form, where it would read as decoration in a sentence. U+2697 ALEMBIC is the literal
+    beaker but is text-presentation, so it renders monochrome and tiny on some platforms.
 
 `chat-ui-overlay/` is the other half of that split, and the answer to the question the patch
-list keeps raising. The six patches above are upstream-shaped — small, anchored, plausibly
+list keeps raising. The eleven patches above are upstream-shaped — small, anchored, plausibly
 things upstream would take. Product surface is the opposite: no upstream counterpart, never
 converging, and the worst possible fit for a search-and-replace living inside a Python string.
 So it is ordinary `.tsx` files in this repo, tracked in git and reviewable in a diff, which

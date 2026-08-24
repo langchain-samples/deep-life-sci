@@ -184,9 +184,36 @@ def ensure_snapshot() -> None:
 # cannot drift apart.
 #
 # Mapped to False where the patch works by *removing* something.
+# The name this agent goes by in the UI. Upstream ships its own throughout, and a
+# half-renamed app is worse than an unrenamed one, so every occurrence moves together.
+APP_NAME = "Life Sci Agent"
+
+# The empty state's logo and heading, stacked rather than side by side. Its own patch rather
+# than another edit inside patch_app_name, so a clone already carrying the rename picks it up.
+HOME_HEADING_OLD = '<div className="flex items-center gap-3">'
+HOME_HEADING_NEW = '<div className="flex flex-col items-center gap-3">'
+
+# U+1F9EA TEST TUBE, the closest thing Unicode has to a beaker that renders as a lab glass on
+# every platform (U+2697 ALEMBIC is a text-presentation character and shows up monochrome and
+# tiny on some). Both places the name is rendered as a heading, so the two do not disagree;
+# not the browser tab or the setup form, where it would read as decoration in a sentence.
+BEAKER = "\N{TEST TUBE}"
+BEAKER_EDITS = tuple(
+    (f'{cls}">\n{indent}{APP_NAME}\n', f'{cls}">\n{indent}{BEAKER} {APP_NAME}\n')
+    for cls, indent in (
+        ('className="text-xl font-semibold tracking-tight', " " * 20),
+        ('className="text-2xl font-semibold tracking-tight', " " * 24),
+    )
+)
+
 PATCH_MARKS = {
     "rewrite": ("next.config.mjs", "/ui/:path", True),
+    "dev-indicator": ("next.config.mjs", "devIndicators", True),
     "svg": ("src/components/icons/langgraph.tsx", "clip-path=", False),
+    "github-link": ("src/components/thread/index.tsx", "OpenGitHubRepo", False),
+    "app-name": ("src/components/thread/index.tsx", APP_NAME, True),
+    "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
+    "beaker": ("src/components/thread/index.tsx", BEAKER, True),
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
     "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
@@ -216,7 +243,12 @@ def unapplied_patches() -> list[str]:
 def apply_patches() -> None:
     """Every patch, in order. Safe to call on an already-patched clone."""
     patch_next_config()
+    patch_dev_indicator()
     patch_svg_props()
+    patch_github_link()
+    patch_app_name()
+    patch_home_heading()
+    patch_beaker()
     patch_empty_ai_turns()
     patch_uploads()
     patch_progress_events()
@@ -260,7 +292,38 @@ def patch_next_config() -> None:
     say(TAG, "added the /ui/* rewrite to next.config.mjs")
 
 
-# The three patches below are cosmetic rather than load-bearing, unlike the rewrite above.
+DEV_INDICATOR = """\
+  // setup: this app is run by end users through `uv run scripts/dev.py`, so Next's dev
+  // overlay button in the bottom-left corner is chrome for a toolchain they are not being
+  // asked to think about. See CLAUDE.md.
+  devIndicators: false,
+"""
+
+
+def patch_dev_indicator() -> None:
+    """Hide the Next dev-tools button. Its own patch rather than a second line inside
+    REWRITE, so a clone that already has the rewrite still picks this up.
+    """
+    cfg = chat_ui_dir() / "next.config.mjs"
+    if not cfg.is_file():
+        return
+    if _marked("dev-indicator"):
+        return
+    text = cfg.read_text(encoding="utf-8")
+
+    anchor = "const nextConfig = {"
+    lines = text.splitlines()
+    hits = [i for i, line in enumerate(lines) if line.startswith(anchor)]
+    if len(hits) != 1:
+        say(TAG, f"warning: {cfg} is not the shape expected. Add this to its config by hand:")
+        print(DEV_INDICATOR)
+        return
+    lines.insert(hits[0] + 1, DEV_INDICATOR.rstrip())
+    cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    say(TAG, "hid the Next dev-tools button in next.config.mjs")
+
+
+# The four patches below are cosmetic rather than load-bearing, unlike the rewrite above.
 # They are applied anyway because setup's job is a working app, and an app that logs a
 # console error, opens on a screenful of whitespace, or offers an upload it then refuses is
 # not one. Each is anchored on an exact upstream string and prints the change instead of
@@ -281,6 +344,75 @@ def patch_svg_props() -> None:
     text = icon.read_text(encoding="utf-8")
     icon.write_text(text.replace("clip-path=", "clipPath="), encoding="utf-8")
     say(TAG, "fixed the clip-path JSX warning in langgraph.tsx")
+
+
+# Both call sites plus the component and its import, since a component left behind with no
+# call site is an unused-import lint error rather than dead-but-harmless code.
+GITHUB_LINK_EDITS = [
+    ('import { GitHubSVG } from "../icons/github";\n', ""),
+    ("""import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../ui/tooltip";
+""", ""),
+    ("""function OpenGitHubRepo() {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <a
+            href="https://github.com/langchain-ai/agent-chat-ui"
+            target="_blank"
+            className="flex items-center justify-center"
+          >
+            <GitHubSVG
+              width="24"
+              height="24"
+            />
+          </a>
+        </TooltipTrigger>
+        <TooltipContent side="left">
+          <p>Open GitHub repo</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+""", ""),
+    ("""              <div className="absolute top-2 right-4 flex items-center">
+                <OpenGitHubRepo />
+              </div>
+""", ""),
+    ("""                <div className="flex items-center">
+                  <OpenGitHubRepo />
+                </div>
+""", ""),
+]
+
+
+def patch_github_link() -> None:
+    """Drop the link to upstream's own repo from the header. It points at the chat client
+    rather than at this agent, so to a user here it is a link to someone else's project.
+    """
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("github-link"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in GITHUB_LINK_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the GitHub link "
+                     "in the header. Missing anchor:")
+            print(old)
+            return
+    for old, new in GITHUB_LINK_EDITS:
+        text = text.replace(old, new)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, "removed the GitHub link from the chat UI header")
 
 
 # Every name this reads is already in scope at the anchor below; it adds only its own.
@@ -737,9 +869,77 @@ def patch_progress_row() -> None:
     say(TAG, "mounted the run status row in the chat UI")
 
 
+def patch_app_name() -> None:
+    """Put this agent's name on the app in place of upstream's.
+
+    Three files rather than one: the header and empty-state heading are what a user reads,
+    but leaving the browser tab and the setup form saying `Agent Chat` is how a rename looks
+    half-done. Unanchored on purpose — a bare rename of a string upstream may move around.
+    """
+    tagline = ("Agent Chat UX by LangChain", f"{APP_NAME}, a Deep Agents demo")
+    files = (
+        ("src/app/layout.tsx", (tagline,)),
+        ("src/providers/Stream.tsx", ()),
+        ("src/components/thread/index.tsx", ()),
+    )
+    if _marked("app-name"):
+        return
+    touched = False
+    for relative, extra in files:
+        path = chat_ui_dir() / relative
+        if not path.is_file():
+            continue
+        text = original = path.read_text(encoding="utf-8")
+        for old, new in extra:
+            text = text.replace(old, new)
+        text = text.replace("Agent Chat", APP_NAME)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            touched = True
+    if touched:
+        say(TAG, f"renamed the chat UI to {APP_NAME}")
+
+
+def patch_home_heading() -> None:
+    """Stack the empty state's name under the logo instead of beside it."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("home-heading"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    if text.count(HOME_HEADING_OLD) != 1:
+        say(TAG, f"warning: {thread} is not the shape expected; left the home screen "
+                 "heading beside the logo. Missing anchor:")
+        print(HOME_HEADING_OLD)
+        return
+    thread.write_text(text.replace(HOME_HEADING_OLD, HOME_HEADING_NEW), encoding="utf-8")
+    say(TAG, "stacked the home screen heading under the logo")
+
+
+def patch_beaker() -> None:
+    """Put a beaker beside the name, in the header and on the home screen alike."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("beaker"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in BEAKER_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the beaker off "
+                     "the name. Missing anchor:")
+            print(old)
+            return
+    for old, new in BEAKER_EDITS:
+        text = text.replace(old, new)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, f"added the {BEAKER} to the chat UI name")
+
+
 # Components this repo owns, copied into the clone rather than patched into it.
 #
-# The four fixes above are upstream-shaped: small, anchored, and things upstream might
+# The fixes above are upstream-shaped: small, anchored, and things upstream might
 # plausibly want. Product surface is the opposite — it has no upstream counterpart, will never
 # converge, and is exactly what a search-and-replace inside a Python string is worst at. So it
 # lives here as ordinary .tsx files: in git, reviewable in a diff, linted and edited like code,
