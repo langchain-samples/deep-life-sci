@@ -332,7 +332,7 @@ export function isFileBlockUpload(file: File): boolean {
 }
 
 export const UNSUPPORTED_FILE_TITLE = "That file type isn't supported";
-export const UNSUPPORTED_FILE_BODY = "Upload types limited to CSV, TSV or .xlsx"
+export const UNSUPPORTED_FILE_BODY = "Upload types limited to CSV, TSV or .xlsx";"""
 
 # The helpers live in lib/ rather than in the hook because `fileToContentBlock` needs them
 # too and the hook already imports from there — the other direction would be a cycle.
