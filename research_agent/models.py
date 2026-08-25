@@ -292,6 +292,12 @@ def _build(model: str, provider: str, **kwargs):
         model=model,
         base_url=os.environ.get("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL),
         api_key=key,
+        # Chat Completions cannot carry an image, and `read_file` on a figure returns one:
+        # a tool result is a `tool`-role message whose content is text, so the block goes
+        # out verbatim and the gateway answers a non-retryable 400 that kills the thread.
+        # The Responses API models a tool result as `function_call_output`, which does
+        # accept `input_image`. Verified: 400 on chat/completions, 200 on responses.
+        use_responses_api=True,
         **kwargs,
     )
 

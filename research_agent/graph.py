@@ -92,18 +92,19 @@ def _acquire(thread_id: str):
 
 
 class _UnboundSandbox:
-    """Placeholder for a graph that is being inspected rather than run.
+    """Placeholder for a graph that is being read rather than run.
 
-    Studio draws its diagram by calling the graph factory and reading the compiled
-    structure, which is identical for every thread. Handing it a real sandbox would
-    bill a container per page load, so it gets this instead — the shape of the graph
-    doesn't depend on the backend, and nothing here is ever called.
+    The server calls the factory for reads as well as runs — Studio drawing its
+    diagram, the chat UI listing a thread's history — and the compiled structure it
+    wants back is identical for every thread. Handing those a real sandbox would bill
+    a container per page load, so they get this instead: the shape of the graph doesn't
+    depend on the backend, and nothing here is ever called.
     """
 
     def __getattr__(self, name: str):
         msg = (
-            f"sandbox is unbound (tried to call .{name}). This graph was built for "
-            "inspection, without a thread_id — it can't run tools."
+            f"sandbox is unbound (tried to call .{name}). This graph was built to be "
+            "read rather than run — no thread_id, or not a run — so it can't run tools."
         )
         raise RuntimeError(msg)
 
@@ -111,16 +112,29 @@ class _UnboundSandbox:
 async def make_graph(config: RunnableConfig):
     """Build the agent bound to this thread's sandbox.
 
-    Called per run by the LangGraph server, which is what lets the sandbox — and so
-    the files in `/workspace/out` — follow the thread rather than the process.
+    Called per request by the LangGraph server — per *run* is what binds a sandbox, and
+    that is what lets it, and so the files in `/workspace/out`, follow the thread rather
+    than the process. Reads get an unbound one; see below.
 
     Acquiring a sandbox is synchronous HTTP. Under `langgraph dev` that runs inside the
     server's event loop, where blockbuster raises `BlockingError` on any blocking
     socket call, so it has to go through a worker thread. Keeping `_acquire` itself
     synchronous also keeps it usable from the CLI, which has no loop to protect.
     """
-    thread_id = (config.get("configurable") or {}).get("thread_id")
-    if not thread_id:
+    configurable = config.get("configurable") or {}
+    thread_id = configurable.get("thread_id")
+    # `langgraph_api` sets this on every factory call, True only for `threads.create_run`.
+    # A read — `/threads/{id}/history`, `/threads/{id}/state`, Studio's diagram — has a
+    # thread_id like a run does, so without this the sandbox lookup below runs on every
+    # one: 470ms of synchronous HTTP to render a transcript that needs no container at
+    # all, and, if the TTL already reaped the thread's sandbox, `_acquire` boots a fresh
+    # one just to page back through an old conversation.
+    #
+    # Absent is treated as a run, not a read. The key is private to the server and may
+    # move between releases; the failure that guesses wrong in that direction is a
+    # `_UnboundSandbox` reaching a real run and raising on the first tool call.
+    is_read = configurable.get("__is_for_execution__") is False
+    if not thread_id or is_read:
         return build_agent(ResilientSandbox(sandbox=_UnboundSandbox()))
 
     key = str(thread_id)

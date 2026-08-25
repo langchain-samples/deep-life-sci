@@ -186,11 +186,13 @@ before changing the behaviour.
   18-way fan-out. A tool whose sandbox command must run exactly once has to be routed around
   it.
 - **Artifact components only render same-origin.** `/ui/{graph}` returns a script tag with a
-  *host-relative* `src`, so a cross-origin frontend (hosted Agent Chat, Studio) 404s it, the
-  `onload` never fires, and `LoadExternalComponent` paints an empty div — no console error,
-  the run looks fine, the chart is just absent. Any frontend needs `/ui/*` proxied to the
-  agent server. Check the network tab for `/ui/<graph>/entrypoint.js` before suspecting
-  `middleware/artifacts.py` or `ui/ui.tsx`.
+  *host-relative* `src`, so a cross-origin frontend (hosted Agent Chat, Studio) 404s it and
+  `LoadExternalComponent` paints an empty div — no console error, the chart just absent. Any
+  frontend needs `/ui/*` proxied. Check the network tab for `/ui/<graph>/entrypoint.js`
+  before suspecting `middleware/artifacts.py` or `ui/ui.tsx`.
+- **Graph state is downloaded whole by any client listing threads.** The QuickJS snapshot is
+  the heavy one, up to 11 MB of base64 per thread: the sidebar asks for `select`/`extract`,
+  not `values` (`patch_thread_search`), and reads get an `_UnboundSandbox` (`graph.py`).
 - **Prompt changes are the main tuning lever.** One line telling the model to print numbers
   instead of reading its plot back cut root context from 115k to 31k chars. Treat `prompts/`
   as production code.

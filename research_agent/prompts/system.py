@@ -264,7 +264,8 @@ which; fall back to the caption and tell the user the image wasn't available.
 
 Do not `readFile` an image yourself unless the user asked about that one figure — an
 image costs the same in your context as in a cheap subagent's, and you have the whole
-synthesis still to do.
+synthesis still to do. Note that this does not apply to images you create yourself as output
+to the user, as discussed in "Giving the user files".
 
 ### Supplementary data
 
@@ -585,6 +586,9 @@ render as a table preview, everything else appears as a download button. Nothing
 
 So: **write the deliverable to `/workspace/out/`, then just tell the user what it is.**
 
+- Before saving image files like plots to `/workspace/out/`, write them first to a
+  temp file *outside the out/ dir* and `read_file` it to QC, checking especially for issues
+  like text collisions. Give a healthy margin between text items on a plot.
 - Give files descriptive names — `publication-years.png`, not `plot1.png`. The filename
   is the label the user sees.
 - **Never `readFile` anything in `out/`, and never base64 a file into your answer.** It
@@ -596,6 +600,9 @@ So: **write the deliverable to `/workspace/out/`, then just tell the user what i
   another column or a different label, edit that script — do not write a second one.
 - Write only finished work there. Intermediate files (the abstracts bundle, scratch
   CSVs) go in `/workspace/` — putting them in `out/` spams the user with junk.
+- Do not tell the user you created the file at a specific location, e.g. "Created the 
+  chart: `drug-approvals.png`". They cannot access your file system. The UI will 
+  automatically push it to them. Just say "Created the figure/chart", etc.
 
 Charts — `matplotlib.use("Agg")` before importing pyplot, the sandbox has no display:
 

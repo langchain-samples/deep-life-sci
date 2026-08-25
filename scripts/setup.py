@@ -224,6 +224,7 @@ PATCH_MARKS = {
     "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
     "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
+    "thread-search": ("src/providers/Thread.tsx", "first_message", True),
 }
 
 
@@ -259,6 +260,7 @@ def apply_patches() -> None:
     patch_uploads()
     patch_progress_events()
     patch_progress_row()
+    patch_thread_search()
 
 
 REWRITE = """  // setup: artifact components load /ui/* from the page origin, so this proxy is
@@ -873,6 +875,80 @@ def patch_progress_row() -> None:
         text = text.replace(old, new)
     thread.write_text(text, encoding="utf-8")
     say(TAG, "mounted the run status row in the chat UI")
+
+
+# The thread sidebar renders one line per thread: the first human message. Upstream asks
+# for whole threads to get it, and whole threads here means the QuickJS heap snapshot —
+# `_quickjs_snapshot_payload`, up to 11 MB of base64 per thread and 118 MB of a measured
+# 125 MB response for 40 threads, all of it parsed in the browser before the list paints.
+# The server answers that in 0.2s; the wait is entirely the wire and the parse.
+#
+# `select` drops `values` from the response and `extract` pulls back the one message the
+# list needs, which is then reshaped into the `values.messages` shape the list already
+# reads — so `components/thread/history/index.tsx` stays untouched. Same 100 threads:
+# 125,523,841 bytes -> ~13 KB.
+#
+# Not a fix for this repo's agent so much as for any agent that keeps bytes in state; it
+# is upstream's code unchanged. `select` and `extract` are recent API additions, so the
+# call falls back to the plain search if the server rejects them.
+THREAD_SEARCH_OLD = """\
+    const threads = await client.threads.search({
+      metadata: {
+        ...getThreadSearchMetadata(resolvedAssistantId),
+      },
+      limit: 100,
+    });
+
+    return threads;
+"""
+
+THREAD_SEARCH_NEW = """\
+    // setup: the sidebar needs exactly one field of thread state — the first human
+    // message, for the title. Asking for all of `values` drags this agent's QuickJS
+    // heap snapshot down with it (125 MB for 40 threads, measured). See CLAUDE.md.
+    const query = {
+      metadata: {
+        ...getThreadSearchMetadata(resolvedAssistantId),
+      },
+      limit: 100,
+    };
+    let threads: Thread[];
+    try {
+      threads = await client.threads.search({
+        ...query,
+        select: ["thread_id", "created_at", "updated_at", "metadata", "status"],
+        extract: { first_message: "values.messages[0]" },
+      });
+    } catch {
+      // Older servers have neither `select` nor `extract`. Slow beats empty.
+      threads = await client.threads.search(query);
+    }
+
+    // Put the extracted message back where the thread list already looks for it.
+    return threads.map((t) =>
+      t.extracted?.first_message
+        ? ({ ...t, values: { messages: [t.extracted.first_message] } } as Thread)
+        : t,
+    );
+"""
+
+
+def patch_thread_search() -> None:
+    """Stop the thread sidebar downloading every thread's full state to render its titles."""
+    provider = chat_ui_dir() / "src" / "providers" / "Thread.tsx"
+    if not provider.is_file():
+        return
+    if _marked("thread-search"):
+        return
+    text = provider.read_text(encoding="utf-8")
+    if text.count(THREAD_SEARCH_OLD) != 1:
+        say(TAG, f"warning: {provider} is not the shape expected; left the thread search "
+                 "alone. The sidebar will download every thread's full state — slow to "
+                 "open, and slower the more threads there are. Missing anchor:")
+        print(THREAD_SEARCH_OLD)
+        return
+    provider.write_text(text.replace(THREAD_SEARCH_OLD, THREAD_SEARCH_NEW), encoding="utf-8")
+    say(TAG, "narrowed the chat UI's thread search to the fields the sidebar renders")
 
 
 def patch_app_name() -> None:
