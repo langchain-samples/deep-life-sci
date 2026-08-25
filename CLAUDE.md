@@ -38,10 +38,10 @@ triggers an install: setup does `.env`, `uv sync`, the snapshot and the frontend
 when already done; dev *verifies* them instead. Setup is the only thing that writes `.env`, so
 a new required setting needs a prompt there plus a line in `.env.example`.
 
-Python rather than shell because Windows users run them directly, and a port check, a browser
-and killing a process tree have no portable shell spelling. `setup_deep_life_sci`/`run_deep_life_sci`
-are thin macOS/Linux shims whose one irreplaceable job is installing uv; `.gitattributes` pins
-their line endings, since a CRLF checkout breaks a shebang. Preflight therefore lives in
+Python rather than shell, so every platform runs the same command: a port check, a browser and
+killing a process tree have no portable shell spelling. Two bash shims used to wrap these for
+macOS/Linux; both are gone, because the only thing neither Python nor the user could do was
+install uv, and installing uv is now a documented step in `README.md`. Preflight lives in
 `_common.require_setup` and `cli.py:run`, so it applies on every platform.
 
 `dev.py` reuses either port already listening and opens `:3000?hideToolCalls=true` once it

@@ -3,6 +3,8 @@ name = "deep-life-sci"
 version = "0.1.0"
 description = "A Deep Agents research assistant for life scientists: PubMed/PMC search, subagent fan-out, and sandboxed analysis"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.4",

@@ -1,7 +1,6 @@
-# The launcher scripts are bash and are executed as bash, including under WSL2 and Git
-# Bash on Windows. A CRLF checkout breaks them at the shebang — `\r` becomes part of the
-# interpreter name — so their line endings are pinned regardless of core.autocrlf.
+# Any shell script added here is run as bash, including under WSL2 and Git Bash on
+# Windows, where a CRLF checkout breaks it at the shebang — `\r` becomes part of the
+# interpreter name. There are none left, but the pin costs nothing and that failure is
+# obscure enough to be worth pre-empting.
 * text=auto
 *.sh text eol=lf
-setup_deep_life_sci text eol=lf
-run_deep_life_sci text eol=lf

@@ -17,7 +17,7 @@ wheels/
 # run looks fine and the chart is just absent.
 ui/node_modules/
 
-# The chat frontend `./setup_deep_life_sci` clones. A checkout of someone else's repo,
+# The chat frontend `scripts/setup.py` clones. A checkout of someone else's repo,
 # vendored here only so the UI needs no directory outside this one — also in
 # .dockerignore, or a dev-only Next app ships inside the deploy image.
 .chat-ui/
