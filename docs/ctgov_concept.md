@@ -338,7 +338,7 @@ would catch a bad projection.
 | `research_agent/prompts/__init__.py` | re-export |
 | `evals/datasets/default.yaml` | 2–3 seeds |
 | `docs/demo_questions.md` | remove the ClinicalTrials.gov exclusion |
-| `CLAUDE.md` | the rate-limit invariant, at minimum |
+| `research_agent/sources/CLAUDE.md` | the rate-limit invariant, at minimum |
 
 **Not touched:** `sandbox.py`, `models.py`, `middleware/`, `runner.py`, `graph.py`,
 `cli.py`. CTG is a pure host-side HTTP source with no sandbox involvement — no figures, no

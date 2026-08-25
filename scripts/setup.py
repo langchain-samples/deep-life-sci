@@ -301,7 +301,7 @@ def patch_next_config() -> None:
 DEV_INDICATOR = """\
   // setup: this app is run by end users through `uv run scripts/dev.py`, so Next's dev
   // overlay button in the bottom-left corner is chrome for a toolchain they are not being
-  // asked to think about. See CLAUDE.md.
+  // asked to think about. See scripts/CLAUDE.md.
   devIndicators: false,
 """
 
@@ -426,7 +426,7 @@ EMPTY_TURN_GUARD = """
   // setup: an AI turn that is only thinking + tool_use renders no content of its own, but
   // its hover CommandBar is opacity-0 rather than absent and still occupies its row. A run
   // here is dozens of such turns, so unpatched the first visible output sits about a
-  // screenful below the question. See CLAUDE.md.
+  // screenful below the question. See scripts/CLAUDE.md.
   const hasCustomComponents = !!thread.values.ui?.some(
     (ui) => ui.metadata?.message_id === message?.id,
   );
@@ -488,7 +488,7 @@ UPLOAD_HEADER_REFUSED = """\
 // setup: nothing is accepted yet. An attachment reaches the model as context and never
 // reaches the sandbox, so a CSV cannot be computed over — which is the only upload worth
 // having here. Emptying the list routes every attempt into the toast below, which says so
-// rather than listing types the agent has no use for. See CLAUDE.md.
+// rather than listing types the agent has no use for. See scripts/CLAUDE.md.
 export const SUPPORTED_FILE_TYPES: string[] = [];
 
 export const UNSUPPORTED_FILE_TITLE = "Attachments aren't supported yet";
@@ -500,7 +500,7 @@ UPLOAD_HEADER = """\
 // setup: CSV/TSV/xlsx only. Those are the attachments the agent can do something with —
 // they do not stay in model context, `research_agent/middleware/uploads.py` moves them into
 // the sandbox at /workspace/uploads and keeps them there across turns. An image or a PDF
-// would be context and nothing else, so both stay refused. See CLAUDE.md.
+// would be context and nothing else, so both stay refused. See scripts/CLAUDE.md.
 export const SUPPORTED_FILE_TYPES: string[] = [...SPREADSHEET_TYPES];
 
 // Every call site below tests these rather than the list, because a MIME-only check rejects

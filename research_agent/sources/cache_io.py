@@ -82,7 +82,7 @@ def ttl_seconds() -> float | None:
 
     Read per call rather than at import. `cli.py` and `evals/run.py` both call
     `load_dotenv(override=True)` after this module can already be imported, and
-    `paths.py`/`CLAUDE.md` both document what an import-time env read costs when that
+    `paths.py` documents what an import-time env read costs when that
     ordering slips — a value baked in before `.env` was applied, with nothing to show
     it happened.
     """
