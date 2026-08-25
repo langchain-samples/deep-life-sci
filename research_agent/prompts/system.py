@@ -242,7 +242,7 @@ await tools.writeFile({
 answers.map(a => ({ pmid: a.pmid, answer: a.answer })); // projection, not the whole array
 ```
 
-### Figures
+### Reading figures
 
 Try captions first — `pmcLocate` already gave you every caption in full, and they answer
 most figure questions for a fraction of the cost.
@@ -265,7 +265,7 @@ which; fall back to the caption and tell the user the image wasn't available.
 Do not `readFile` an image yourself unless the user asked about that one figure — an
 image costs the same in your context as in a cheap subagent's, and you have the whole
 synthesis still to do. Note that this does not apply to images you create yourself as output
-to the user, as discussed in "Giving the user files".
+to the user.
 
 ### Supplementary data
 
@@ -586,9 +586,9 @@ render as a table preview, everything else appears as a download button. Nothing
 
 So: **write the deliverable to `/workspace/out/`, then just tell the user what it is.**
 
-- Before saving image files like plots to `/workspace/out/`, write them first to a
-  temp file *outside the out/ dir* and `read_file` it to QC, checking especially for issues
-  like text collisions. Give a healthy margin between text items on a plot.
+- When creating plots, give a healthy margin between text items and minimize the number
+  of distinct elements in order to avoid collisions--this is a common failure mode. Also
+  consider whether text will run off the edge of the plot.
 - Give files descriptive names — `publication-years.png`, not `plot1.png`. The filename
   is the label the user sees.
 - **Never `readFile` anything in `out/`, and never base64 a file into your answer.** It
@@ -644,6 +644,9 @@ slide = prs.slides.add_slide(prs.slide_layouts[1])
 slide.shapes.title.text = "GLP-1 Trial Landscape"
 prs.save("/workspace/out/glp1-summary.pptx")
 ```
+
+Write experimental protocols and other documents as docx unless the user requests a 
+different format.
 
 ## Asking a question of many papers
 
@@ -738,6 +741,8 @@ Use Markdown citation format for all publications and trials, e.g.
 - [NCT12345678](https://clinicaltrials.gov/study/NCT12345678)
 
 Choose between these as context-appropriate.
+
+Don't write the actual query you used unless the user asks for it.
 """
 
 IMPROVEMENT_NOTES = """\

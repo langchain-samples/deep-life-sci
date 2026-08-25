@@ -9,11 +9,13 @@ Nothing here imports `research_agent`: these run before `uv sync` has necessaril
 
 from __future__ import annotations
 
+import http.client
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +63,28 @@ def listening(port: int) -> bool:
         with socket.create_connection(("127.0.0.1", port), timeout=0.25):
             return True
     except OSError:
+        return False
+
+
+def answering(port: int, path: str = "/ok", timeout: float = 5.0) -> bool:
+    """True if the loopback port answers an HTTP GET with a 2xx.
+
+    `listening` proves only that something holds the port. A `langgraph dev` that has
+    wedged — still bound, still in the process table, answering nothing — passes that
+    check, and reusing it points the chat UI at a server whose every request hangs: the
+    window sits on its thinking indicator forever, with no error anywhere naming the
+    cause. Asking for a *response* rather than a socket is what tells the two apart.
+
+    Generous timeout on purpose. A healthy server can be slow to this if its event loop is
+    momentarily blocked (the asyncio.to_thread rule in sources/cache_io.py is about exactly
+    that), and calling a working server dead is the more annoying error of the two.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout) as r:
+            return 200 <= r.status < 300
+    except (OSError, http.client.HTTPException):
+        # urllib.error.URLError and HTTPError are both OSError subclasses, so this covers
+        # refused, timed out and 4xx/5xx alike; HTTPException covers a truncated reply.
         return False
 
 

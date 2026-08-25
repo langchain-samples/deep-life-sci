@@ -9,9 +9,10 @@ side carrying the `/ui/*` rewrite that lets artifact components load at all (see
 same-origin invariant in CLAUDE.md). Running only one gets you an API with no window, or a
 window pointed at nothing.
 
-A server already listening on its port is left alone and reused, so this is safe to run
+A server already serving on its port is left alone and reused, so this is safe to run
 alongside a `langgraph dev` you started yourself. Only what this script starts is what it
-stops.
+stops — including the wedged case: a server that holds :2024 without answering is reported,
+never killed, because it is not ours to kill.
 
 Python rather than bash because this is the one command Windows users cannot avoid, and
 the three things it needs — a port check, a browser, and killing a process tree on Ctrl-C —
@@ -31,7 +32,16 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _common import REPO_ROOT, chat_ui_dir, die, listening, require_setup, say, tool
+from _common import (
+    REPO_ROOT,
+    answering,
+    chat_ui_dir,
+    die,
+    listening,
+    require_setup,
+    say,
+    tool,
+)
 from setup import apply_patches, ensure_overlay, unapplied_patches
 
 # `hideToolCalls` is a nuqs query param, so opening the tab with it set is a default
@@ -168,6 +178,15 @@ def main() -> int:
                        "starting anyway — see the messages above.")
 
     if listening(2024):
+        # Reused only if it *answers*. `langgraph dev` can wedge — bound to the port, alive
+        # in the process table, serving nothing — and a port check adopts that as a working
+        # server: every request from the chat UI then hangs, so the window shows its
+        # thinking indicator forever with no error to explain it. Not killed, because this
+        # script stops only what it started and :2024 may be a server of yours.
+        if not answering(2024):
+            say("dev", ":2024 is held by a server that is not responding.")
+            die("dev", 'stop it and run this again:  pkill -f "langgraph dev"   '
+                       '(add -9 if it survives; Windows: taskkill /F /IM langgraph.exe)')
         say("dev", ":2024 already serving — reusing it")
     else:
         # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies
