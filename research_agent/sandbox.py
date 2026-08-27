@@ -48,6 +48,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -56,7 +57,12 @@ from deepagents.backends import LangSmithSandbox
 from deepagents.backends.protocol import ExecuteResponse
 from langsmith.sandbox import SandboxClient, SandboxConnectionError
 
-from research_agent.paths import IDLE_TTL_SECONDS, WORKSPACE
+from research_agent.paths import (
+    BOOT_TIMEOUT_SECONDS,
+    DELETE_AFTER_STOP_SECONDS,
+    IDLE_TTL_SECONDS,
+    WORKSPACE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +290,49 @@ def find_snapshot(client: SandboxClient) -> str | None:
     return next((s.name for s in snapshots if s.name == SNAPSHOT_NAME), None)
 
 
+def discard(client: SandboxClient, name: str) -> None:
+    """Tear down a container we asked for and will not use.
+
+    Best effort by necessity — every caller is already handling a failure, and a teardown
+    that raises would replace a clear error with a confusing one. IDLE_TTL_SECONDS and
+    DELETE_AFTER_STOP_SECONDS are the backstop when it fails, which is why both are set
+    at creation rather than here.
+    """
+    try:
+        client.delete_sandbox(name)
+    except Exception as exc:  # noqa: BLE001 - never created, already gone, or API down
+        print(f"[sandbox] could not delete {name} after a failed boot: {exc}")
+
+
+def boot(client: SandboxClient, snapshot: str | None, name: str) -> Any:
+    """Bring up a container under `name`, within BOOT_TIMEOUT_SECONDS, or raise.
+
+    Creating and waiting are split so the boot has a ceiling we enforce. Asking
+    `create_sandbox` to wait gives us neither half of that: its `timeout` is a server-side
+    hint (a 1s budget still returned ready at 2.9s), and if its read times out the
+    container still comes up — under a name we chose, holding a lease we are no longer
+    tracking.
+
+    Booting without waiting cannot leak: the name is ours from the first call, and
+    `delete_sandbox` is keyed by name, so anything that comes up is reachable whether or
+    not we ever saw its id.
+    """
+    client.create_sandbox(
+        snapshot_name=snapshot,
+        name=name,
+        wait_for_ready=False,
+        idle_ttl_seconds=IDLE_TTL_SECONDS,
+        delete_after_stop_seconds=DELETE_AFTER_STOP_SECONDS,
+    )
+    try:
+        return client.wait_for_sandbox(name, timeout=BOOT_TIMEOUT_SECONDS)
+    except Exception:
+        # Raised to the caller, but not before the container is gone. A boot this slow is
+        # reported, never absorbed — see BOOT_TIMEOUT_SECONDS.
+        discard(client, name)
+        raise
+
+
 def provision(sandbox: Any) -> None:
     """Install the scientific Python stack into a sandbox that didn't ship with it."""
     t0 = time.monotonic()
@@ -334,7 +383,11 @@ async def sandbox_session(*, quiet: bool = False):
         )
 
     t0 = time.monotonic()
-    with client.sandbox(snapshot_name=snapshot, idle_ttl_seconds=IDLE_TTL_SECONDS) as sandbox:
+    # Named by us rather than by the server, for the same reason `graph.py` names its
+    # own: a create whose response we never see is still a container we can delete.
+    name = f"pubmed-run-{uuid.uuid4().hex[:16]}"
+    sandbox = boot(client, snapshot, name)
+    try:
         if not quiet:
             print(f"[sandbox] up in {time.monotonic() - t0:.1f}s ({snapshot or 'base image'})")
         if snapshot is None:
@@ -344,3 +397,5 @@ async def sandbox_session(*, quiet: bool = False):
             yield backend
         finally:
             await backend.aclose()
+    finally:
+        discard(client, name)

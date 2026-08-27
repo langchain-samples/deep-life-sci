@@ -5,10 +5,12 @@
 and the second turn has to see the files the first turn wrote. So the sandbox is keyed
 to the thread and reused across turns.
 
-Lifetime is handled by the server side rather than by us: `idle_ttl_seconds` deletes a
-sandbox that has gone quiet, which is the only cleanup that survives the process being
-killed. We never explicitly delete one, because "the user might come back to this
-thread" is true right up until it isn't.
+Lifetime is handled by the server side rather than by us, which is the only cleanup that
+survives the process being killed. It takes both TTLs: `idle_ttl_seconds` **stops** a
+sandbox that has gone quiet, and `delete_after_stop_seconds` is what finally removes it.
+Stopping alone is not enough — a stopped sandbox still pins the snapshot it booted from,
+so threads accumulate until a snapshot rebuild fails. We never explicitly delete one,
+because "the user might come back to this thread" is true right up until it isn't.
 
 Point a chat UI at this — `uv run scripts/dev.py` starts both halves, or by hand:
 
@@ -38,10 +40,10 @@ from langsmith.sandbox import SandboxClient
 
 from research_agent.agent import build_agent
 from research_agent.middleware.perf import install_logging
-from research_agent.paths import IDLE_TTL_SECONDS
 from research_agent.sandbox import (
     SNAPSHOT_NAME,
     ResilientSandbox,
+    boot,
     find_snapshot,
     provision,
 )
@@ -74,11 +76,7 @@ def _acquire(thread_id: str):
 
     if sandbox is None:
         snapshot = find_snapshot(_client)
-        sandbox = _client.create_sandbox(
-            snapshot_name=snapshot,
-            name=name,
-            idle_ttl_seconds=IDLE_TTL_SECONDS,
-        )
+        sandbox = boot(_client, snapshot, name)
         if snapshot is None:
             # No snapshot: pay the ~95s install once for this thread's sandbox.
             print(

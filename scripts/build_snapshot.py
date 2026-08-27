@@ -101,7 +101,13 @@ VERIFY = (
 
 
 def main() -> None:
-    client = SandboxClient()
+    # 300s rather than the SDK's 10s default. `capture_snapshot` takes a `timeout`, but
+    # it governs only the ready-poll *after* the POST — the POST itself is left on the
+    # client default, and capture is well over 10s now that the platform compacts
+    # snapshots. That matters more than it sounds: the delete below runs first, so a
+    # capture that times out leaves no snapshot at all, and every run then falls back
+    # to the ~95s runtime install.
+    client = SandboxClient(timeout=300.0)
 
     for existing in client.list_snapshots(name_contains=SNAPSHOT_NAME):
         if existing.name == SNAPSHOT_NAME:

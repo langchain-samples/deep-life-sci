@@ -49,13 +49,40 @@ CACHE_ROOTS = (ABSTRACT_CACHE, PMC_CACHE, CTGOV_CACHE)
 # How long an idle thing stays alive — both a sandbox container and a host cache entry.
 #
 # For the sandbox: it is deleted on context exit, but a `finally` doesn't survive SIGKILL
-# and billing doesn't care why the process died. This is the server-side backstop.
+# and billing doesn't care why the process died. This is the server-side backstop — but
+# only against *runtime*: an idle sandbox is **stopped**, not deleted. See
+# DELETE_AFTER_STOP_SECONDS below for the other half.
 #
 # For the cache: this is an *idle* TTL, refreshed on every hit (`cache_io`), so a thread
 # that keeps working keeps its corpus and a thread resumed tomorrow refetches. Tying the
 # two together is deliberate — past this window a returning thread finds neither its
 # container nor its cache, instead of a warm cache pointing into a container that is gone.
 IDLE_TTL_SECONDS = 600
+
+# How long a stopped sandbox is kept before the platform deletes it.
+#
+# Set explicitly because the platform default is 14 days, and a stopped sandbox still
+# pins the snapshot it booted from: 30 of them, one per thread, blocked
+# `build_snapshot.py` from replacing `pubmed-py-bio` with a 409 for a week. Bounding the
+# runtime with IDLE_TTL_SECONDS alone leaves that pileup.
+#
+# This is set at *creation*, which is what makes it the real guarantee. Anything we do on
+# the way out — a `finally`, an explicit delete — is lost precisely when it is needed: a
+# SIGKILL, or a `create_sandbox` whose read timed out while the container came up anyway.
+# 48h leaves a stopped thread recoverable for a working day either side of a weekend.
+DELETE_AFTER_STOP_SECONDS = 172_800
+
+# How long a container may take to boot before we give up on it.
+#
+# A slow boot is a failure, not something to wait out: the user is watching a spinner and
+# a snapshot that has stopped restoring quickly is a problem to surface, not absorb. The
+# platform's own compaction rollout took restores from 2.9s to 67s, which is what this
+# ceiling is calibrated against — comfortably above a healthy boot, far below a sick one.
+#
+# Enforced client-side by `wait_for_sandbox`. `create_sandbox(wait_for_ready=True)` cannot
+# do it: its `timeout` is a server-side hint (a 1s budget still returned ready at 2.9s),
+# and its read timeout leaves a container running under a handle we never received.
+BOOT_TIMEOUT_SECONDS = 30
 
 # Where the agent works inside the sandbox. Mirrored in the system prompt.
 WORKSPACE = "/workspace"
@@ -75,9 +102,11 @@ UPLOAD_DIR = f"{WORKSPACE}/uploads"
 
 __all__ = [
     "ABSTRACT_CACHE",
+    "BOOT_TIMEOUT_SECONDS",
     "CACHE_ROOTS",
     "CTGOV_CACHE",
     "DATA_DIR",
+    "DELETE_AFTER_STOP_SECONDS",
     "IDLE_TTL_SECONDS",
     "OUT_DIR",
     "PMC_CACHE",
