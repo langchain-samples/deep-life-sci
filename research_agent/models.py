@@ -40,6 +40,8 @@ Two quirks of the native path, both found the hard way:
 
 import os
 
+import httpx
+
 ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
 OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 
@@ -102,6 +104,37 @@ JUDGE_EFFORT = "low"
 #
 # The judge is pinned so that a score change is attributable to the pair under test rather
 # than to the grader. It was already luna, and stays there.
+
+# Per-socket deadlines on the root model's streaming call. Components, not a scalar:
+# the read timeout is the gap *between* chunks, not the whole request, so 10s is a
+# "no token for 10s" watchdog rather than a ceiling on a turn. A long turn streams fine.
+#
+# This is the same pathology SUBAGENT_TIMEOUT_SECONDS below was written for, on the one
+# role that never got the fix. langchain-openai forwards an unset timeout as a meaningful
+# None, so the SDK client ended up as `httpx.Timeout(timeout=None)` — no connect, read,
+# write or pool deadline at any layer — and a gateway that stopped responding was waited
+# on forever. Observed in thread 01a045c2-ff60-7b33-b5e5-bb62573052af: the run entered the
+# model node, opened one socket to the gateway, and sat there at 0% CPU with the socket in
+# CLOSE_WAIT (the peer had already sent FIN). The `model` node never returned and the
+# thread stayed `busy`, blocking every later turn on it.
+#
+# 10s is chosen against the measured gap distribution on this gateway, not by feel. Root
+# streaming, max inter-chunk gap: 0.39-0.64s over 10 short calls, 0.76-1.54s over 3 replays
+# of that thread's own 27-message payload. Worst observed anywhere is 1.54s, so this is
+# ~6.5x headroom. One 5.49s time-to-first-token outlier was seen in a separate batch and
+# never recurred in 10 samples, which is why this is 10 and not 5.
+#
+# The ~15s (worst 18.86s) origin tax noted under SUBAGENT_TIMEOUT_SECONDS does not appear
+# on the root path — root TTFT measured 0.32-1.54s — so it looks like a fan-out effect of
+# 18 concurrent calls rather than something every first call pays. If this does start
+# firing spuriously on the first call of a run, that is the reason: raise `read`, don't go
+# back to a scalar.
+#
+# max_retries stays at its default of 2, which covers request establishment: a stall
+# *before* the first token is retried transparently. A stall *after* the stream has opened
+# surfaces as an error instead, because partial tokens have already reached the UI. That is
+# a visible failure rather than a silent recovery — and still strictly better than a hang.
+ROOT_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 
 # Wall-clock ceiling on a single analyst request. Nothing else imposes one.
 #
@@ -311,7 +344,12 @@ def _model_for(role: str, **kwargs):
 
 
 def root_model(**kwargs):
-    """The orchestrating agent's model."""
+    """The orchestrating agent's model.
+
+    Timed out by default; see ROOT_TIMEOUT for why one is mandatory here and why it is a
+    component timeout rather than a scalar. An explicit `timeout=` from a caller wins.
+    """
+    kwargs.setdefault("timeout", ROOT_TIMEOUT)
     return _model_for("root", **kwargs)
 
 

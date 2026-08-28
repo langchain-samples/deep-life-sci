@@ -225,6 +225,7 @@ PATCH_MARKS = {
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
     "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
     "thread-search": ("src/providers/Thread.tsx", "first_message", True),
+    "cancel-on-stop": ("src/components/thread/index.tsx", "onDisconnect", True),
 }
 
 
@@ -261,6 +262,7 @@ def apply_patches() -> None:
     patch_progress_events()
     patch_progress_row()
     patch_thread_search()
+    patch_cancel_on_stop()
 
 
 REWRITE = """  // setup: artifact components load /ui/* from the page origin, so this proxy is
@@ -949,6 +951,81 @@ def patch_thread_search() -> None:
         return
     provider.write_text(text.replace(THREAD_SEARCH_OLD, THREAD_SEARCH_NEW), encoding="utf-8")
     say(TAG, "narrowed the chat UI's thread search to the fields the sidebar renders")
+
+
+# `stream.stop()` aborts the client's fetch and nothing else — `StreamManager.stop`
+# (ui/manager.js) calls `abortRef.abort()` and fires `onStop`, with no call to the runs
+# cancel endpoint. The server's own default for a dropped stream is `on_disconnect:
+# "continue"`, so pressing stop leaves the run executing, the thread `busy`, and every
+# later turn on that thread queued behind a run the user believes they killed. That is
+# what hid the missing ROOT_TIMEOUT: a hung model call read as "the UI is stuck".
+#
+# `onDisconnect` is a per-submit option, not a hook-level one, so it goes on each
+# `stream.submit` call rather than on `useTypedStream`.
+#
+# The cost is paid against `streamResumable: true`, which is here so a reload or a
+# backgrounded tab can rejoin a run in progress. "cancel" cannot tell a deliberate stop
+# from an accidental drop, so a refresh mid-run now ends that run instead of rejoining it.
+# For this agent that is the right trade — a run holds a sandbox and bills for it, and a
+# turn is minutes long, so an abandoned one is expensive in a way a lost rejoin is not.
+# The version that keeps both passes an explicit `runId` on submit and has the stop button
+# call `client.runs.cancel` with it, leaving disconnects on "continue"; do that instead if
+# rejoining turns out to matter more than reclaiming the container.
+CANCEL_ON_STOP_OLD = """      {
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        streamResumable: true,
+        optimisticValues: (prev) => ({"""
+
+CANCEL_ON_STOP_NEW = """      {
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        streamResumable: true,
+        // setup: stop() only aborts the client stream; without this the run keeps
+        // going server-side and the thread stays busy. See setup.py.
+        onDisconnect: "cancel",
+        optimisticValues: (prev) => ({"""
+
+CANCEL_ON_STOP_REGEN_OLD = """    stream.submit(undefined, {
+      checkpoint: parentCheckpoint,
+      streamMode: ["values"],
+      streamSubgraphs: true,
+      streamResumable: true,
+    });"""
+
+CANCEL_ON_STOP_REGEN_NEW = """    stream.submit(undefined, {
+      checkpoint: parentCheckpoint,
+      streamMode: ["values"],
+      streamSubgraphs: true,
+      streamResumable: true,
+      onDisconnect: "cancel",
+    });"""
+
+
+def patch_cancel_on_stop() -> None:
+    """Make the stop button actually cancel the run, not just the client's stream."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("cancel-on-stop"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    missing = [
+        old
+        for old in (CANCEL_ON_STOP_OLD, CANCEL_ON_STOP_REGEN_OLD)
+        if text.count(old) != 1
+    ]
+    if missing:
+        say(TAG, f"warning: {thread} is not the shape expected; left the stop button "
+                 "aborting only the client stream. A stopped run will keep executing and "
+                 "hold its thread busy. Missing anchor:")
+        for old in missing:
+            print(old)
+        return
+    text = text.replace(CANCEL_ON_STOP_OLD, CANCEL_ON_STOP_NEW)
+    text = text.replace(CANCEL_ON_STOP_REGEN_OLD, CANCEL_ON_STOP_REGEN_NEW)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, "wired the chat UI's stop button to cancel the run server-side")
 
 
 def patch_app_name() -> None:

@@ -21,7 +21,7 @@ and free of per-checkpoint cost:
   compute over it without retyping the file into `writeFile`.
 * **Graph state** — never enters context; this is how the `ui` key carries artifacts out.
   But state is re-serialised into every checkpoint, which is the cost
-  `artifacts.MAX_INLINE_BYTES` exists to bound. A 5 MB workbook would ride in every
+  `artifacts.MAX_INLINE_BYTES` exists to bound. A 15 MB workbook would ride in every
   checkpoint on the thread forever, and the thread would be slow to open for good.
 * **The store** — written once, read on the turns that need it. Postgres-backed in deploy,
   pickled to `.langgraph_api/store.pckl` under `langgraph dev`.
@@ -77,10 +77,13 @@ _REJECTED = {
     ".xls": "legacy .xls isn't readable here — re-save it as .xlsx and attach that",
 }
 
-# Below `artifacts.MAX_INLINE_BYTES` (8 MB) on purpose. That cap governs bytes leaving the
-# sandbox once; this one governs bytes sitting in a store row and being re-uploaded into a
-# container on every cold turn, which is the more expensive direction.
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+# Deliberately above `artifacts.MAX_INLINE_BYTES` (8 MB), which is a different direction and
+# a different cost: that one bounds bytes leaving the sandbox into graph state once, this one
+# bounds bytes sitting in a store row and being re-uploaded into a container on every cold
+# turn. Raising it is not free — an attachment arrives base64'd on the human message, so 15 MB
+# is ~20 MB in the input checkpoint and ~20 MB in a Postgres jsonb row, times up to
+# `MAX_FILES_PER_THREAD`. It is a ceiling on what we accept rather than a size to design for.
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 # A wide frame's column list is real context cost for diminishing return; past this the
 # count of what was elided is enough for the model to know to inspect the rest itself.

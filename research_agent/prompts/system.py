@@ -545,7 +545,7 @@ out; // the printed output, as a string
   ```
 
   A script in a file fails with a line number — **fix that line with `tools.editFile`.
-  Never rewrite a script to change part of it.**
+  Never rewrite a script to change part of it.
 - Whichever form you use, the script sits inside a JS template literal, so **JavaScript
   eats backslashes before Python ever sees them**: `"a\\nb"` in your `eval` arrives as a
   real line break and Python dies with `unterminated string literal`. Write `\\\\n` for a
