@@ -6,6 +6,7 @@ reports is the `eval` itself rather than the artifact sweep that follows it.
 """
 
 from research_agent.middleware.artifacts import ArtifactMiddleware
+from research_agent.middleware.cadence import UpdateCadence
 from research_agent.middleware.perf import LoopLagProbe, install_logging
 
-__all__ = ["ArtifactMiddleware", "LoopLagProbe", "install_logging"]
+__all__ = ["ArtifactMiddleware", "LoopLagProbe", "UpdateCadence", "install_logging"]

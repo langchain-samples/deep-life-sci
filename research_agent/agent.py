@@ -27,6 +27,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_quickjs import CodeInterpreterMiddleware
 
 from research_agent.middleware.artifacts import ArtifactMiddleware
+from research_agent.middleware.cadence import UpdateCadence
 from research_agent.middleware.perf import LoopLagProbe
 from research_agent.middleware.progress import with_progress
 from research_agent.middleware.uploads import UploadMiddleware
@@ -134,6 +135,10 @@ def build_agent(backend):
             # strips the upload payload out of the human message, which has to happen
             # before the first model call rather than before the first tool call.
             UploadMiddleware(backend),
+            # Nothing below the tool boundary can prompt the model — one `eval` runs for
+            # minutes with no turn boundary in it — so this reports the silence at the
+            # next moment the model can actually speak. See middleware/cadence.py.
+            UpdateCadence(),
             CodeInterpreterMiddleware(
                 # Tools reach JS camelCased: pubmed_search -> tools.pubmedSearch.
                 # `execute` is what lets one eval call finish a whole analysis.
