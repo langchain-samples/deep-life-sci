@@ -22,7 +22,12 @@ assembly serve three different sandbox lifetimes — `cli.py`'s single block, `g
 thread-keyed container, and `evals/`'s per-example throwaway. See `sandbox.py`.
 """
 
-from deepagents import create_deep_agent
+from deepagents import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_quickjs import CodeInterpreterMiddleware
 
@@ -106,6 +111,36 @@ def build_agent(backend):
             "tools": [],
             "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
         }
+
+    # deepagents auto-adds a `general-purpose` subagent (graph.py:751) built with
+    # `"model": model` — the *root* model object, ROOT_TIMEOUT and all — plus the
+    # unrestricted default filesystem, `execute` included. Both halves are wrong here:
+    #
+    # * ROOT_TIMEOUT's `read=10.0` is an inter-chunk watchdog, safe only because the root
+    #   streams. A subagent's inner agent calls non-streaming, so the same 10s becomes a
+    #   ceiling on the whole response. In trace 01a04aca-c0cf-7a21-9db6-ae9180cefcd0 that
+    #   was three attempts at ~10s, then APITimeoutError — 31.7s spent to fail a
+    #   ClinicalTrials.gov triage `trial-analyst` would have finished.
+    # * The unrestricted toolset is the same hazard `analyst_leaf` exists to close.
+    #
+    # Nothing here should ever route to it: over the project's whole history it has taken
+    # 106 dispatches against `trial-analyst`'s zero, and the ctgov work it absorbed is
+    # exactly what the leaves are for.
+    #
+    # Registration is keyed by provider or `provider:model`, and we hand `create_deep_agent`
+    # a pre-built model, so the lookup falls back to the bare provider key. Both providers
+    # are registered because ROOT_PROVIDER is an env axis (models.py:ENV_VARS) and a
+    # profile keyed to today's default would silently stop applying after a swap. The
+    # registry is process-global, so this also covers any other deepagents agent built on
+    # these providers in the same process — `graph.py` builds only ours.
+    #
+    # The `task` tool survives this: it disappears only when no synchronous subagents
+    # remain, and the four leaves below are synchronous.
+    _NO_GENERAL_PURPOSE = HarnessProfile(
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
+    )
+    for _provider in ("openai", "anthropic"):
+        register_harness_profile(_provider, _NO_GENERAL_PURPOSE)
 
     agent = create_deep_agent(
         model=root_model(),
