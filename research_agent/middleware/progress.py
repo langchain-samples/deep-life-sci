@@ -68,26 +68,6 @@ STARTED: dict[str, Callable[[dict], str]] = {
 }
 
 
-def _summary(result: Any) -> str | None:
-    """How the call went, from the shapes the source tools actually return.
-
-    Deliberately partial: a tool whose result says nothing countable gets no completion
-    event and its start line simply stands until the next call replaces it.
-    """
-    if not isinstance(result, dict):
-        return None
-    # Both searches report the size of the whole result set, not just the page returned,
-    # and that total is the interesting number ("2,140 hits, 50 returned").
-    if isinstance(result.get("count"), int):
-        returned = result.get("returned")
-        hits = f"{result['count']:,} hits"
-        return f"{hits}, {returned} returned" if isinstance(returned, int) else hits
-    for key in ("records", "available"):
-        if isinstance(result.get(key), (list, dict)):
-            return f"{len(result[key])} retrieved"
-    return None
-
-
 def _emit(text: str) -> None:
     """Best-effort. No writer is configured under `uv run agent` or in evals."""
     try:
@@ -125,11 +105,7 @@ def _wrap(tool: BaseTool) -> BaseTool:
         except Exception:  # noqa: BLE001 - a label is never worth failing a fetch over
             started = f"Running {tool.name}"
         _emit(started)
-        result = await inner(*args, **kwargs)
-        done = _summary(result)
-        if done:
-            _emit(f"{started} — {done}")
-        return result
+        return await inner(*args, **kwargs)
 
     # A copy rather than a subclass: the name, description and args schema are what PTC
     # renders into the JS signature block and what it inspects for injected arguments, so
