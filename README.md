@@ -12,6 +12,7 @@ In the terminal:
 
 ```bash
 git clone https://github.com/mcunningham1440/deep-life-sci.git
+
 cd deep-life-sci
 ```
 
@@ -52,6 +53,8 @@ from [Settings](https://smith.langchain.com/settings), which are **not** interch
 
 ```bash
 uv run scripts/dev.py                        # opens the chat UI in your browser (recommended)
+
+# or
 
 uv run agent "which papers base-edit PCSK9?" # runs headlessly in CLI
 ```
