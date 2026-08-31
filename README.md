@@ -39,25 +39,12 @@ uv run scripts/setup.py
 
 ### 4. Add your API key
 
-You need a [LangSmith](https://smith.langchain.com) account. Setup prompts for a single
-key from [Settings](https://smith.langchain.com/settings) — `LANGSMITH_API_KEY` — which
-covers model calls, tracing and provisioning the sandbox.
+You need a [LangSmith](https://smith.langchain.com) account. Setup will prompt you to add
+your `LANGSMITH_API_KEY`.
 
 Model calls go through the LangSmith LLM gateway, so your workspace also needs the
 provider key behind them, added once under **Settings → Integrations → Provider Secrets**
-as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run
-use; the shipped defaults are OpenAI. Your own provider key never goes in `.env` — the
-gateway resolves it workspace-side and rejects one sent from a client.
-
-<details>
-<summary>Billing model calls to a different key</summary>
-
-Setup writes your key to `LANGSMITH_GATEWAY_API_KEY` as well, and that one is what the
-gateway authenticates with. Point it at a different workspace-scoped key (it needs the
-`gateway:invoke` permission) to bill model calls separately from tracing. Setup never
-overwrites a value that is already there, so the edit survives later runs.
-
-</details>
+as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
 
 `ROOT_MODEL=claude-sonnet-5` in front of either command below swaps a model (see
 `research_agent/models.py`).
