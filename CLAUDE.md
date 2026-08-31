@@ -48,11 +48,13 @@ setup on every run, with our own components in `chat-ui-overlay/`. **See
 
 ## Environment
 
-`scripts/setup.py` writes `.env`. Two LangSmith keys, not interchangeable:
-**`LANGSMITH_GATEWAY_API_KEY`** is the gateway *service* key (`lsv2_sk_...`) every model
-call is billed under, whatever provider the id names; `LANGSMITH_API_KEY` is the personal
-key, for tracing and sandboxes. The gateway key was `OPENAI_API_KEY` until the rename;
-setup migrates an existing `.env`, and that can go once no clone predates it.
+`scripts/setup.py` writes `.env`. **One LangSmith key**, prompted for once and written to
+both names that read it: `LANGSMITH_API_KEY` (tracing, sandboxes, fallback for models) and
+`LANGSMITH_GATEWAY_API_KEY` (model calls; `models.py:gateway_key()` is the order). Same value
+unless hand-edited to bill models under another workspace-scoped key — setup only fills it
+when empty, so that edit survives. The gateway takes a **LangSmith** key, never a provider
+key: an OpenAI/Anthropic key lives workspace-side under Settings → Integrations → Provider
+Secrets, and one sent from a client gets a 403 (verified).
 
 Model env var names live in `models.py:ENV_VARS`, imported by `cli.py` and `evals/run.py`. A
 new axis is preserved by adding it *there and nowhere else* — a hand-copied list is how a

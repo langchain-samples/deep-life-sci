@@ -1,10 +1,17 @@
 """Model construction via the LangSmith LLM gateway, with switchable providers.
 
-Follows the intro-to-langsmith pattern: gateway compute is authenticated by
-LANGSMITH_GATEWAY_API_KEY (the `lsv2_sk_...` gateway *service* key), while
-LANGSMITH_API_KEY stays dedicated to tracing. The gateway key is what the OpenAI SDK
-would call an api_key, so it is passed explicitly rather than through the environment —
-nothing here reads OPENAI_API_KEY, and a real OpenAI key is never what this wants.
+Model calls authenticate with a **LangSmith** key, never a provider key. The gateway
+resolves the actual OpenAI/Anthropic credential from the workspace's Provider Secrets
+(Settings -> Integrations), so a real `sk-...` is rejected with a 403 before it reaches
+any provider — nothing here reads OPENAI_API_KEY, and one LangSmith key covers models,
+tracing and sandboxes alike.
+
+`LANGSMITH_GATEWAY_API_KEY` is therefore an override rather than a second required key:
+it falls back to LANGSMITH_API_KEY, and differs only when model calls should bill under a
+different workspace-scoped key (which must carry `gateway:invoke`) than the one doing the
+tracing. `scripts/setup.py` prompts once and writes both, so setting them apart is a hand
+edit that later setup runs leave alone. Either way the key is what the OpenAI SDK would
+call an api_key, so it is passed explicitly rather than through the environment.
 
 Each role is configured by three independent env vars, defaulting to the nine constants
 below:
@@ -196,6 +203,19 @@ ENV_VARS = tuple(
 )
 
 
+def gateway_key() -> str:
+    """The LangSmith key model calls authenticate with: the override, else the main one.
+
+    See the module docstring for why these are one key by default. Whitespace reads as
+    unset so a `LANGSMITH_GATEWAY_API_KEY=` left empty in .env falls through rather than
+    authenticating as the empty string.
+    """
+    return (
+        os.environ.get("LANGSMITH_GATEWAY_API_KEY", "").strip()
+        or os.environ.get("LANGSMITH_API_KEY", "").strip()
+    )
+
+
 def check_gateway_config() -> None:
     """Fail immediately and legibly when the gateway isn't configured.
 
@@ -203,13 +223,15 @@ def check_gateway_config() -> None:
     'Could not resolve authentication method', which is easy to mistake for a
     problem in the agent itself.
     """
-    if not os.environ.get("LANGSMITH_GATEWAY_API_KEY"):
+    if not gateway_key():
         raise SystemExit(
-            "LANGSMITH_GATEWAY_API_KEY is not set.\n\n"
-            "Every model call goes through the LangSmith LLM gateway, so this is the "
-            "gateway service key (starts with 'lsv2_sk_'). Add it to .env — see "
-            ".env.example. (It was called OPENAI_API_KEY before; `uv run "
-            "scripts/setup.py` renames it in an existing .env.)"
+            "LANGSMITH_API_KEY is not set.\n\n"
+            "Every model call goes through the LangSmith LLM gateway, which authenticates "
+            "with your LangSmith key (starts with 'lsv2_') and resolves the provider "
+            "credential from your workspace's Provider Secrets — a provider key of your "
+            "own is not what this wants. Run `uv run scripts/setup.py`, or add it to .env "
+            "by hand; see .env.example. (LANGSMITH_GATEWAY_API_KEY overrides it, for "
+            "billing model calls under a different workspace-scoped key.)"
         )
 
 
@@ -311,7 +333,7 @@ def _resolve(role: str) -> tuple[str, str, str]:
 
 def _build(model: str, provider: str, **kwargs):
     check_gateway_config()
-    key = os.environ["LANGSMITH_GATEWAY_API_KEY"]
+    key = gateway_key()
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

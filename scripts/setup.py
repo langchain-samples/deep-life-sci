@@ -1,11 +1,11 @@
 """One-time setup. Run this once per clone, then ask questions with the chat UI.
 
-    uv run scripts/setup.py          # prompt for the two API keys, install everything
+    uv run scripts/setup.py          # prompt for the API key, install everything
     uv run scripts/setup.py --yes    # never prompt; for CI and containers
 
 Four steps, in the order they depend on each other:
 
-    1. .env        — two API keys, prompted for and written here
+    1. .env        — the LangSmith API key, prompted for and written here
     2. uv sync     — the virtualenv
     3. a snapshot  — sandbox image with the scientific Python stack baked in
     4. the chat UI — the frontend, and the deps for the components it renders
@@ -75,9 +75,10 @@ def ask_key(key: str, prompt: str, prefix: str) -> None:
         reply = "".join(input(f"[{TAG}] {prompt}: ").split())
         if not reply:
             continue
-        # A wrong-but-plausible key is the failure this catches: the two LangSmith keys
-        # differ only in their prefix, and the wrong one dies deep in the SDK at the first
-        # model call. Queried rather than rejected — key formats belong to LangSmith.
+        # A wrong-but-plausible key is the failure this catches: a provider key pasted
+        # here looks right and dies deep in the SDK at the first model call, because the
+        # gateway takes only a LangSmith key. Queried rather than rejected — key formats
+        # belong to LangSmith.
         if prefix and not reply.startswith(prefix):
             say(TAG, f"that doesn't start with '{prefix}' — see the note in .env.example.")
             if not input(f"[{TAG}] use it anyway? [y/N] ").strip().lower().startswith("y"):
@@ -113,6 +114,31 @@ def migrate_gateway_key() -> None:
     say(TAG, "renamed OPENAI_API_KEY to LANGSMITH_GATEWAY_API_KEY in .env")
 
 
+def ensure_langsmith_key() -> None:
+    """One LangSmith key, prompted for once and written to both names that read it.
+
+    `LANGSMITH_API_KEY` authenticates tracing and sandbox provisioning;
+    `LANGSMITH_GATEWAY_API_KEY` authenticates model calls at the LLM gateway. For almost
+    everyone that is the same key, because the gateway takes a *LangSmith* key and resolves
+    the provider credential from the workspace's Provider Secrets — a real `sk-...` is
+    rejected with a 403 before it reaches a provider. Asking twice for one value was the
+    most confusing thing in setup.
+
+    Written to two names rather than one because the gateway key is a documented override:
+    a workspace-scoped key carrying `gateway:invoke` can bill model calls somewhere other
+    than the personal key doing the tracing. Editing `LANGSMITH_GATEWAY_API_KEY` in .env by
+    hand is how that is done, and it is only ever filled in when empty, so a hand-edited
+    one survives every later `setup.py`.
+    """
+    ask_key(
+        "LANGSMITH_API_KEY",
+        "LangSmith API key, for models, tracing and sandboxes (lsv2_...)",
+        "lsv2_",
+    )
+    if not env_value("LANGSMITH_GATEWAY_API_KEY"):
+        set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
+
+
 def ensure_env() -> None:
     fresh = not ENV_FILE.exists()
     if fresh:
@@ -121,19 +147,7 @@ def ensure_env() -> None:
     else:
         migrate_gateway_key()
 
-    # Two keys, both from LangSmith (https://smith.langchain.com/settings), and easy to mix
-    # up: model calls are billed and authenticated as *gateway* compute under a service
-    # key, while tracing and sandbox provisioning use the personal API key.
-    ask_key(
-        "LANGSMITH_GATEWAY_API_KEY",
-        "LangSmith gateway service key for model calls (lsv2_sk_...)",
-        "lsv2_sk_",
-    )
-    ask_key(
-        "LANGSMITH_API_KEY",
-        "LangSmith API key for tracing and sandboxes (lsv2_pt_...)",
-        "lsv2_",
-    )
+    ensure_langsmith_key()
 
     # Only on a first run: these are genuinely optional, so re-asking every time would be
     # nagging someone who already decided to skip them.
@@ -229,6 +243,16 @@ HOME_HEADING_NEW = '<div className="flex flex-col items-center gap-3">'
 LOGO_VIEWBOX_OLD = 'viewBox="0 0 3000 554"'
 LOGO_VIEWBOX_NEW = 'viewBox="0 0 488 488"'
 
+# The header logo, sized to the icons it sits between. Cropping the viewBox turned what was a
+# 32px-wide smudge into a 32px *square* mark, which then towered over the 20px panel toggle on
+# one side and the name on the other. Its own patch rather than part of `patch_logo_mark`:
+# a different file, and a clone already carrying the crop still picks this up.
+HEADER_LOGO_OLD = """<LangGraphLogoSVG
+                    width={32}
+                    height={32}
+                  />"""
+HEADER_LOGO_NEW = HEADER_LOGO_OLD.replace("{32}", "{20}")
+
 # The product mark beside the name, in the header and on the home screen alike — not the
 # browser tab or the setup form, where it would read as decoration in a sentence. An inline
 # SVG (`chat-ui-overlay/components/icons/flask.tsx`) rather than the U+1F9EA TEST TUBE it
@@ -262,6 +286,7 @@ PATCH_MARKS = {
     "dev-indicator": ("next.config.mjs", "devIndicators", True),
     "svg": ("src/components/icons/langgraph.tsx", "clip-path=", False),
     "logo-mark": ("src/components/icons/langgraph.tsx", LOGO_VIEWBOX_NEW, True),
+    "header-logo": ("src/components/thread/index.tsx", HEADER_LOGO_NEW, True),
     "github-link": ("src/components/thread/index.tsx", "OpenGitHubRepo", False),
     "app-name": ("src/components/thread/index.tsx", APP_NAME, True),
     "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
@@ -300,6 +325,7 @@ def apply_patches() -> None:
     patch_dev_indicator()
     patch_svg_props()
     patch_logo_mark()
+    patch_header_logo()
     patch_github_link()
     patch_app_name()
     patch_home_heading()
@@ -423,6 +449,25 @@ def patch_logo_mark() -> None:
         return
     icon.write_text(text.replace(LOGO_VIEWBOX_OLD, LOGO_VIEWBOX_NEW), encoding="utf-8")
     say(TAG, "cropped the logo to the LangChain mark")
+
+
+def patch_header_logo() -> None:
+    """Shrink the header logo to the size of the icons on either side of it. Only the header:
+    the home screen draws the mark on its own line, where 32px is the point of it.
+    """
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("header-logo"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    if text.count(HEADER_LOGO_OLD) != 1:
+        say(TAG, f"warning: {thread} is not the shape expected; left the header logo at "
+                 "32px, over the icons beside it. Missing anchor:")
+        print(HEADER_LOGO_OLD)
+        return
+    thread.write_text(text.replace(HEADER_LOGO_OLD, HEADER_LOGO_NEW), encoding="utf-8")
+    say(TAG, "sized the header logo to the icons beside it")
 
 
 # Both call sites plus the component and its import, since a component left behind with no
