@@ -41,8 +41,8 @@ uv run scripts/setup.py
 You need a [LangSmith](https://smith.langchain.com) account. Setup prompts for two keys
 from [Settings](https://smith.langchain.com/settings), which are **not** interchangeable:
 
-- **`OPENAI_API_KEY`** is the LangSmith **gateway service key** (`lsv2_sk_...`), *not* an
-  OpenAI key. Every model call goes through the LangSmith LLM gateway.
+- **`LANGSMITH_GATEWAY_API_KEY`** is the **gateway service key** (`lsv2_sk_...`). Every
+  model call goes through the LangSmith LLM gateway, whichever provider it names.
 - **`LANGSMITH_API_KEY`** is for tracing, and for provisioning the sandbox.
 
 `ROOT_MODEL=claude-sonnet-5` in front of either command below swaps a model (see

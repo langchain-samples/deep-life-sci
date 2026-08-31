@@ -1,8 +1,10 @@
 """Model construction via the LangSmith LLM gateway, with switchable providers.
 
 Follows the intro-to-langsmith pattern: gateway compute is authenticated by
-OPENAI_API_KEY (the `lsv2_sk_...` gateway service key, not an OpenAI key), while
-LANGSMITH_API_KEY stays dedicated to tracing.
+LANGSMITH_GATEWAY_API_KEY (the `lsv2_sk_...` gateway *service* key), while
+LANGSMITH_API_KEY stays dedicated to tracing. The gateway key is what the OpenAI SDK
+would call an api_key, so it is passed explicitly rather than through the environment —
+nothing here reads OPENAI_API_KEY, and a real OpenAI key is never what this wants.
 
 Each role is configured by three independent env vars, defaulting to the nine constants
 below:
@@ -201,12 +203,13 @@ def check_gateway_config() -> None:
     'Could not resolve authentication method', which is easy to mistake for a
     problem in the agent itself.
     """
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not os.environ.get("LANGSMITH_GATEWAY_API_KEY"):
         raise SystemExit(
-            "OPENAI_API_KEY is not set.\n\n"
-            "This project calls models through the LangSmith LLM gateway, so this "
-            "should be the gateway service key (starts with 'lsv2_sk_'), not an "
-            "OpenAI key. Add it to .env — see .env.example."
+            "LANGSMITH_GATEWAY_API_KEY is not set.\n\n"
+            "Every model call goes through the LangSmith LLM gateway, so this is the "
+            "gateway service key (starts with 'lsv2_sk_'). Add it to .env — see "
+            ".env.example. (It was called OPENAI_API_KEY before; `uv run "
+            "scripts/setup.py` renames it in an existing .env.)"
         )
 
 
@@ -308,7 +311,7 @@ def _resolve(role: str) -> tuple[str, str, str]:
 
 def _build(model: str, provider: str, **kwargs):
     check_gateway_config()
-    key = os.environ["OPENAI_API_KEY"]
+    key = os.environ["LANGSMITH_GATEWAY_API_KEY"]
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

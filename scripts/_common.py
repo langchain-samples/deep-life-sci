@@ -133,6 +133,6 @@ def require_setup(tag: str) -> None:
         die(tag, f"no .env in {REPO_ROOT}. Run:  uv run scripts/setup.py")
     if not (REPO_ROOT / ".venv").is_dir():
         die(tag, f"no virtualenv in {REPO_ROOT}. Run:  uv run scripts/setup.py")
-    for key in ("OPENAI_API_KEY", "LANGSMITH_API_KEY"):
+    for key in ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY"):
         if not env_value(key):
             die(tag, f"{key} is not set in .env. Run:  uv run scripts/setup.py")

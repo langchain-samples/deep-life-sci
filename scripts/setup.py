@@ -75,9 +75,9 @@ def ask_key(key: str, prompt: str, prefix: str) -> None:
         reply = "".join(input(f"[{TAG}] {prompt}: ").split())
         if not reply:
             continue
-        # A wrong-but-plausible key is the failure this catches: a real OpenAI key in
-        # OPENAI_API_KEY looks right and dies deep in the SDK at the first model call.
-        # Queried rather than rejected — key formats belong to the gateway and may change.
+        # A wrong-but-plausible key is the failure this catches: the two LangSmith keys
+        # differ only in their prefix, and the wrong one dies deep in the SDK at the first
+        # model call. Queried rather than rejected — key formats belong to LangSmith.
         if prefix and not reply.startswith(prefix):
             say(TAG, f"that doesn't start with '{prefix}' — see the note in .env.example.")
             if not input(f"[{TAG}] use it anyway? [y/N] ").strip().lower().startswith("y"):
@@ -94,18 +94,39 @@ def ask_optional(key: str, prompt: str) -> None:
         set_env(key, reply)
 
 
+def migrate_gateway_key() -> None:
+    """Rename the gateway key where an older clone still calls it OPENAI_API_KEY.
+
+    Renamed because the name said OpenAI while the value is a LangSmith key, which is the
+    single most confusing thing about the setup. Nothing reads the old name any more, so
+    an unmigrated .env would look unconfigured; the whole file is rewritten so the
+    explanatory comment above the key follows it.
+    """
+    if not ENV_FILE.exists():
+        return
+    text = ENV_FILE.read_text(encoding="utf-8")
+    if "OPENAI_API_KEY" not in text or "LANGSMITH_GATEWAY_API_KEY" in text:
+        return
+    ENV_FILE.write_text(
+        text.replace("OPENAI_API_KEY", "LANGSMITH_GATEWAY_API_KEY"), encoding="utf-8"
+    )
+    say(TAG, "renamed OPENAI_API_KEY to LANGSMITH_GATEWAY_API_KEY in .env")
+
+
 def ensure_env() -> None:
     fresh = not ENV_FILE.exists()
     if fresh:
         shutil.copy(REPO_ROOT / ".env.example", ENV_FILE)
         say(TAG, "created .env from .env.example")
+    else:
+        migrate_gateway_key()
 
     # Two keys, both from LangSmith (https://smith.langchain.com/settings), and easy to mix
     # up: model calls are billed and authenticated as *gateway* compute under a service
     # key, while tracing and sandbox provisioning use the personal API key.
     ask_key(
-        "OPENAI_API_KEY",
-        "LangSmith gateway service key for model calls (lsv2_sk_..., NOT an OpenAI key)",
+        "LANGSMITH_GATEWAY_API_KEY",
+        "LangSmith gateway service key for model calls (lsv2_sk_...)",
         "lsv2_sk_",
     )
     ask_key(

@@ -116,7 +116,8 @@ def run() -> None:
     shell has already split it into words by the time it arrives here, and the
     alternative is a confusing "unexpected argument" for a natural way to type it.
     """
-    missing = [k for k in ("OPENAI_API_KEY", "LANGSMITH_API_KEY") if not os.environ.get(k)]
+    required = ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY")
+    missing = [k for k in required if not os.environ.get(k)]
     if missing:
         # Without this the first model call dies as an SDK auth error a long way from its
         # cause. The launcher used to check this in shell; it lives here so the check
