@@ -45,7 +45,7 @@ Every patch function's docstring says what it is for. What is not in any one of 
   works by removing something.
 - **Prefer a new patch over another edit inside an existing one**, so a clone that already has
   the old patch still picks the new one up. That is why the rewrite and `devIndicators` are
-  separate, and why the heading layout and the 🧪 are not folded into the rename.
+  separate, and why the heading layout and the flask mark are not folded into the rename.
 - **Accept the prior baseline when a patch's shape changes** (`patch_uploads` takes both
   upstream's and the earlier allowlist), so an existing clone upgrades in place.
 - **Changing `APP_NAME` means appending the old value to `PRIOR_APP_NAMES`.** The rename is a

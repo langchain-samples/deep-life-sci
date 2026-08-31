@@ -66,10 +66,9 @@ Ctrl-C to stop the running server.
 ```
 scripts/              setup.py (one-time setup), dev.py (chat stack), build_snapshot.py
 research_agent/       the agent: assembly, entry points, tools, prompts, middleware
-evals/                LangSmith datasets + evaluators (the closest thing to a test suite)
+evals/                LangSmith datasets + evaluators
 ui/                   artifact components rendered by the chat frontend
 docs/                 design notes and demo questions
-data/                 host-side abstract/PMC cache (gitignored)
 ```
 
 ## Notes

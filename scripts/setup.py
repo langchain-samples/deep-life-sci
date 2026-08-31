@@ -220,13 +220,37 @@ PRIOR_APP_NAMES = ("Life Sci Agent",)
 HOME_HEADING_OLD = '<div className="flex items-center gap-3">'
 HOME_HEADING_NEW = '<div className="flex flex-col items-center gap-3">'
 
-# U+1F9EA TEST TUBE, the closest thing Unicode has to a beaker that renders as a lab glass on
-# every platform (U+2697 ALEMBIC is a text-presentation character and shows up monochrome and
-# tiny on some). Both places the name is rendered as a heading, so the two do not disagree;
-# not the browser tab or the setup form, where it would read as decoration in a sentence.
-BEAKER = "\N{TEST TUBE}"
-BEAKER_EDITS = tuple(
-    (f'{cls}">\n{indent}{APP_NAME}\n', f'{cls}">\n{indent}{BEAKER} {APP_NAME}\n')
+# The logo, cropped to the LangChain mark. Upstream's asset is one viewBox carrying both the
+# mark (x 0-488) and the `LangChain` wordmark (x 591-2999), and all three places it is drawn
+# set the product name directly beside or under it — two wordmarks at the same size and
+# weight, neither of which then reads as the name of the thing. Cropped to the square it is a
+# brand mark next to a product name, which is a lockup. It also un-squashes the header, where
+# `width={32} height={32}` on a 5.4:1 viewBox drew the whole logo into a 32px smudge.
+LOGO_VIEWBOX_OLD = 'viewBox="0 0 3000 554"'
+LOGO_VIEWBOX_NEW = 'viewBox="0 0 488 488"'
+
+# The product mark beside the name, in the header and on the home screen alike — not the
+# browser tab or the setup form, where it would read as decoration in a sentence. An inline
+# SVG (`chat-ui-overlay/components/icons/flask.tsx`) rather than the U+1F9EA TEST TUBE it
+# replaced: an emoji renders full-colour and platform-shaded next to a flat monochrome mark,
+# and no size of it ever matched the heading it sat in. `currentColor` at `1em` does.
+FLASK_IMPORT_ANCHOR = 'import { LangGraphLogoSVG } from "../icons/langgraph";\n'
+FLASK_IMPORT = 'import { FlaskSVG } from "../icons/flask";\n'
+FLASK_TAG = '<FlaskSVG className="h-[1.1em] w-[1.1em] shrink-0" />'
+
+# Each heading, against both baselines a clone can be sitting at: upstream's bare name, and
+# the beaker this patch replaces. Accepting the older one is what upgrades a clone in place —
+# it is gitignored, so nothing else would ever take the emoji back out.
+FLASK_EDITS = tuple(
+    (
+        tuple(
+            f'{cls}">\n{indent}{prefix}{APP_NAME}\n'
+            for prefix in ("", "\N{TEST TUBE} ")
+        ),
+        f'{cls} inline-flex items-center gap-1.5">\n'
+        f"{indent}{FLASK_TAG}\n"
+        f"{indent}{APP_NAME}\n",
+    )
     for cls, indent in (
         ('className="text-xl font-semibold tracking-tight', " " * 20),
         ('className="text-2xl font-semibold tracking-tight', " " * 24),
@@ -237,10 +261,11 @@ PATCH_MARKS = {
     "rewrite": ("next.config.mjs", "/ui/:path", True),
     "dev-indicator": ("next.config.mjs", "devIndicators", True),
     "svg": ("src/components/icons/langgraph.tsx", "clip-path=", False),
+    "logo-mark": ("src/components/icons/langgraph.tsx", LOGO_VIEWBOX_NEW, True),
     "github-link": ("src/components/thread/index.tsx", "OpenGitHubRepo", False),
     "app-name": ("src/components/thread/index.tsx", APP_NAME, True),
     "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
-    "beaker": ("src/components/thread/index.tsx", BEAKER, True),
+    "flask": ("src/components/thread/index.tsx", "FlaskSVG", True),
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
     "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
@@ -274,10 +299,11 @@ def apply_patches() -> None:
     patch_next_config()
     patch_dev_indicator()
     patch_svg_props()
+    patch_logo_mark()
     patch_github_link()
     patch_app_name()
     patch_home_heading()
-    patch_beaker()
+    patch_flask()
     patch_empty_ai_turns()
     patch_uploads()
     patch_progress_events()
@@ -354,12 +380,12 @@ def patch_dev_indicator() -> None:
     say(TAG, "hid the Next dev-tools button in next.config.mjs")
 
 
-# The four patches below are cosmetic rather than load-bearing, unlike the rewrite above.
+# The patches below are cosmetic rather than load-bearing, unlike the rewrite above.
 # They are applied anyway because setup's job is a working app, and an app that logs a
-# console error, opens on a screenful of whitespace, or offers an upload it then refuses is
-# not one. Each is anchored on an exact upstream string and prints the change instead of
-# guessing if that string ever moves, so an upstream fix is never clobbered and a stale
-# patch never lands silently.
+# console error, opens on a screenful of whitespace, wears two wordmarks, or offers an
+# upload it then refuses is not one. Each is anchored on an exact upstream string and prints
+# the change instead of guessing if that string ever moves, so an upstream fix is never
+# clobbered and a stale patch never lands silently.
 
 
 def patch_svg_props() -> None:
@@ -375,6 +401,28 @@ def patch_svg_props() -> None:
     text = icon.read_text(encoding="utf-8")
     icon.write_text(text.replace("clip-path=", "clipPath="), encoding="utf-8")
     say(TAG, "fixed the clip-path JSX warning in langgraph.tsx")
+
+
+def patch_logo_mark() -> None:
+    """Crop upstream's logo to the LangChain mark, leaving the wordmark outside the viewBox.
+
+    Cosmetic like the rest, and see `LOGO_VIEWBOX_OLD` for what it buys: every place the logo
+    is drawn sets the product name beside or under it, and until this the brand's wordmark and
+    the product's name were two wordmarks competing at the same weight.
+    """
+    icon = chat_ui_dir() / "src" / "components" / "icons" / "langgraph.tsx"
+    if not icon.is_file():
+        return
+    if _marked("logo-mark"):
+        return
+    text = icon.read_text(encoding="utf-8")
+    if text.count(LOGO_VIEWBOX_OLD) != 1:
+        say(TAG, f"warning: {icon} is not the shape expected; left the LangChain wordmark in "
+                 "the logo, competing with the product name. Missing anchor:")
+        print(LOGO_VIEWBOX_OLD)
+        return
+    icon.write_text(text.replace(LOGO_VIEWBOX_OLD, LOGO_VIEWBOX_NEW), encoding="utf-8")
+    say(TAG, "cropped the logo to the LangChain mark")
 
 
 # Both call sites plus the component and its import, since a component left behind with no
@@ -1098,24 +1146,42 @@ def patch_home_heading() -> None:
     say(TAG, "stacked the home screen heading under the logo")
 
 
-def patch_beaker() -> None:
-    """Put a beaker beside the name, in the header and on the home screen alike."""
+def patch_flask() -> None:
+    """Put the flask mark beside the name, in the header and on the home screen alike.
+
+    Mounts `FlaskSVG` from the overlay, which `ensure_overlay` has already copied in — both
+    entry points run it before this. Each heading is matched against every baseline in
+    `FLASK_EDITS`, so a clone still carrying the beaker upgrades rather than reporting a
+    moved anchor.
+    """
     thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
     if not thread.is_file():
         return
-    if _marked("beaker"):
+    if _marked("flask"):
         return
     text = thread.read_text(encoding="utf-8")
-    for old, _ in BEAKER_EDITS:
-        if text.count(old) != 1:
-            say(TAG, f"warning: {thread} is not the shape expected; left the beaker off "
-                     "the name. Missing anchor:")
-            print(old)
+
+    def missing(anchor: str) -> None:
+        say(TAG, f"warning: {thread} is not the shape expected; left the flask off the "
+                 "name. Missing anchor:")
+        print(anchor)
+
+    edits = []
+    for baselines, new in FLASK_EDITS:
+        matched = [old for old in baselines if text.count(old) == 1]
+        if len(matched) != 1:
+            missing(baselines[0])
             return
-    for old, new in BEAKER_EDITS:
+        edits.append((matched[0], new))
+    if text.count(FLASK_IMPORT_ANCHOR) != 1:
+        missing(FLASK_IMPORT_ANCHOR)
+        return
+
+    text = text.replace(FLASK_IMPORT_ANCHOR, FLASK_IMPORT_ANCHOR + FLASK_IMPORT)
+    for old, new in edits:
         text = text.replace(old, new)
     thread.write_text(text, encoding="utf-8")
-    say(TAG, f"added the {BEAKER} to the chat UI name")
+    say(TAG, "put the flask mark beside the chat UI name")
 
 
 # Components this repo owns, copied into the clone rather than patched into it.
