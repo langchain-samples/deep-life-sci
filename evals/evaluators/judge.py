@@ -21,6 +21,12 @@ the single thing the rubric asked for still cleared 0.6. Forcing the choice puts
 information in `comment`, where it names the failing clause, and makes the aggregate a
 pass rate rather than an average of soft judgements.
 
+It grades the answer text plus the names of the artifacts the run published — not the
+artifacts themselves, which stay out of the payload for the same reason the root never
+reads them back. The names are enough for the one thing the text cannot settle: whether a
+deliverable the rubric asked for exists. See `rubric_judge` for what went wrong without
+them.
+
 The judge has its own model (`models.py:judge_model`), configured independently of the
 profile under test. It is a single-turn call over a short payload, so a cheap model at low
 effort keeps a full sweep affordable enough to run on every prompt change — but the reason
@@ -32,6 +38,7 @@ from __future__ import annotations
 
 import json
 
+from evals.evaluators._guard import scores_only_completed_runs
 from research_agent.models import judge_model
 
 _PROMPT = """\
@@ -45,6 +52,13 @@ The specific standard this answer must meet:
 
 Answer:
 {answer}
+
+Deliverables this run published: {artifacts}
+
+Charts, tables and files are published as artifacts alongside the answer and are listed
+above; they are never embedded in the answer text. So where the standard asks for one,
+judge it against that list and not against the text — an answer that reads as prose is
+not evidence that no chart was produced.
 
 Grade only against the stated standard. Do not reward fluency, length, or coverage that
 the standard does not ask for, and do not penalise the answer for anything outside it.
@@ -76,11 +90,20 @@ def _as_bool(value) -> bool:
     raise ValueError(f"not a boolean verdict: {value!r}")
 
 
+@scores_only_completed_runs("rubric")
 async def rubric_judge(run, example) -> dict:
     """Score the answer against the example's rubric line."""
     rubric = (example.outputs or {}).get("rubric") or ""
     answer = (run.outputs or {}).get("answer") or ""
     question = (example.inputs or {}).get("question") or ""
+    # The judge is told what reached `/workspace/out` because a rubric that asks for a
+    # deliverable is otherwise unverifiable from where it sits, and it does not abstain —
+    # it infers. On 2026-09-01 `hpa-ras-isoform-tissue-heatmap` published a `chart`,
+    # scored 1.0 on `produced_expected_artifacts`, named all three tissues correctly, and
+    # was still failed by this evaluator "because it does not actually provide a heatmap
+    # image as required". Two evaluators contradicting each other on one run is the
+    # signature of a grader reasoning about a field it was never shown.
+    artifacts = [n for n in ((run.outputs or {}).get("artifact_names") or []) if n]
 
     if not rubric:
         return {"key": "rubric", "score": None, "comment": "no rubric for this example"}
@@ -89,7 +112,12 @@ async def rubric_judge(run, example) -> dict:
 
     model = judge_model()
     response = await model.ainvoke(
-        _PROMPT.format(question=question, rubric=rubric, answer=answer)
+        _PROMPT.format(
+            question=question,
+            rubric=rubric,
+            answer=answer,
+            artifacts=", ".join(artifacts) if artifacts else "none",
+        )
     )
 
     try:

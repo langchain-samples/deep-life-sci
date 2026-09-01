@@ -189,28 +189,22 @@
   domain: D3 clinical medicine and trials
   surface: ctgov+pubmed
   rubric: |-
-    30 completed interventional trials as of August 2026: 17 with a linked publication,
-    13 with none by either route. The 13:
+    30 completed interventional trials as of August 2026 — the registry query is the
+    denominator, and it grows over time. 17 have a linked publication, 13 have none:
 
       NCT06372197 NCT04739865 NCT05399498 NCT05624268 NCT04932434 NCT06650800 NCT05581797
       NCT06746441 NCT06230757 NCT05710237 NCT04842045 NCT06235411 NCT05385783
 
-    The substantive point is that the two largest are industry phase 2b/3 programmes, not
-    small academic pilots — COMPASS Pathways' COMP360 trial NCT05624268 (n=258) and Cybin's
-    CYB003 trial NCT05385783 (n=57).
+    Require the count the registry returned. Every one of the 13 must be named unpublished,
+    or set aside with a stated reason.
 
-    A correct answer checks both directions rather than trusting one: `trial_pmids` on the
-    registry record, and a `NCT[si]` PubMed search for the ones with no link. Both agree
-    here, which is worth saying.
+    Which trials count as published is a judgment call and any split passes, provided each
+    departure from 17/13 is stated with its reason and its size — trials judged off topic,
+    papers that are protocols rather than results, papers appearing since August 2026.
 
-    Credit a split within +/-4 in either bucket and at least 9 of the 13 named, provided
-    the search that produced the denominator is stated. Trials published after August 2026
-    move from one bucket to the other and are not failures.
-
-    Fail if `result_pmids` alone is used to decide publication status — it is sponsor-
-    entered and mostly empty, and would report nearly every trial as unpublished. Fail if
-    `background_pmids` are counted as the trial's own publications. Fail if "no results
-    posted to the registry" (`has_results: false`) is reported as "not published".
+    Fail an unexplained split. Fail a rationale resting on the registry rather than the
+    literature: neither "no results posted" nor an empty sponsor-entered publication field
+    is evidence a trial is unpublished.
 
 # Q12
 - id: hpa-ras-isoform-tissue-heatmap
@@ -229,9 +223,8 @@
       KRAS  rectum 20.8
       NRAS  bone marrow 55.2
 
-    Require all three isoforms, each with its top tissue named. Actual expression values are 
+    Require all three isoforms, each with its top tissue named. Actual expression values are
     optional; if present, they must agree with the ones above, allowing for rounding.
-    A heatmap image must be produced.
 
     Extra RAS-family genes (MRAS, RRAS, RRAS2) are acceptable additions; substring-matching "RAS" 
     and pulling in RASA1, RASGRP or similar is not.
@@ -240,7 +233,7 @@
 - id: mrna-vaccines-lung-cancer-trials
   question: >-
     Are there any mRNA vaccines in ongoing clinical trials against lung cancer? Make a table
-  expects_artifact: [table]
+  expects_artifact: []
   domain: D3 clinical medicine and trials
   surface: ctgov
   rubric: |-

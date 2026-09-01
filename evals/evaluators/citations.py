@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 
+from evals.evaluators._guard import scores_only_completed_runs
 from research_agent.paths import ABSTRACT_CACHE
 
 # PubMed ids are 1-8 digits, but a bare 4-digit run in prose is almost always a year and
@@ -39,6 +40,7 @@ def cited_pmids(text: str) -> set[str]:
     return {m for m in _LABELLED.findall(text)} | {m for m in _BARE.findall(text)}
 
 
+@scores_only_completed_runs("citations_exist")
 def citations_exist(run, example) -> dict:
     """True when every cited PMID is present in the host-side abstract cache."""
     answer = (run.outputs or {}).get("answer", "")

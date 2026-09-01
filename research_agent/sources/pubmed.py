@@ -346,9 +346,14 @@ def _summary_to_record(uid: str, rec: dict) -> dict:
         "journal": rec.get("source") or rec.get("booktitle") or None,
         "doi": articleids.get("doi"),
         # Free: esummary already carries this, so knowing whether a paper has PMC full
-        # text costs no extra request. `pmc` is the bare-ish id and `pmcid` the prefixed
-        # form; both appear for 88/145 of the test corpus. Take either.
-        "pmcid": normalize_pmcid(articleids.get("pmcid") or articleids.get("pmc")),
+        # text costs no extra request. **`pmc` first, and not interchangeable with
+        # `pmcid`**: `pmc` is the id (`PMC3030664`), while `pmcid` is a deposit receipt
+        # containing it (`pmc-id: PMC3030664;manuscript-id: NIHMS262124;`). The receipt
+        # is truthy, so reading it first short-circuits the `or`, and `normalize_pmcid`
+        # then rightly rejects it — silently, since None is the legal "abstract-only"
+        # value. That ordering returned null for 166/166 full-text papers in
+        # `data/abstracts/`. Same operand order as `_parse_article`.
+        "pmcid": normalize_pmcid(articleids.get("pmc") or articleids.get("pmcid")),
     }
 
 

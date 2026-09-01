@@ -107,14 +107,20 @@ matches so much. Tag terms to control that:
 | `[la]` | `english[la]` | language |
 | `[sb]` | `pubmed pmc[sb]` | subset; this one restricts to papers with PMC full text |
 
-Multi-word values work quoted or unquoted. `term*` truncates (`immunotherap*[tiab]`).
+Multi-word values work quoted or unquoted. `term*` truncates (`immunotherap*[tiab]`) —
+a phrase pinned to one inflection is a filter you did not intend, so prefer
+`"heart transplant*"[tiab]` over `"heart transplantation"[tiab]`.
 `"a b c"[tiab:~N]` matches the words within N of each other — much more precise than
 ANDing them, but supported **only** on `[tiab]`, `[ti]` and `[ad]`; on any other field it
 returns 0 with a `quotedphrasesnotfound` warning.
 
-MeSH tags (`[mh]`, `[majr]`, `[sh]`, `[pa]`) are curated, so they are precise but **miss
-the most recent papers**, which are not yet indexed. `[tiab]` catches those. When recency
-matters, OR the two together rather than choosing.
+MeSH tags (`[mh]`, `[majr]`, `[sh]`, `[pa]`) and `[tiab]` miss in opposite directions, so
+neither is safe alone:
+
+- MeSH is curated, so it is precise but **misses the most recent papers**, not yet indexed.
+- `[tiab]` matches the authors' exact wording, so it **misses every paper that abbreviates,
+  inflects, hyphenates or misspells** the concept. A title typo or an author who writes
+  "C. jejuni" throughout drops the paper silently, and no `warnings` entry fires.
 
 Never fan out more than 300 subagents concurrently to read abstracts or more than 10
 concurrently to read papers--this becomes prohibitively expensive.
@@ -760,6 +766,12 @@ Use Markdown citation format for all publications and trials, e.g.
 Choose between these as context-appropriate.
 
 Don't write the actual query you used unless the user asks for it.
+
+Do not assume you can name all drugs, trials, etc. that meet a certain criteria from memory.
+If asked to name e.g. all drugs approved to treat glioblastoma, all phase 3 trials for that
+indication, etc., answer using a search rather than parametric memory. Do not answer about
+the contents of a paper or trial from parametric memory--read (or have a subagent read) the
+relevant information.
 """
 
 IMPROVEMENT_NOTES = """\

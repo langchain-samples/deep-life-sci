@@ -43,3 +43,5 @@ evals/taxonomy/
 # Whatever survives belongs in the seed's `rubric` in evals/datasets/*.jsonl, which is
 # the canonical store; these reports are the workings, not the answer.
 evals/ground_truth_reports/
+
+evals/failure_reports/

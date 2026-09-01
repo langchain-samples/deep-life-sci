@@ -14,6 +14,8 @@ produced, never displayed". Scoring the state key separates them.
 
 from __future__ import annotations
 
+from evals.evaluators._guard import scores_only_completed_runs
+
 # Component names ArtifactMiddleware assigns, grouped by what the dataset asks for.
 _KINDS = {
     "image": {"chart", "image"},
@@ -26,6 +28,7 @@ def _published(outputs: dict) -> list[str]:
     return [n for n in (outputs.get("artifact_names") or []) if n]
 
 
+@scores_only_completed_runs("produced_expected_artifacts")
 def produced_expected_artifacts(run, example) -> dict:
     """True when every expected artifact kind is present, False when any is absent."""
     expected = (example.outputs or {}).get("expects_artifact") or []

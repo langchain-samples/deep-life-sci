@@ -162,13 +162,28 @@ async def main() -> None:
         (
             (row["example"].metadata or {}).get("seed_id"),
             {r.key: r.score for r in row["evaluation_results"]["results"]},
+            (row["run"].outputs or {}).get("error"),
         )
         async for row in results
     ]
 
     print(f"\n[evals] {results}")
-    for seed_id, scores in sorted(rows, key=lambda r: r[0] or ""):
-        print(f"[evals] {seed_id:<34} " + " ".join(f"{k}={v}" for k, v in sorted(scores.items())))
+    for seed_id, scores, error in sorted(rows, key=lambda r: r[0] or ""):
+        line = " ".join(f"{k}={v}" for k, v in sorted(scores.items()))
+        print(f"[evals] {seed_id:<34} " + (f"ERRORED  {error}" if error else line))
+
+    # Errored examples are counted here because `target` returns their failure rather than
+    # raising it, so LangSmith records no run error and `error_rate` stays null; and because
+    # every evaluator now scores them `None` (see `evaluators/_guard.py`), which keeps them
+    # out of the aggregates but would otherwise make them invisible in every number a sweep
+    # prints. A sweep where half the runs never answered must not read like a clean one.
+    if errored := [seed_id for seed_id, _, error in rows if error]:
+        print(
+            f"\n[evals] {len(errored)}/{len(rows)} examples FAILED before answering — "
+            "scored None, excluded from every aggregate above:"
+        )
+        for seed_id in sorted(errored):
+            print(f"[evals]   {seed_id}")
 
 
 if __name__ == "__main__":

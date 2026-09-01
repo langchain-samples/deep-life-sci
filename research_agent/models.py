@@ -118,6 +118,11 @@ JUDGE_EFFORT = "low"
 # the read timeout is the gap *between* chunks, not the whole request, so 10s is a
 # "no token for 10s" watchdog rather than a ceiling on a turn. A long turn streams fine.
 #
+# That sentence is only true of a *streaming* request, which is why `root_model` also sets
+# `streaming=True` — see its docstring. Do not attach this timeout to a model that might be
+# invoked non-streaming: httpx then applies `read` to the whole response body and every turn
+# longer than 10s dies after three attempts at ~31.5s.
+#
 # This is the same pathology SUBAGENT_TIMEOUT_SECONDS below was written for, on the one
 # role that never got the fix. langchain-openai forwards an unset timeout as a meaningful
 # None, so the SDK client ended up as `httpx.Timeout(timeout=None)` — no connect, read,
@@ -373,8 +378,27 @@ def root_model(**kwargs):
 
     Timed out by default; see ROOT_TIMEOUT for why one is mandatory here and why it is a
     component timeout rather than a scalar. An explicit `timeout=` from a caller wins.
+
+    `streaming=True` is what makes that timeout safe, and it is not optional. ROOT_TIMEOUT's
+    `read=10.0` is a gap-between-chunks watchdog, which is only what it means on a streaming
+    request; on a non-streaming one httpx applies it to the whole response body, turning a
+    10s inter-chunk allowance into a 10s ceiling on an entire turn. The callers disagreed
+    about this: `cli.py` and `graph.py` reach the model through `astream`, but
+    `runner.py:run_once` — the seam `evals/` attaches to — uses `ainvoke`, which issues a
+    plain request. So the eval sweep, and only the eval sweep, ran the root under a 10s
+    per-turn ceiling; with `max_retries` at its default 2 that surfaced as three attempts
+    and an APITimeoutError at ~31.5s, uniform to within 200ms across every failure. Five of
+    eleven examples died that way on 2026-09-01 — the long fan-outs, since a root turn under
+    10s never noticed. `agent.py` already documents the same arithmetic against the
+    general-purpose subagent's inner (non-streaming) agent; the invariant is the general
+    one, so it is fixed here rather than at each caller.
+
+    Setting it here rather than asking every caller to stream keeps the two paths identical:
+    `ainvoke` on a streaming model aggregates the stream itself, so the watchdog now measures
+    what its calibration assumed no matter who calls.
     """
     kwargs.setdefault("timeout", ROOT_TIMEOUT)
+    kwargs.setdefault("streaming", True)
     return _model_for("root", **kwargs)
 
 

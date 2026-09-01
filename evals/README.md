@@ -30,7 +30,7 @@ scalars (`|-`) keep them readable in the file and byte-exact in what the judge i
 |---|---|---|
 | `citations_exist` | answer text + `data/abstracts/` | invented PMIDs |
 | `produced_expected_artifacts` | `ui` state key | "plot the distribution" answered in prose |
-| `rubric_judge` | answer text | confident, fluent, wrong — missing denominators, silent omissions |
+| `rubric_judge` | answer text + published artifact names | confident, fluent, wrong — missing denominators, silent omissions |
 
 The first two are deterministic and free. Only `rubric_judge` costs a model call, and it
 runs on the cheap half of the model pair. `--structural` drops it.
@@ -60,12 +60,24 @@ the difference — 0.75 on a four-clause rubric with no way to tell which clause
 What used to be in the fraction is now in `comment`: the missing PMIDs, the absent
 artifact kinds, the rubric clause that decided the verdict.
 
+The judge is given the *names* of the artifacts the run published, not just the answer
+text. Without them a rubric asking for a deliverable is unverifiable from where the judge
+sits, and it does not abstain — it infers absence from the prose and fails a run that
+produced the chart. `evaluators/judge.py` records the case that forced this.
+
 `score: None` still means *not applicable*, not `False`. A question with no required
 artifact, or an answer that legitimately cites no papers, is excluded from that
 evaluator's aggregate rather than given a free pass that inflates every experiment. The
 judge also returns `None` when its own output won't parse — including when it answers with
 a number instead of a verdict — because a judge failure and a bad answer must not look the
 same in the numbers.
+
+An **errored run** is that same kind of event and is scored `None` by all three, via the
+one guard in `evaluators/_guard.py`. `run.py:target` returns agent failures rather than
+raising them, so a dead run otherwise arrives looking like a real one with an empty answer
+— and the three evaluators used to disagree about what that meant, one of them scoring a
+sweep with six dead runs a perfect 1.00. `None` keeps them out of the aggregates, and
+`run.py` prints the errored seeds and a count so they cannot hide there instead.
 
 ## Isolation and cost
 
