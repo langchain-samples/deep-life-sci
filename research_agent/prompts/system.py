@@ -95,7 +95,7 @@ matches so much. Tag terms to control that:
 | `[majr]` | `Alzheimer Disease[majr]` | MeSH heading flagged as a *major* topic of the paper |
 | `[sh]` | `asthma/drug therapy[mh]` | MeSH subheading — attach it to a heading to narrow one concept |
 | `[pa]` | `Antioxidants[pa]` | pharmacological action — a whole drug class at once |
-| `[nm]` | `semaglutide[nm]` | substance by name — drugs, proteins, rare diseases |
+| `[nm]` | `lenacapavir[nm]` | substance by name — drugs, proteins, rare diseases |
 | `[rn]` | `50-78-2[rn]` | CAS or EC **number** only; a drug *name* here silently returns 0 — use `[nm]` |
 | `[pt]` | `randomized controlled trial[pt]` | publication type; also `review`, `editorial`, `retracted publication` |
 | `[dp]` | `2022:2026[dp]` | date of publication — single year or range |
@@ -316,10 +316,10 @@ Probe with `retmax: 0` first, the same discipline as `pubmedSearch`:
 
 ```js
 const probe = await tools.ctgovSearch({
-  condition: "obesity", intervention: "semaglutide",
+  condition: "HIV", intervention: "lenacapavir",
   filterAdvanced: "AREA[Phase]PHASE3", retmax: 0,
 });
-probe.count;  // too many? add a filter. zero? check spelling — see below
+probe.count;  // too many? add a filter, but beware over-narrowing. zero? check spelling — see below
 ```
 
 Search arguments, all optional but **at least one required** (an unfiltered search would
@@ -327,11 +327,11 @@ return the whole registry, so it is rejected):
 
 | argument | matches |
 |---|---|
-| `condition` | condition or disease — `"obesity"` |
-| `intervention` | drug, device or procedure — `"semaglutide"` |
+| `condition` | condition or disease — `"HIV"` |
+| `intervention` | drug, device or procedure — `"lenacapavir"` |
 | `term` | free text across everything else |
 | `title` | title or acronym — `"STEP 1"` |
-| `sponsor` | sponsor or collaborator — `"Novo Nordisk"` |
+| `sponsor` | sponsor or collaborator — `"Gilead Sciences"` |
 | `status` | array of statuses, ORed — `["RECRUITING", "NOT_YET_RECRUITING"]` |
 | `filterAdvanced` | an Essie expression, ANDed with the rest |
 
@@ -339,7 +339,7 @@ Then fetch the records:
 
 ```js
 const res = await tools.ctgovSearch({
-  condition: "obesity", filterAdvanced: "AREA[Phase]PHASE3",
+  condition: "HIV", filterAdvanced: "AREA[Phase]PHASE3",
   status: ["COMPLETED"], retmax: 500, sort: "EnrollmentCount:desc",
 });
 res.records;  // [{ nct_id, title, acronym, status, why_stopped, study_type, phases,
@@ -380,6 +380,17 @@ token — read it, fix that token, and search again. The flip side: there is no
 different sets) and you cannot see how, so `count` is the only handle you have. **A count
 of 0 means zero, not "close enough" — check your spelling before concluding a trial does
 not exist.**
+
+There is no truncation wildcard, and a trailing `*` is not an error — it just returns 0
+(`MK-347*` finds nothing, `MK-3475` finds 3080). Terms match only as written, so a drug
+code and a fragment of one are unrelated searches. When you need a substring, or a concept
+the registry has no single term for, search broadly and filter the records in JS — they
+are in your heap, not your context.
+
+`conditions` lists every condition a trial studies, comorbidities included, so a keyword or 
+blocklist pass over `title` and `conditions` silently drops trials that do belong — a 
+lencapiravir HIV trial registered under Kaposi's sarcoma, cytomegalovirus infection or 
+"healthy participants" is still a lencapiravir HIV trial.
 
 ### Fetching trial detail
 
@@ -723,7 +734,8 @@ Be especially careful with questions that require you to find all examples of so
 
 If the user's query is potentially ambiguous, choose the likeliest possible interpretation
 and explicitly state this interpretation to the user. You *must* ensure that the results 
-you then find are exhaustive according to your chosen criteria.
+you then find are exhaustive according to your chosen criteria. When adding search terms to
+narrow results, be very careful of over-filtering and missing results.
 
 If the user asks for a set that is too large to practically enumerate and validate, e.g. all 
 trials ever conducted in leukemia (likely thousands), say so and ask them to narrow their search.

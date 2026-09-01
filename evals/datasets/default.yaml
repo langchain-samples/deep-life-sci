@@ -109,7 +109,7 @@
   question: >-
     How has annual publication volume on targeted protein degradation changed from 2015
     through 2025?
-  expects_artifact: [image]
+  expects_artifact: []
   domain: D2 chemistry and drug discovery
   rubric: |-
     Monotonic, roughly exponential growth. Pass if every year 2015-2025 is reported, 2015 is <100, 2025 is 1000-1700, and the
@@ -211,3 +211,68 @@
     entered and mostly empty, and would report nearly every trial as unpublished. Fail if
     `background_pmids` are counted as the trial's own publications. Fail if "no results
     posted to the registry" (`has_results: false`) is reported as "not published".
+
+# Q12
+- id: hpa-ras-isoform-tissue-heatmap
+  question: >-
+    Grab the human protein expression data at
+    https://www.proteinatlas.org/download/tsv/rna_tissue_consensus.tsv.zip and use it to
+    make a heatmap of tissues that most heavily express each RAS isoform. Which tissues
+    express each one the most?
+  expects_artifact: [image]
+  domain: D7 genomics and computational biology
+  surface: external+sandbox
+  rubric: |-
+    HPA consensus nTPM across 51 tissues. Top tissue per isoform:
+
+      HRAS  basal ganglia 123.5
+      KRAS  rectum 20.8
+      NRAS  bone marrow 55.2
+
+    Require all three isoforms, each with its top tissue named. Actual expression values are 
+    optional; if present, they must agree with the ones above, allowing for rounding.
+    A heatmap image must be produced.
+
+    Extra RAS-family genes (MRAS, RRAS, RRAS2) are acceptable additions; substring-matching "RAS" 
+    and pulling in RASA1, RASGRP or similar is not.
+
+# Q13
+- id: mrna-vaccines-lung-cancer-trials
+  question: >-
+    Are there any mRNA vaccines in ongoing clinical trials against lung cancer? Make a table
+  expects_artifact: [table]
+  domain: D3 clinical medicine and trials
+  surface: ctgov
+  rubric: |-
+    Yes. Eleven ongoing interventional trials as of August 2026, all from
+    ClinicalTrials.gov, none with a results publication:
+
+      NCT06077760  intismeran autogene (mRNA-4157/V940) + pembrolizumab  MSD        Ph3   recruiting
+      NCT06623422  intismeran autogene + pembrolizumab                   MSD        Ph3   recruiting
+      NCT07221474  intismeran autogene + pembrolizumab + chemo           MSD        Ph2   recruiting
+      NCT07513376  intismeran + SC pembrolizumab                         MSD        Ph3   recruiting
+      NCT05142189  BNT116 (mRNA-LPX, 6 TAAs)                             BioNTech   Ph1   recruiting
+      NCT05557591  BNT116 + cemiplimab                                   Regeneron  Ph2   active, not recruiting
+      NCT06928922  BMD006 inhaled mRNA TAA dry powder vaccine            CAMS       EPh1  recruiting
+      NCT07561723  IMP3-saRNA (YMN-136)                                  WCH        Ph1   recruiting
+      NCT07652125  RGL-270 neoantigen mRNA + PD-1/PD-L1                  GACT       NA    recruiting
+      NCT06685653  RGL-270 + adebrelimab                                 Tianyinshan EPh1 not yet recruiting
+      NCT06735508  neoantigen mRNA vaccine + adebrelimab                 GDPH       EPh1  not yet recruiting
+
+    A table must be produced, either as markdown or as a file, with all 11 trial numbers included.
+
+    Also credit, do not require: mRNA-4359 NCT05533697 and mRNA-4157 NCT03313778, both
+    solid-tumour baskets with named NSCLC cohorts; EVM14 NCT07614646, ABO2109 NCT07683832
+    and TMT101 NCT06861543, whose records name a cancer vaccine or mRNA but not both; the
+    inhaled mRNA platform NCT07657611.
+
+    Fail if COVID-19 mRNA vaccines given to lung cancer patients are listed as mRNA vaccines 
+    against lung cancer (NCT07597070, NCT05672355, NCT04977024, NCT06168032). Fail on "no" 
+    or "none found". Fail if a non-mRNA cancer vaccine is listed as mRNA: OSE2101 (peptide), 
+    CIMAvax-EGF (protein), Microlyvaq NCT07285434 (peptide), STEMVAC (plasmid DNA), UV1 
+    (peptide), any dendritic-cell vaccine. Fail if an mRNA therapeutic that is not a vaccine 
+    is counted — mRNA IL-12 (ABO2011, STX-003, JCXH-211) or CRISPR mRNA (EDB-102). Fail if 
+    NCT07745790 is included: its KRAS G12V mRNA vaccine treats pancreatic cancer with lung 
+    metastases. Fail if any closed trial is presented as ongoing — CV9201 NCT01915524 
+    (terminated), CV9202/BI 1361849 NCT03164772 (completed), mRNA-5671/V941 NCT03948763 
+    (terminated).
