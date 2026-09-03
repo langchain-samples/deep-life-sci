@@ -11,11 +11,16 @@ and `docs/pmc_api_notes/` for the probe results behind each.
 that API rejects bad input with a 400 naming the offending token instead of quietly
 returning something plausible. What it needs instead is *rate discipline* — roughly one
 request per second, measured, with no `Retry-After` to obey. See `docs/ctgov_api_notes/`.
+
+`web.py` is the odd one out: it has no API of its own. Web search runs *inside the model
+provider*, so that module is a bound tool spec and a digest parser rather than an HTTP
+client, and it deliberately keeps neither a cache nor a throttle. Its docstring says why.
 """
 
 from research_agent.sources.ctgov import ctgov_fetch, ctgov_search
 from research_agent.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
 from research_agent.sources.pubmed import fetch_abstracts, pubmed_search
+from research_agent.sources.web import web_search
 
 __all__ = [
     "ctgov_fetch",
@@ -25,4 +30,5 @@ __all__ = [
     "make_sandbox_tools",
     "pmc_locate",
     "pubmed_search",
+    "web_search",
 ]

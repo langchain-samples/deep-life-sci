@@ -47,6 +47,7 @@ from research_agent.prompts import (
 from research_agent.sources.ctgov import ctgov_fetch, ctgov_search
 from research_agent.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
 from research_agent.sources.pubmed import fetch_abstracts, pubmed_search
+from research_agent.sources.web import web_search
 
 
 def build_agent(backend):
@@ -155,6 +156,7 @@ def build_agent(backend):
             fetch_supplementary,
             ctgov_search,
             ctgov_fetch,
+            web_search,
         ]),
         system_prompt=build_system_prompt(),
         subagents=[
@@ -186,6 +188,11 @@ def build_agent(backend):
                     "fetch_supplementary",
                     "ctgov_search",
                     "ctgov_fetch",
+                    # Provider-side search, spent inside the tool so its pages land in
+                    # the JS heap instead of root context. `sources/web.py` says why
+                    # that indirection exists; binding the provider's own search tool to
+                    # the root model here would undo it.
+                    "web_search",
                     "execute",
                     "read_file",
                     "write_file",

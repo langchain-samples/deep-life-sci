@@ -43,6 +43,15 @@ sleeps included. These are the rules those notes add up to.
   branch, 4xx handling and exception types genuinely differ. `pmc.py` uses none of `_http.py`;
   S3 caps concurrency with a semaphore instead.
 
+- **`web.py` has no API and therefore no guards, cache or throttle — that is deliberate.**
+  Both providers ship web search as a *server-side* tool that runs inside the model, so the
+  module is a bound tool spec plus a digest parser. It keeps no cache because a label
+  revision or approval date is exactly where a stale hit is a wrong answer, and no throttle
+  because the metered requests are not ours; `_SEMAPHORE` caps concurrency for cost, not
+  politeness. The reason it is a PTC tool rather than a search tool bound to the root model
+  is measured: server-side results arrive as content blocks in the assistant message,
+  outside `eval` and outside PTC, and one question cost 27.9k input tokens that way.
+
 - **`cache_io.py` is the I/O floor: every blocking call goes through `asyncio.to_thread`**, and
   entries expire on the *idle* `paths.IDLE_TTL_SECONDS`, the same window that reaps a thread's
   sandbox. Note `MISSING` vs `None`: a resolved-to-nothing PMCID is cached as literal `null`,

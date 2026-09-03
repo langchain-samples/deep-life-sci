@@ -6,9 +6,9 @@ carries a docstring explaining itself — point at it rather than restating it.
 
 ## What this is
 
-A Deep Agents demo: a PubMed/PMC research assistant for life scientists. The agent searches
-PubMed, retrieves abstracts and PMC full text, queries the ClinicalTrials.gov registry, fans
-out cheap subagents across many papers, and computes/plots in a sandboxed Python container.
+A Deep Agents demo: a PubMed/PMC research assistant for life scientists. It searches PubMed,
+retrieves abstracts and PMC full text, queries ClinicalTrials.gov, searches the web for what
+neither holds, fans out cheap subagents across papers, and computes/plots in a sandbox.
 
 Read `docs/concept.md` (design rationale) and `docs/measurements.md` (the numbers behind
 the architectural choices) before changing the shape of the agent; `docs/ctgov_concept.md`
@@ -51,10 +51,10 @@ setup on every run, with our own components in `chat-ui-overlay/`. **See
 `scripts/setup.py` writes `.env`. **One LangSmith key**, prompted for once and written to
 both names that read it: `LANGSMITH_API_KEY` (tracing, sandboxes, fallback for models) and
 `LANGSMITH_GATEWAY_API_KEY` (model calls; `models.py:gateway_key()` is the order). Same value
-unless hand-edited to bill models under another workspace-scoped key — setup only fills it
-when empty, so that edit survives. The gateway takes a **LangSmith** key, never a provider
-key: an OpenAI/Anthropic key lives workspace-side under Settings → Integrations → Provider
-Secrets, and one sent from a client gets a 403 (verified).
+unless hand-edited to bill models elsewhere — setup only fills it when empty, so that edit
+survives. The gateway takes a **LangSmith** key, never a provider key: an OpenAI/Anthropic
+key lives workspace-side under Settings → Integrations → Provider Secrets, and one sent from
+a client gets a 403 (verified).
 
 Model env var names live in `models.py:ENV_VARS`, imported by `cli.py` and `evals/run.py`. A
 new axis is preserved by adding it *there and nowhere else* — a hand-copied list is how a
@@ -72,7 +72,7 @@ research_agent/
 ├── sandbox.py                            sandbox lifecycle + WebSocket retry
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
-├── sources/     pubmed.py pmc.py ctgov.py cache_io.py _http.py
+├── sources/     pubmed.py pmc.py ctgov.py web.py cache_io.py _http.py
 └── middleware/  artifacts.py uploads.py perf.py progress.py
 evals/  scripts/  ui/  chat-ui-overlay/  docs/  data/
 ```
@@ -85,8 +85,8 @@ assembles — it owns no sandbox and no I/O, which is what lets all three share 
   turn 2 sees turn 1's files. Studio inspection (no `thread_id`) gets `_UnboundSandbox`,
   which raises on any call — never let it reach a real run path.
 - `runner.py` — `run_once(question) -> RunResult`. Exists for `evals/`: the trajectory,
-  artifact names and `root_context_chars` are not recoverable from the answer text, and are
-  where regressions actually show up.
+  artifact names and `root_context_chars` aren't recoverable from the answer text, and are
+  where regressions show up.
 
 `evals/` is deliberately outside the package — nothing shipped at deploy time should carry a
 test framework. Its entry points must run with `-m` from the repo root.
@@ -128,6 +128,11 @@ the core economy of the design, and these are its rules:
 - **`/workspace/out/` is the user deliverables contract**, swept by `ArtifactMiddleware` and
   published through the `ui` state key (`ui/ui.tsx`). The prompt forbids `read_file` on
   anything in it — reading a PNG back cost more context than an entire run.
+- **Web search is a PTC tool, never a spec bound to the root model.** Both providers ship it
+  server-side, so binding it lands every retrieved page in root context outside `eval` — 27.9k
+  input tokens for one question, measured. `sources/web.py` spends the search in a throwaway
+  `search`-role call and returns a digest; a raw provider dict can't reach
+  `create_deep_agent(tools=...)` anyway (`langchain_quickjs/_ptc.py:100` reads `.name`).
 - **`/workspace/uploads/` is not under `out/`**, or a file the user gave us would come back as
   a deliverable of their own question. `UploadMiddleware` strips attachments out of the human
   message before the first model call and passes a manifest instead; the durable copy lives in
@@ -152,21 +157,23 @@ filesystem including `execute`. Nothing routes work to it, but don't start.
 
 ### Model gateway
 
-Three roles × three independent env vars, defaulting to nine constants in `models.py`:
+Four roles × three independent env vars, defaulting to twelve constants in `models.py`:
 
 | | `_MODEL` | `_PROVIDER` | `_EFFORT` |
 |---|---|---|---|
 | `ROOT` | `openai/gpt-5.6-terra` | `openai` | `low` |
 | `SUBAGENT` | `openai/gpt-5.6-luna` | `openai` | `low` |
+| `SEARCH` | `openai/gpt-5.6-luna` | `openai` | `low` |
 | `JUDGE` | `openai/gpt-5.6-luna` | `openai` | `low` |
 
-Root runs the larger model, leaves the cheaper one. `models.py`'s docstring has the rest —
-why three axes rather than named profiles, why Anthropic models must go down the native
-`/anthropic` path or silently lose prompt caching, and what an unset `_EFFORT` means on each
-path. Two things to know before a swap: naming a `_PROVIDER` that the model id's form
-contradicts makes `_provider_for` raise rather than send it down the wrong path, and **Haiku
-4.5 has no effort scale**, so `SUBAGENT_MODEL=claude-haiku-4-5-20251001` must also clear
-`SUBAGENT_EFFORT=` or the gateway answers with a 400.
+Root runs the larger model, leaves and `SEARCH` the cheaper one; `SEARCH` carries the
+provider's own web search (`WEB_SEARCH_SPECS`), so it must be an id that supports it or the
+call 400s. `models.py`'s docstring has the rest — why three axes rather than named profiles,
+why Anthropic models must go down the native `/anthropic` path or silently lose prompt
+caching, and what an unset `_EFFORT` means on each path. Two things to know before a swap:
+naming a `_PROVIDER` that the model id's form contradicts makes `_provider_for` raise rather
+than send it down the wrong path, and **Haiku 4.5 has no effort scale**, so
+`SUBAGENT_MODEL=claude-haiku-4-5-20251001` must also clear `SUBAGENT_EFFORT=` or it 400s.
 
 ## Invariants worth preserving
 
