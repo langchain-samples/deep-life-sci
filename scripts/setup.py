@@ -25,6 +25,7 @@ still ends up with a working `uv run agent`.
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import re
 import shutil
@@ -69,6 +70,20 @@ def confirm(question: str) -> bool:
 # --- 1. .env ----------------------------------------------------------------------
 
 
+def ask_secret(prompt: str) -> str:
+    """Read a credential without echoing it.
+
+    `input()` would print the key into the terminal, from where it reaches scrollback, a
+    `script` log, and any screen share or pasted transcript — a real key was leaked that
+    way. Only ever called behind `interactive()`, which has already established a tty, so
+    getpass cannot fall back to its unmasked echoing path.
+
+    Whitespace is stripped rather than rejected because nothing is echoed to proofread: a
+    key pasted with a trailing newline or a stray space looks identical to a clean one.
+    """
+    return "".join(getpass.getpass(f"[{TAG}] {prompt}: ").split())
+
+
 def ask_key(key: str, prompt: str, prefix: str) -> None:
     """Required, loops until answered."""
     if env_value(key):
@@ -77,7 +92,7 @@ def ask_key(key: str, prompt: str, prefix: str) -> None:
         die(TAG, f"{key} is not set in .env and there is no terminal to ask on. "
                  "Add it and re-run.")
     while True:
-        reply = "".join(input(f"[{TAG}] {prompt}: ").split())
+        reply = ask_secret(prompt)
         if not reply:
             continue
         # A wrong-but-plausible key is the failure this catches: a provider key pasted
@@ -85,17 +100,23 @@ def ask_key(key: str, prompt: str, prefix: str) -> None:
         # gateway takes only a LangSmith key. Queried rather than rejected — key formats
         # belong to LangSmith.
         if prefix and not reply.startswith(prefix):
-            say(TAG, f"that doesn't start with '{prefix}' — see the note in .env.example.")
+            # Echoing the first few characters is the only proofreading available now that
+            # the key itself never appears — enough to spot a provider key or a truncated
+            # paste, short enough not to be the secret.
+            say(TAG, f"that starts '{reply[:8]}…', not '{prefix}' — "
+                     "see the note in .env.example.")
             if not input(f"[{TAG}] use it anyway? [y/N] ").strip().lower().startswith("y"):
                 continue
         set_env(key, reply)
         return
 
 
-def ask_optional(key: str, prompt: str) -> None:
+def ask_optional(key: str, prompt: str, *, secret: bool = False) -> None:
+    """`secret` for a credential, which must not echo; the default suits an email."""
     if not interactive():
         return
-    reply = "".join(input(f"[{TAG}] {prompt} (optional, Enter to skip): ").split())
+    ask = ask_secret if secret else lambda p: "".join(input(f"[{TAG}] {p}: ").split())
+    reply = ask(f"{prompt} (optional, Enter to skip)")
     if reply:
         set_env(key, reply)
 
@@ -159,7 +180,7 @@ def ensure_env() -> None:
     if fresh:
         say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
                  "from 3 to 10 req/s.")
-        ask_optional("NCBI_API_KEY", "NCBI API key")
+        ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
         ask_optional("NCBI_EMAIL", "contact email for NCBI (their usage policy asks for one)")
 
 
