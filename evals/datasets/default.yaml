@@ -269,3 +269,60 @@
     metastases. Fail if any closed trial is presented as ongoing — CV9201 NCT01915524 
     (terminated), CV9202/BI 1361849 NCT03164772 (completed), mRNA-5671/V941 NCT03948763 
     (terminated).
+
+# Q14 — web-only fact with a literature bridge. A label change is a regulatory action:
+# it has no paper of its own, but the evidence behind it does, so the answer has to come
+# off the agency site and out of PubMed and keep the two straight.
+- id: car-t-secondary-malignancy-label
+  question: >-
+    What did FDA change about the boxed warnings on approved CAR-T products, and is the
+    evidence behind it published?
+  expects_artifact: []
+  domain: D3 clinical medicine and trials
+  surface: web+pubmed
+  rubric: |-
+    January 2024: FDA required a class-wide boxed warning for secondary T-cell
+    malignancies on the six BCMA- or CD19-directed autologous CAR-T products approved at
+    the time — Abecma, Breyanzi, Carvykti, Kymriah, Tecartus, Yescarta — cited to FDA by
+    URL. The published evidence is cited separately, to PubMed, with resolvable PMIDs.
+
+    Require only those: the 2024 date, the class-wide scope, the malignancy type, an FDA
+    URL, and PMIDs. Accept April 2024, the date on FDA's own safety communication.
+    Accept the six products counted rather than named.
+
+    Everything else is optional and must not be marked missing — including the sponsor
+    letter date, the November 2023 investigation, life-long monitoring, the October 2025
+    addition of IEC-EC to Carvykti's boxed warning, and the June 2025 REMS elimination.
+
+    Fail if an FDA action is attributed to a journal article, or a web source is presented
+    as peer-reviewed evidence. Fail if a boxed warning is reported as withdrawn. Fail if
+    IEC-EC is given as class-wide, or the T-cell malignancy warning as Carvykti-only.
+
+# Q15 — web numbers into the sandbox. The counts are agency statistics with no PubMed
+# record; the trend, the baseline and the plot are the agent's own work.
+- id: fda-novel-approvals-trend
+  question: >-
+    Plot CDER novel drug approvals per year since 2010 and tell me how 2025 compared to
+    the average
+  expects_artifact: [image]
+  domain: D2 chemistry and drug discovery
+  surface: web+sandbox
+  rubric: |-
+    CDER novel drug approvals — new molecular entities under NDAs plus new therapeutic
+    biologics under BLAs — from FDA's annual novel-drug pages:
+
+      2010 21   2014 41   2018 59   2022 37
+      2011 30   2015 45   2019 48   2023 55
+      2012 39   2016 22   2020 53   2024 50
+      2013 27   2017 46   2021 50   2025 46
+
+    2016-2025 mean is 46.6, so 2025 at 46 is essentially at the decade average
+
+    Require a plot, every year 2010-2025 present, an FDA URL, and 2025 compared against a
+    stated baseline. Counts must match the values above. Any defensible decade window 
+    passes provided the answer says which one it used and its average is right for
+    that window; "roughly at the average" and "slightly below" both pass.
+
+    Fail if the counts are recalled rather than sourced, if CBER products (vaccines, gene
+    and cell therapies) are folded into the totals without saying so, if the comparison is
+    made without stating the baseline, or if 2025 is characterised as a sharp drop.

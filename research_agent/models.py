@@ -13,12 +13,20 @@ tracing. `scripts/setup.py` prompts once and writes both, so setting them apart 
 edit that later setup runs leave alone. Either way the key is what the OpenAI SDK would
 call an api_key, so it is passed explicitly rather than through the environment.
 
-Each role is configured by three independent env vars, defaulting to the nine constants
-below:
+Each role is configured by three independent env vars, defaulting to the twelve
+constants below:
 
-    ROOT_MODEL       SUBAGENT_MODEL       JUDGE_MODEL       gateway model id
-    ROOT_PROVIDER    SUBAGENT_PROVIDER    JUDGE_PROVIDER    anthropic | openai
-    ROOT_EFFORT      SUBAGENT_EFFORT      JUDGE_EFFORT      low | medium | high | xhigh | max
+    ROOT_MODEL      SUBAGENT_MODEL      SEARCH_MODEL      JUDGE_MODEL      model id
+    ROOT_PROVIDER   SUBAGENT_PROVIDER   SEARCH_PROVIDER   JUDGE_PROVIDER   anthropic|openai
+    ROOT_EFFORT     SUBAGENT_EFFORT     SEARCH_EFFORT     JUDGE_EFFORT     low..max
+
+`search` is the role behind `sources/web.py`'s `web_search` tool: a model with the
+provider's own server-side web search bound to it, called from inside the tool so its
+output lands in the JS heap rather than in root context. It is a role of its own rather
+than a reuse of `subagent` because web search is the one capability that is not uniform
+across ids — the spec differs per gateway path (`WEB_SEARCH_SPECS`), a leaf swap must not
+be able to take the tool out with it, and one search legitimately runs 4x longer than the
+30s a leaf gets (`SEARCH_TIMEOUT_SECONDS`).
 
 Three axes rather than one named profile because they vary independently, and a name that
 covers combinations needs one entry per combination — a root swap, a leaf swap and a
@@ -54,7 +62,7 @@ import httpx
 ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
 OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 
-# --- The nine model settings: three roles x three axes -----------------------------
+# --- The twelve model settings: four roles x three axes ----------------------------
 # Each is overridden by the identically named env var, so `ROOT_EFFORT=high uv run agent`
 # needs no code change. `""` means unset, which is not the same thing on both paths: on an
 # Anthropic model it is *no thinking at all* rather than a default level (see `_effort`),
@@ -69,6 +77,10 @@ ROOT_EFFORT = "low"
 SUBAGENT_MODEL = "openai/gpt-5.6-luna"
 SUBAGENT_PROVIDER = "openai"
 SUBAGENT_EFFORT = "low"
+
+SEARCH_MODEL = "openai/gpt-5.6-luna"
+SEARCH_PROVIDER = "openai"
+SEARCH_EFFORT = "low"
 
 JUDGE_MODEL = "openai/gpt-5.6-terra"
 JUDGE_PROVIDER = "openai"
@@ -185,6 +197,42 @@ SUBAGENT_TIMEOUT_SECONDS = 30.0
 # waiting.
 JUDGE_TIMEOUT_SECONDS = 60.0
 
+# Wall-clock ceiling on one `web_search` call, which is one model call that does its own
+# searching server-side before it answers. Deliberately 4x SUBAGENT_TIMEOUT_SECONDS: a
+# leaf reads text already in its prompt, while this one issues real HTTP requests inside
+# the provider and may issue several. Measured on a single-question digest through this
+# gateway: 15.6s (Anthropic, 1 search), 12.0s (OpenAI, 3 searches + an open_page and a
+# find_in_page). 120s is ~6x the worst of those, which is the same headroom ROOT_TIMEOUT
+# takes, and it still sits well inside CodeInterpreterMiddleware's 900s — a `web_search`
+# that outlives this has hung rather than searched hard.
+SEARCH_TIMEOUT_SECONDS = 120.0
+
+# The provider's own server-side web search, per gateway path. There is no portable form:
+# each provider names its tool differently, and the search *runs inside the provider*
+# rather than here, which is the whole reason this is a bound tool spec and not an HTTP
+# client in `sources/`. Both were verified through this gateway on 2026-09-03.
+#
+# Do not bind either of these to the root model. They are server-side, so their results
+# come back as content blocks in the assistant message and land in root context, outside
+# `eval` and outside PTC — one such question measured 27.9k input tokens against a
+# whole-run root budget the repo tunes in the low tens of thousands of *characters*.
+# `sources/web.py` exists to spend those tokens in a throwaway call instead.
+#
+# A second trap, if anyone tries it anyway: passing a raw dict through
+# `create_deep_agent(tools=[...])` crashes at `langchain_quickjs/_ptc.py:100`
+# (`AttributeError: 'dict' object has no attribute 'name'`) on the first model call —
+# `filter_tools_for_ptc` reads `.name` off every entry of `request.tools`, which
+# LangChain types as `list[BaseTool | dict[str, Any]]`. Verified against
+# langchain-quickjs 0.3.5.
+WEB_SEARCH_SPECS = {
+    # `max_uses` is a per-request cap on searches, and the only one either path offers.
+    # Five is enough for a real question and bounds the cost of a runaway query.
+    "anthropic": {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+    # Needs the Responses API, which `_build` already sets on this path — Chat
+    # Completions has no server-side web search at all.
+    "openai": {"type": "web_search"},
+}
+
 # Effort levels the gateway accepts on some model. Validated here only to catch a typo
 # before a sweep boots nine containers; whether a *given* model supports the level is the
 # API's call (Haiku 4.5 rejects the parameter outright, Sonnet 4.6 has no `xhigh`).
@@ -193,13 +241,18 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # The two gateway paths, which is all a provider selects here — see the module docstring.
 PROVIDERS = ("anthropic", "openai")
 
-# The nine settings above, indexed for lookup by role and axis.
+# The twelve settings above, indexed for lookup by role and axis.
 DEFAULTS = {
     "root": {"model": ROOT_MODEL, "provider": ROOT_PROVIDER, "effort": ROOT_EFFORT},
     "subagent": {
         "model": SUBAGENT_MODEL,
         "provider": SUBAGENT_PROVIDER,
         "effort": SUBAGENT_EFFORT,
+    },
+    "search": {
+        "model": SEARCH_MODEL,
+        "provider": SEARCH_PROVIDER,
+        "effort": SEARCH_EFFORT,
     },
     "judge": {"model": JUDGE_MODEL, "provider": JUDGE_PROVIDER, "effort": JUDGE_EFFORT},
 }
@@ -417,6 +470,27 @@ def subagent_model(**kwargs):
     """
     kwargs.setdefault("timeout", SUBAGENT_TIMEOUT_SECONDS)
     return _model_for("subagent", **kwargs)
+
+
+def web_search_model(**kwargs):
+    """The `search` role, with the provider's server-side web search already bound.
+
+    Returns a Runnable rather than a bare chat model, because which spec to bind is
+    decided by the resolved gateway path (see `WEB_SEARCH_SPECS`) and that resolution
+    lives here. `sources/web.py` therefore never has to know which provider it is on.
+
+    Binding in this module is also what keeps a provider swap from silently sending the
+    wrong spec: `SEARCH_PROVIDER` is an env axis like every other, so a hard-coded spec
+    at the call site would answer `SEARCH_MODEL=claude-sonnet-5` with an Anthropic model
+    holding an OpenAI tool definition, which the gateway rejects with a 400.
+
+    Timed out at SEARCH_TIMEOUT_SECONDS rather than the leaves' 30s; see that constant.
+    """
+    model, provider, effort = _resolve("search")
+    kwargs.setdefault("timeout", SEARCH_TIMEOUT_SECONDS)
+    if effort:
+        kwargs.setdefault("reasoning_effort", effort)
+    return _build(model, provider, **kwargs).bind_tools([WEB_SEARCH_SPECS[provider]])
 
 
 def judge_model(**kwargs):
