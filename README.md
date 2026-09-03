@@ -42,7 +42,7 @@ Click the Sandboxes tab on the right-hand side of your LangSmith console. If you
 In the terminal:
 
 ```bash
-git clone https://github.com/mcunningham1440/deep-life-sci.git
+git clone https://github.com/langchain-samples/deep-life-sci.git
 
 cd deep-life-sci
 ```
