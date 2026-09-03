@@ -45,3 +45,6 @@ evals/taxonomy/
 evals/ground_truth_reports/
 
 evals/failure_reports/
+# Local workflow tool: turns the last sweep's rubric misses into diagnosis prompts.
+# Reads LangSmith, writes nothing; not part of the eval harness.
+scripts/eval_misses.py

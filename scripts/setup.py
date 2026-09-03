@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,6 +47,9 @@ from _common import (
 
 TAG = "setup"
 WINDOWS = os.name == "nt"
+# agent-chat-ui is on Next 16, which refuses to build below 20.9. Checked as a major so a
+# .0 release of 20 is not read as too old; Next's own check catches 20.0-20.8.
+NODE_MIN_MAJOR = 20
 UI_REPO = "https://github.com/langchain-ai/agent-chat-ui.git"
 
 _assume_yes = False
@@ -1269,27 +1274,64 @@ def ensure_overlay() -> list[str]:
     return written
 
 
+def node_major() -> int | None:
+    """Major version of the node on PATH, or None when there is not a usable one.
+
+    `npm` alone was the old check, and it answers the wrong question: node and npm are
+    installed together, so npm's presence proves nothing about the version behind it.
+    """
+    exe = tool("node")
+    if exe is None or tool("npm") is None:
+        return None
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=30)
+    except OSError:
+        return None
+    found = re.match(r"v?(\d+)", out.stdout.strip())
+    return int(found.group(1)) if found else None
+
+
+def install_node() -> None:
+    """Offer the install, or die naming one. Only ever called with node missing or too old.
+
+    Installing is offered only through a package manager the machine already has, and only
+    with a yes. That is the line rather than squeamishness about runtimes: `brew install
+    node` puts node on the PATH of *future* processes, which is what `dev.py` and the
+    user's next shell need, while a tarball this script downloaded and unpacked itself
+    would be visible to this process alone — the UI would install and then vanish. Windows
+    has no equivalent one-liner: the nodejs.org .msi wants administrator rights, which is
+    exactly what a managed laptop withholds, and fnm needs a shell hook after installing.
+    So the per-user managers below are named rather than run, which is the difference
+    between "add the UI later" and "cannot".
+    """
+    brew = None if WINDOWS else tool("brew")
+    if brew and confirm("install Node with `brew install node` ?"):
+        run(["brew", "install", "node"])
+        if (node_major() or 0) >= NODE_MIN_MAJOR:
+            return
+        die(TAG, "node installed but not on PATH — open a new terminal and re-run this script.")
+    if WINDOWS:
+        say(TAG, "  with admin rights:  winget install OpenJS.NodeJS.LTS")
+        say(TAG, "  without:            winget install Schniz.fnm  &&  fnm install 22")
+        say(TAG, "  or unzip the Windows binary from https://nodejs.org onto your PATH")
+    else:
+        say(TAG, "  https://nodejs.org, or `brew install node` on a Mac")
+    die(TAG, "install it and re-run this script to add the UI.")
+
+
 def ensure_node() -> None:
     """Node is a real prerequisite, not a nicety: pnpm builds the frontend and npm installs
     the artifact components. pnpm is offered automatically because npm can install it in
-    one command; Node itself is left to the user, since installing a language runtime
-    unasked is a larger liberty. Reached only after the steps above, so the message can
-    truthfully say the headless path already works.
+    one command; Node is offered too, but only through `install_node`'s narrower path.
+    Reached only after the steps above, so the message can truthfully say the headless path
+    already works.
     """
-    if tool("npm") is None:
+    major = node_major()
+    if major is None or major < NODE_MIN_MAJOR:
         say(TAG, 'everything else is ready — ask questions now with:  uv run agent "your question"')
-        say(TAG, "the chat UI needs Node 20+.")
-        # nodejs.org ships an .msi that wants administrator rights, which is exactly what a
-        # managed laptop withholds — and this is the only step in setup that does. The
-        # per-user managers below install into the user profile and need no elevation, so
-        # naming them here is the difference between "add the UI later" and "cannot".
-        if WINDOWS:
-            say(TAG, "  with admin rights:  winget install OpenJS.NodeJS.LTS")
-            say(TAG, "  without:            winget install Schniz.fnm  &&  fnm install 22")
-            say(TAG, "  or unzip the Windows binary from https://nodejs.org onto your PATH")
-        else:
-            say(TAG, "  https://nodejs.org, or `brew install node` on a Mac")
-        die(TAG, "install it and re-run this script to add the UI.")
+        found = "none is installed" if major is None else f"yours is {major}"
+        say(TAG, f"the chat UI needs Node {NODE_MIN_MAJOR}+ — {found}.")
+        install_node()
     if tool("pnpm") is not None:
         return
     # agent-chat-ui pins pnpm as its package manager and ships only a pnpm lockfile, so

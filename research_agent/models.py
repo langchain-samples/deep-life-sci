@@ -70,7 +70,7 @@ SUBAGENT_MODEL = "openai/gpt-5.6-luna"
 SUBAGENT_PROVIDER = "openai"
 SUBAGENT_EFFORT = "low"
 
-JUDGE_MODEL = "openai/gpt-5.6-luna"
+JUDGE_MODEL = "openai/gpt-5.6-terra"
 JUDGE_PROVIDER = "openai"
 JUDGE_EFFORT = "low"
 
@@ -112,7 +112,13 @@ JUDGE_EFFORT = "low"
 # gateway answers the parameter with a 400.
 #
 # The judge is pinned so that a score change is attributable to the pair under test rather
-# than to the grader. It was already luna, and stays there.
+# than to the grader. It moved from luna to terra on 2026-09-01: luna failed
+# psilocybin-depression-unpublished on two claims that were both false about the answer in
+# front of it -- that the answer had used the wrong denominator when it had reported the
+# registry's own count as the rubric asks, and that three reclassified trials carried no
+# stated reason when each carried one inline. A grader that misreads the answer is a worse
+# confound than a costlier one, and it also retires the note above about the leaves sharing
+# the judge's model and effort.
 
 # Per-socket deadlines on the root model's streaming call. Components, not a scalar:
 # the read timeout is the gap *between* chunks, not the whole request, so 10s is a

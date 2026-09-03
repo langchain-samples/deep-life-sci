@@ -189,8 +189,8 @@
   domain: D3 clinical medicine and trials
   surface: ctgov+pubmed
   rubric: |-
-    30 completed interventional trials as of August 2026 — the registry query is the
-    denominator, and it grows over time. 17 have a linked publication, 13 have none:
+    31 completed interventional trials as of September 2026 — the registry query is the
+    denominator, and it grows over time. 18 have a linked publication, 13 have none:
 
       NCT06372197 NCT04739865 NCT05399498 NCT05624268 NCT04932434 NCT06650800 NCT05581797
       NCT06746441 NCT06230757 NCT05710237 NCT04842045 NCT06235411 NCT05385783
@@ -199,10 +199,10 @@
     or set aside with a stated reason.
 
     Which trials count as published is a judgment call and any split passes, provided each
-    departure from 17/13 is stated with its reason and its size — trials judged off topic,
-    papers that are protocols rather than results, papers appearing since August 2026.
+    departure from 18/13 is stated with its reason — trials judged off topic, papers that 
+    are protocols rather than results.
 
-    Fail an unexplained split. Fail a rationale resting on the registry rather than the
+    Fail an unexplained deviation. Fail a rationale resting on the registry rather than the
     literature: neither "no results posted" nor an empty sponsor-entered publication field
     is evidence a trial is unpublished.
 
