@@ -1429,7 +1429,7 @@ def ensure_chat_ui() -> None:
     # Resolved here rather than in `ensure_node` because `pnpm_command` matches against the
     # clone's `packageManager` pin, which does not exist until the clone above.
     pnpm = pnpm_or_die(TAG)
-    say(TAG, "installing frontend dependencies (~1 min, once)…")
+    say(TAG, "installing frontend dependencies (~1 min)…")
     run([*pnpm.argv, "install", "--silent"], cwd=ui_dir)
 
 
@@ -1443,7 +1443,9 @@ def ensure_artifact_deps() -> None:
     """
     if (REPO_ROOT / "ui" / "node_modules").is_dir():
         return
-    say(TAG, "installing artifact component dependencies…")
+    # `--silent` below prints nothing at all until it finishes, so without the duration
+    # this is a dead terminal for minutes at the very last step of setup.
+    say(TAG, "installing artifact component dependencies (a few minutes)…")
     run(["npm", "ci", "--silent"], cwd=REPO_ROOT / "ui")
 
 

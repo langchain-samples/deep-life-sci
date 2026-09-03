@@ -225,7 +225,7 @@ def pnpm_command(tag: str = "setup") -> Pnpm | None:
         if how == "npm exec" and tool("npm") is not None:
             # The probe captures output, so without this the slowest rung is also the one
             # that looks like a hang.
-            say(tag, f"fetching {pin} with `npm exec` — a few minutes, once.")
+            say(tag, f"fetching {pin} with `npm exec` — a few minutes.")
         version = _probe([*argv, "--version"], cwd, timeout)
         # A rung can answer with the wrong pnpm rather than fail: an older `pnpm` on PATH
         # predates the self-correcting `packageManager` support, and corepack outside a
