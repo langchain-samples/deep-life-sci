@@ -40,6 +40,7 @@ from _common import (
     chat_ui_dir,
     die,
     env_value,
+    pnpm_or_die,
     run,
     say,
     set_env,
@@ -265,7 +266,9 @@ def ensure_snapshot() -> None:
     if SNAPSHOT_NAME in names:
         say(TAG, "sandbox snapshot ready.")
         return
-    say(TAG, "building the sandbox snapshot (~100s, once)…")
+    # The estimate lives in build_snapshot.py, beside the step it actually times; two
+    # "~100s" lines in a row read as two waits.
+    say(TAG, "building the sandbox snapshot (once)…")
     run(["uv", "run", "scripts/build_snapshot.py"], cwd=REPO_ROOT)
 
 
@@ -1381,11 +1384,13 @@ def install_node() -> None:
 
 
 def ensure_node() -> None:
-    """Node is a real prerequisite, not a nicety: pnpm builds the frontend and npm installs
-    the artifact components. pnpm is offered automatically because npm can install it in
-    one command; Node is offered too, but only through `install_node`'s narrower path.
-    Reached only after the steps above, so the message can truthfully say the headless path
-    already works.
+    """Node is a real prerequisite, not a nicety: it builds the frontend and installs the
+    artifact components. Offered, but only through `install_node`'s narrower path. Reached
+    only after the steps above, so the message can truthfully say the headless path already
+    works.
+
+    Says nothing about pnpm. That used to live here and could not: the pin it has to match
+    is inside the clone, which `ensure_chat_ui` has not made yet.
     """
     major = node_major()
     if major is None or major < NODE_MIN_MAJOR:
@@ -1393,17 +1398,6 @@ def ensure_node() -> None:
         found = "none is installed" if major is None else f"yours is {major}"
         say(TAG, f"the chat UI needs Node {NODE_MIN_MAJOR}+ — {found}.")
         install_node()
-    if tool("pnpm") is not None:
-        return
-    # agent-chat-ui pins pnpm as its package manager and ships only a pnpm lockfile, so
-    # this is not a substitutable choice between equivalent tools. `-g` reads as
-    # machine-wide but is not: npm's global prefix is ~/.npm-global or %APPDATA%\npm,
-    # inside the user profile, so this needs no elevation either.
-    if not confirm("the chat UI needs pnpm. install it with `npm install -g pnpm` ?"):
-        die(TAG, "install pnpm yourself (https://pnpm.io/installation), then re-run.")
-    run(["npm", "install", "-g", "pnpm"])
-    if tool("pnpm") is None:
-        die(TAG, "pnpm installed but not on PATH — open a new terminal and re-run this script.")
 
 
 def ensure_chat_ui() -> None:
@@ -1432,8 +1426,11 @@ def ensure_chat_ui() -> None:
 
     if (ui_dir / "node_modules").is_dir():
         return
+    # Resolved here rather than in `ensure_node` because `pnpm_command` matches against the
+    # clone's `packageManager` pin, which does not exist until the clone above.
+    pnpm = pnpm_or_die(TAG)
     say(TAG, "installing frontend dependencies (~1 min, once)…")
-    run(["pnpm", "install", "--silent"], cwd=ui_dir)
+    run([*pnpm.argv, "install", "--silent"], cwd=ui_dir)
 
 
 def ensure_artifact_deps() -> None:

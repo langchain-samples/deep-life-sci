@@ -1,6 +1,6 @@
 # Deep Life Sci
 
-A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for life scientists and chemists.
+A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
 
 ## Capabilities
 
@@ -68,7 +68,7 @@ irm https://astral.sh/uv/install.ps1 | iex
 uv run scripts/setup.py
 ```
 
-### 5. Run
+### 5. Run the agent
 
 ```bash
 uv run scripts/dev.py                        # opens the chat UI in your browser (recommended)
@@ -92,7 +92,7 @@ docs/                 design notes and demo questions
 
 ## Notes
 
-The UI is a modified clone of [`agent-chat-ui`](https://github.com/langchain-ai/agent-chat-ui) in
+The UI is a modified clone of [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui) in
 `.chat-ui/`.
 
 Full text journal articles are only available if present in PMC's open-access subset. Only abstracts are available for paywalled papers.

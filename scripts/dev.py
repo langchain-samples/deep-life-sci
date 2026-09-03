@@ -38,6 +38,7 @@ from _common import (
     chat_ui_dir,
     die,
     listening,
+    pnpm_or_die,
     require_setup,
     say,
     tool,
@@ -148,15 +149,17 @@ def _raise_interrupt(signum: int, frame: object) -> None:
 
 def main() -> int:
     require_setup("dev")
-    # Checked up front rather than at spawn time, where a missing pnpm would surface only
-    # after the agent server has already claimed its port.
-    if tool("pnpm") is None:
-        die("dev", "pnpm is not on your PATH. Run:  uv run scripts/setup.py")
-
     ui_dir = chat_ui_dir()
     if not ui_dir.is_dir():
         say("dev", f"no chat UI at {ui_dir}")
         die("dev", "install it (clone, /ui/* rewrite, pnpm install) with:  uv run scripts/setup.py")
+
+    # Resolved up front rather than at spawn time, where an unrunnable pnpm would surface
+    # only after the agent server had already claimed its port — and after the clone check,
+    # because the pin it matches lives in the clone. Re-resolved on every launch rather than
+    # recorded by setup: it is cheap once the first rung answers, and a path cached here
+    # would go stale the next time the user reinstalls node.
+    pnpm = pnpm_or_die("dev")
 
     # The clone is gitignored, so a patch that is missing from it leaves no trace anywhere:
     # the feature is simply absent while the repo looks like it shipped. Checking that setup
@@ -210,7 +213,7 @@ def main() -> int:
         if not os.environ.get("NO_BROWSER"):
             webbrowser.open(UI_URL)
     else:
-        spawn("ui", ui_dir, ["pnpm", "dev"])
+        spawn("ui", ui_dir, [*pnpm.argv, "dev"])
         open_ui_when_ready()
 
     # Both already up. Nothing to supervise and nothing this script may stop — the servers

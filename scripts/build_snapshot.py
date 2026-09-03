@@ -8,6 +8,10 @@ It boots a plain sandbox, installs the scientific Python stack, and freezes the 
 as a named snapshot. `research_agent/sandbox.py` then boots from that snapshot, which
 turns a ~95s per-run `pip install` into a ~1s start.
 
+Each slow step prints before it starts, not only after it finishes. Timings alone read as
+a script that has finished — a `~100s` estimate followed instantly by `sandbox up in 0.6s`
+looks like the estimate was wrong, and the wait that follows looks like a hang.
+
 Deliberately standalone — it imports nothing from `research_agent`, so it runs by path
 without the package being installed.
 
@@ -144,25 +148,28 @@ def build() -> None:
 
     for existing in client.list_snapshots(name_contains=SNAPSHOT_NAME):
         if existing.name == SNAPSHOT_NAME:
-            print(f"[snapshot] deleting existing {SNAPSHOT_NAME} ({existing.id})")
+            print(f"[snapshot] deleting existing {SNAPSHOT_NAME} ({existing.id})", flush=True)
             client.delete_snapshot(existing.id)
 
     t0 = time.monotonic()
+    print("[build] booting a sandbox…", flush=True)
     with client.sandbox(idle_ttl_seconds=900) as sandbox:
-        print(f"[build] sandbox up in {time.monotonic() - t0:.1f}s")
+        print(f"[build] sandbox up in {time.monotonic() - t0:.1f}s", flush=True)
 
         t1 = time.monotonic()
+        print(f"[build] installing {len(PACKAGES)} packages (~100s)…", flush=True)
         result = sandbox.run(BUILD, timeout=900)
         if result.exit_code != 0:
             raise SystemExit(f"install failed (exit {result.exit_code}):\n{result.stderr}")
-        print(f"[build] installed in {time.monotonic() - t1:.1f}s")
+        print(f"[build] installed in {time.monotonic() - t1:.1f}s", flush=True)
 
         # Verify inside the sandbox we are about to freeze, not after the fact — a
         # snapshot of a broken environment is worse than no snapshot.
+        print("[build] verifying…", flush=True)
         check = sandbox.run(VERIFY, timeout=120)
         if check.exit_code != 0:
             raise SystemExit(f"verification failed:\n{check.stderr}")
-        print(f"[build] verified: {check.stdout.strip()}")
+        print(f"[build] verified: {check.stdout.strip()}", flush=True)
 
         # Drop the smoke-test artifacts so the snapshot's /workspace/out starts empty.
         # It has to start empty now that ArtifactMiddleware publishes everything it
@@ -175,11 +182,12 @@ def build() -> None:
         )
 
         t2 = time.monotonic()
+        print("[build] capturing the snapshot…", flush=True)
         snapshot = client.capture_snapshot(sandbox.name, SNAPSHOT_NAME, timeout=600)
-        print(f"[build] captured in {time.monotonic() - t2:.1f}s")
+        print(f"[build] captured in {time.monotonic() - t2:.1f}s", flush=True)
 
-    print(f"\n[snapshot] ready: name={snapshot.name} id={snapshot.id}")
-    print(f"[snapshot] set SANDBOX_SNAPSHOT_NAME={snapshot.name} in .env")
+    print(f"\n[snapshot] ready: name={snapshot.name} id={snapshot.id}", flush=True)
+    print(f"[snapshot] set SANDBOX_SNAPSHOT_NAME={snapshot.name} in .env", flush=True)
 
 
 if __name__ == "__main__":
