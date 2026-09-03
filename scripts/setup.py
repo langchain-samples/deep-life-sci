@@ -176,6 +176,45 @@ def ensure_deps() -> None:
 # --- 3. sandbox snapshot ----------------------------------------------------------
 
 
+# A workspace with no sandbox entitlement fails here rather than at the key check, and the
+# platform's wording names neither the setting nor where to change it. The README does, so
+# send them there rather than to the key they just typed correctly.
+#
+# Two messages because the platform gives two failures for one cause. Only the first is
+# unambiguous; a bare 401 is equally what a wrong key looks like, and telling someone to
+# go enable a setting they already have is its own dead end, so that one names both.
+_ENTITLEMENT = "sandbox feature is not enabled"
+_REJECTED = ("unauthorized", "401", "403")
+
+# Hand-wrapped to `die()`'s hanging indent, so each is written out in full rather than
+# sharing a fragment that can only line up under one of them.
+SANDBOX_DISABLED_HINT = (
+    "sandboxes are not enabled for this LangSmith workspace, which this agent needs.\n"
+    "        Enable them under the Sandboxes tab in the LangSmith console — see the\n"
+    "        setup section of README.md — then re-run this script."
+)
+
+SANDBOX_REJECTED_HINT = (
+    "LangSmith rejected that key. Either it is wrong, or sandboxes are not enabled for\n"
+    "        the workspace — this agent needs them. Enable them under the Sandboxes tab\n"
+    "        in the LangSmith console — see the setup section of README.md — then\n"
+    "        re-run this script."
+)
+
+
+def sandbox_hint(exc: Exception) -> str | None:
+    """The hint `exc` calls for, or None when it is not about sandbox access.
+
+    Matched on the message because the SDK raises one exception type for all of these.
+    """
+    text = str(exc).lower()
+    if _ENTITLEMENT in text:
+        return SANDBOX_DISABLED_HINT
+    if any(sign in text for sign in _REJECTED):
+        return SANDBOX_REJECTED_HINT
+    return None
+
+
 def ensure_snapshot() -> None:
     """Optional in the sense that a missing snapshot is slow rather than broken —
     sandbox.py falls back to a ~95s pip install per run — but ~100s once is the better
@@ -199,7 +238,8 @@ def ensure_snapshot() -> None:
         # Reaching LangSmith at all failed, so this is a credentials or connectivity
         # problem and every run would have it too. Fail here, where the cause is visible.
         print(exc, file=sys.stderr)
-        die(TAG, "could not reach LangSmith. Check LANGSMITH_API_KEY in .env.")
+        die(TAG, sandbox_hint(exc)
+            or "could not reach LangSmith. Check LANGSMITH_API_KEY in .env.")
 
     if SNAPSHOT_NAME in names:
         say(TAG, "sandbox snapshot ready.")

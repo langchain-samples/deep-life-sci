@@ -79,12 +79,17 @@ SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py-bio")
 # Fallback for a clone that hasn't built the snapshot yet. Same package set, paid per run.
 PROVISION = (
     f"mkdir -p {WORKSPACE}/out && "
-    # libXrender/libXext are for rdkit's 2D depiction; see build_snapshot.py.
+    # libXrender/libXext are for rdkit's 2D depiction, python3-dev for packages with no
+    # wheel for the image's Python; see build_snapshot.py for both.
     "(apt-get update -qq && apt-get install -y -qq --no-install-recommends "
-    "libxrender1 libxext6) >/dev/null && "
+    "libxrender1 libxext6 python3-dev) >/dev/null && "
+    # Unpiped, deliberately. A pipeline exits with the status of its *last* command, so
+    # an earlier `| tail -2` here returned 0 over a failed install and `provision()` below
+    # handed back a sandbox with no scientific stack in it — surfacing much later, as the
+    # agent's own code failing to import numpy.
     "pip install --break-system-packages --quiet "
     "numpy pandas scipy matplotlib openpyxl python-docx python-pptx "
-    "statsmodels scikit-survival scikit-learn biopython rdkit 2>&1 | tail -2"
+    "statsmodels scikit-survival scikit-learn biopython rdkit"
 )
 
 # Four attempts over ~7s of backoff. A dataplane that is recycling comes back inside

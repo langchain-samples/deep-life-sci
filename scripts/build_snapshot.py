@@ -67,8 +67,14 @@ BUILD = (
     # Core rdkit (parsing, descriptors, fingerprints) works without them, so the gap
     # only surfaces at the moment the agent tries to draw a molecule — as an
     # ImportError naming a .so, from a library the prompt promised it had.
+    #
+    # python3-dev is for the packages below that have no wheel for the base image's
+    # Python. Every pin here ships one today except scikit-survival's `ecos` dependency,
+    # whose last release predates the image's interpreter; pip falls back to compiling it
+    # and dies on a missing Python.h. Cheap insurance that costs seconds and turns "no
+    # wheel yet" from a build failure into a slow build.
     "(apt-get update -qq && apt-get install -y -qq --no-install-recommends "
-    "libxrender1 libxext6) >/dev/null && "
+    "libxrender1 libxext6 python3-dev) >/dev/null && "
     f"pip install --break-system-packages --quiet {' '.join(PACKAGES)}"
 )
 
@@ -100,7 +106,34 @@ VERIFY = (
 )
 
 
+# A workspace with no sandbox entitlement fails at the create call below, as a bare 401 or
+# "Sandbox feature is not enabled for this organization" — neither of which names the setting
+# or where to change it. Matched on the message because the SDK raises the same type for this
+# as for a bad key, and worded here rather than shared with setup.py so this script keeps
+# importing nothing local and stays runnable by path.
+SANDBOX_DISABLED_SIGNS = ("sandbox feature is not enabled", "unauthorized", "401", "403")
+
+SANDBOX_DISABLED_HINT = (
+    "If sandboxes are not enabled for this LangSmith workspace, enable them under the\n"
+    "Sandboxes tab in the LangSmith console — see the setup section of README.md — then\n"
+    "re-run this script."
+)
+
+
 def main() -> None:
+    """Translate a missing sandbox entitlement into the setting that fixes it."""
+    try:
+        build()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        text = str(exc).lower()
+        if not any(sign in text for sign in SANDBOX_DISABLED_SIGNS):
+            raise
+        raise SystemExit(f"{exc}\n\n{SANDBOX_DISABLED_HINT}") from exc
+
+
+def build() -> None:
     # 300s rather than the SDK's 10s default. `capture_snapshot` takes a `timeout`, but
     # it governs only the ready-poll *after* the POST — the POST itself is left on the
     # client default, and capture is well over 10s now that the platform compacts
