@@ -11,8 +11,8 @@ window pointed at nothing.
 
 A server already serving on its port is left alone and reused, so this is safe to run
 alongside a `langgraph dev` you started yourself. Only what this script starts is what it
-stops — including the wedged case: a server that holds :2024 without answering is reported,
-never killed, because it is not ours to kill.
+stops — including the wedged case: a server that holds its port without answering is
+reported, never killed, because it is not ours to kill.
 
 Python rather than bash because this is the one command Windows users cannot avoid, and
 the three things it needs — a port check, a browser, and killing a process tree on Ctrl-C —
@@ -119,7 +119,15 @@ def stop_all() -> None:
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            # The group again, not `proc.kill()`: that reaps the direct child (pnpm) and
+            # leaves `next dev` behind it holding :3000 — an orphan the next launch finds
+            # listening and adopts. A server busy enough to miss its SIGTERM window is
+            # exactly the one that must not survive this.
+            if WINDOWS:
+                proc.kill()
+            else:
+                with contextlib.suppress(OSError):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
 def open_ui_when_ready() -> None:
@@ -209,6 +217,16 @@ def main() -> int:
         )
 
     if listening(3000):
+        # Same wedge, same rule as :2024 above — `next dev` can end up bound to the port
+        # and answering nothing, and adopting that paints a window that never fills in. No
+        # /ok here, so the root document is the liveness check, and it gets longer than the
+        # default timeout: Next compiles that route on first request, so a healthy but cold
+        # server can take well over 5s, and calling it dead sends the user off to kill a
+        # server that was about to work.
+        if not answering(3000, path="/", timeout=20.0):
+            say("dev", ":3000 is held by a server that is not responding.")
+            die("dev", "stop it and run this again:  lsof -ti tcp:3000 | xargs kill   "
+                       "(add -9 if it survives; Windows: npx kill-port 3000)")
         say("dev", ":3000 already serving — reusing it")
         if not os.environ.get("NO_BROWSER"):
             webbrowser.open(UI_URL)
