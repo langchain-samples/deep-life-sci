@@ -133,13 +133,14 @@ JUDGE_EFFORT = "low"
 # the judge's model and effort.
 
 # Per-socket deadlines on the root model's streaming call. Components, not a scalar:
-# the read timeout is the gap *between* chunks, not the whole request, so 10s is a
-# "no token for 10s" watchdog rather than a ceiling on a turn. A long turn streams fine.
+# the read timeout is the gap *between* chunks, not the whole request, so `read` is a
+# "no token for that long" watchdog rather than a ceiling on a turn. A long turn streams
+# fine.
 #
 # That sentence is only true of a *streaming* request, which is why `root_model` also sets
 # `streaming=True` — see its docstring. Do not attach this timeout to a model that might be
 # invoked non-streaming: httpx then applies `read` to the whole response body and every turn
-# longer than 10s dies after three attempts at ~31.5s.
+# longer than `read` dies after three attempts at ~3x it.
 #
 # This is the same pathology SUBAGENT_TIMEOUT_SECONDS below was written for, on the one
 # role that never got the fix. langchain-openai forwards an unset timeout as a meaningful
@@ -150,23 +151,23 @@ JUDGE_EFFORT = "low"
 # CLOSE_WAIT (the peer had already sent FIN). The `model` node never returned and the
 # thread stayed `busy`, blocking every later turn on it.
 #
-# 10s is chosen against the measured gap distribution on this gateway, not by feel. Root
-# streaming, max inter-chunk gap: 0.39-0.64s over 10 short calls, 0.76-1.54s over 3 replays
-# of that thread's own 27-message payload. Worst observed anywhere is 1.54s, so this is
-# ~6.5x headroom. One 5.49s time-to-first-token outlier was seen in a separate batch and
-# never recurred in 10 samples, which is why this is 10 and not 5.
+# `read` was 10s, chosen against a measured gap distribution: root streaming, max
+# inter-chunk gap 0.39-0.64s over 10 short calls and 0.76-1.54s over 3 replays of that
+# thread's 27-message payload — ~6.5x headroom over the worst observed.
 #
 # The ~15s (worst 18.86s) origin tax noted under SUBAGENT_TIMEOUT_SECONDS does not appear
 # on the root path — root TTFT measured 0.32-1.54s — so it looks like a fan-out effect of
-# 18 concurrent calls rather than something every first call pays. If this does start
-# firing spuriously on the first call of a run, that is the reason: raise `read`, don't go
-# back to a scalar.
+# 18 concurrent calls rather than something every first call pays. Whatever the cause, the
+# response is the same: raise `read`, don't go back to a scalar.
 #
 # max_retries stays at its default of 2, which covers request establishment: a stall
-# *before* the first token is retried transparently. A stall *after* the stream has opened
-# surfaces as an error instead, because partial tokens have already reached the UI. That is
-# a visible failure rather than a silent recovery — and still strictly better than a hang.
-ROOT_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
+# *before* the first token is retried transparently. A stall *after* the response object
+# exists is not — the SDK does not retry mid-stream — which is why the trace above failed
+# after a single silent wait rather than three attempts at it. That is a visible failure
+# rather than a silent recovery, and still strictly better than a hang. Worst-case
+# detection of a genuinely dead socket is now ~90s (3 attempts x 30s), up from ~30s, and
+# still far inside CodeInterpreterMiddleware's 900s.
+ROOT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 # Wall-clock ceiling on a single analyst request. Nothing else imposes one.
 #
@@ -439,9 +440,9 @@ def root_model(**kwargs):
     component timeout rather than a scalar. An explicit `timeout=` from a caller wins.
 
     `streaming=True` is what makes that timeout safe, and it is not optional. ROOT_TIMEOUT's
-    `read=10.0` is a gap-between-chunks watchdog, which is only what it means on a streaming
-    request; on a non-streaming one httpx applies it to the whole response body, turning a
-    10s inter-chunk allowance into a 10s ceiling on an entire turn. The callers disagreed
+    `read` is a gap-between-chunks watchdog, which is only what it means on a streaming
+    request; on a non-streaming one httpx applies it to the whole response body, turning an
+    inter-chunk allowance into a ceiling on an entire turn. The callers disagreed
     about this: `cli.py` and `graph.py` reach the model through `astream`, but
     `runner.py:run_once` — the seam `evals/` attaches to — uses `ainvoke`, which issues a
     plain request. So the eval sweep, and only the eval sweep, ran the root under a 10s

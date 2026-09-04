@@ -118,11 +118,12 @@ def build_agent(backend):
     # `"model": model` — the *root* model object, ROOT_TIMEOUT and all — plus the
     # unrestricted default filesystem, `execute` included. Both halves are wrong here:
     #
-    # * ROOT_TIMEOUT's `read=10.0` is an inter-chunk watchdog, safe only because the root
-    #   streams. A subagent's inner agent calls non-streaming, so the same 10s becomes a
-    #   ceiling on the whole response. In trace 01a04aca-c0cf-7a21-9db6-ae9180cefcd0 that
-    #   was three attempts at ~10s, then APITimeoutError — 31.7s spent to fail a
-    #   ClinicalTrials.gov triage `trial-analyst` would have finished.
+    # * ROOT_TIMEOUT's `read` is an inter-chunk watchdog, safe only because the root
+    #   streams. A subagent's inner agent calls non-streaming, so the same value becomes a
+    #   ceiling on the whole response. In trace 01a04aca-c0cf-7a21-9db6-ae9180cefcd0, when
+    #   `read` was 10s, that was three attempts at ~10s, then APITimeoutError — 31.7s spent
+    #   to fail a ClinicalTrials.gov triage `trial-analyst` would have finished. At today's
+    #   30s the same mistake costs ~90s.
     # * The unrestricted toolset is the same hazard `analyst_leaf` exists to close.
     #
     # Nothing here should ever route to it: over the project's whole history it has taken
