@@ -54,6 +54,7 @@ from langchain_core.tools import tool
 # the "never coerce an identifier" rule is established and it's what produces PMCIDs.
 from research_agent.paths import PMC_CACHE
 from research_agent.sources import cache_io
+from research_agent.sources._errors import SourceError
 from research_agent.sources.pubmed import normalize_pmcid
 
 # The current PMC Cloud Service layout. Flat, one prefix per article *version*.
@@ -88,7 +89,7 @@ XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 DATA_SUFFIXES = (".xlsx", ".xls", ".csv", ".tsv", ".txt", ".docx", ".pdf", ".zip", ".pptx")
 
 
-class PMCError(RuntimeError):
+class PMCError(SourceError):
     """A PMC lookup failed in a way the caller needs to know about."""
 
 

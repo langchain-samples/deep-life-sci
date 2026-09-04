@@ -31,6 +31,7 @@ from langchain_core.tools import tool
 # getting that wrong starts a second empty cache instead of failing.
 from research_agent.paths import ABSTRACT_CACHE
 from research_agent.sources import cache_io
+from research_agent.sources._errors import SourceError
 from research_agent.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
@@ -130,7 +131,7 @@ def check_field_tags(term: str) -> list[str]:
     return warnings
 
 
-class PubMedError(RuntimeError):
+class PubMedError(SourceError):
     """An E-utilities call failed in a way the caller needs to know about."""
 
 

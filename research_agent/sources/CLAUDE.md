@@ -25,7 +25,10 @@ sleeps included. These are the rules those notes add up to.
   clamps silently at 1,000, unknown ids vanish from a `filter.ids` batch with no missing list,
   and `countTotal` is opt-in and first-page-only. A fourth is a footgun rather than a bug — an
   unfiltered `/studies` is legal and returns all ~600k studies, which is why `ctgov_search`
-  refuses an empty query.
+  refuses an empty query. Surfacing a 4xx only reaches the model because
+  `middleware/tool_errors.py` turns a raised `SourceError` into an `{error}` return —
+  raised out of a PTC tool it ends the run instead. Every source error type subclasses
+  `SourceError` (`_errors.py`) for that reason; a new one that doesn't is a run-killer.
 
 - **Registry reference types are not interchangeable.** `referencesModule` mixes RESULT
   (sponsor-designated, and sparse — 1 of 126 references across one measured phase 3 set),

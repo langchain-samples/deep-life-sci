@@ -46,6 +46,7 @@ from langchain_core.tools import tool
 
 from research_agent.paths import CTGOV_CACHE
 from research_agent.sources import cache_io
+from research_agent.sources._errors import SourceError
 from research_agent.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
 
 BASE_URL = "https://clinicaltrials.gov/api/v2"
@@ -64,7 +65,7 @@ NCT_RE = re.compile(r"^NCT\d{8}$")
 STUDY_URL = "https://clinicaltrials.gov/study/{}"
 
 
-class ClinicalTrialsError(RuntimeError):
+class ClinicalTrialsError(SourceError):
     """A ClinicalTrials.gov call failed in a way the caller needs to know about.
 
     4xx messages from this API are precise and actionable (`Invalid value in parameter

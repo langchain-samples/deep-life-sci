@@ -195,6 +195,10 @@ before changing the behaviour.
   WebSocket failures below the tool boundary, because one HTTP 502 once destroyed a completed
   18-way fan-out. A tool whose sandbox command must run exactly once has to be routed around
   it.
+- **A PTC tool must not raise** (`middleware/tool_errors.py`). An exception leaves the
+  host-function bridge and ends the *run*, not the call, and JS can only catch it as the
+  string `"Host function failed"`. Source failures are wrapped into `{error}` returns in
+  `agent.py`; anything new in the `ptc=[...]` allowlist needs the same containment.
 - **Artifact components only render same-origin.** `/ui/{graph}` returns a script tag with a
   *host-relative* `src`, so a cross-origin frontend (hosted Agent Chat, Studio) 404s it and
   `LoadExternalComponent` paints an empty div — no console error, the chart just absent. Any
