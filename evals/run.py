@@ -6,6 +6,7 @@
     uv run python -m evals.run --seed-id tpd-publication-volume   # one example, by seed id
     ROOT_EFFORT=low uv run python -m evals.run          # score the root at low effort
     ROOT_MODEL=openai/gpt-5.6-terra uv run python -m evals.run   # score a different root
+    kill -USR1 <pid>                                    # dump every thread's stack, keep going
 
 Every run gets its own sandbox per example. That is the expensive choice and it is the
 right one: `evals/` scores `artifact_names`, and a shared container would let one
@@ -21,7 +22,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import os
+import signal
+import sys
+import threading
+import time
 
 from dotenv import load_dotenv
 
@@ -66,6 +72,12 @@ DATASET = "deep-life-sci-default"
 # connection pool and NCBI's 10 req/sec stay comfortable with; raise it with --concurrency.
 MAX_CONCURRENCY = 1
 
+# How long a sweep that has printed everything is allowed to spend shutting down.
+# Generous for a real trace drain, which takes seconds, and far short of the failure it
+# exists to bound — see `_arm_exit_watchdog` and
+# `docs/bugs/eval-sweep-hang-after-errored-example.md`.
+SHUTDOWN_GRACE_SECONDS = 120
+
 
 async def target(inputs: dict) -> dict:
     """The system under test, in the shape `aevaluate` expects.
@@ -90,6 +102,48 @@ async def target(inputs: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 - one bad example must not kill the sweep
         return {"answer": "", "error": f"{type(exc).__name__}: {exc}"}
     return result.as_dict()
+
+
+def _arm_exit_watchdog(grace: float | None = None) -> None:
+    """Kill the process if it is still alive `grace` seconds after its last line of output.
+
+    A sweep can finish every example, score them, print its whole summary and then never
+    return: observed once at 56 minutes, holding the shell that launched it, killable only
+    by signal. To a driver script or a CI job that is indistinguishable from a sweep still
+    running, which is the actual damage — the results were already complete and already in
+    LangSmith.
+
+    The cause is downstream of anything this module controls. `aevaluate` creates a
+    `_evaluation_feedback_executor` thread pool and never shuts it down (langsmith 0.10.15,
+    `evaluation/_arunner.py`); its workers are non-daemon, so `concurrent.futures` joins
+    them at interpreter exit with no timeout, and one blocked in a network call blocks the
+    process. Nothing here can bound that join, so bound the process instead.
+
+    The dump is the point of the delay: everything a sweep produces is already printed, so
+    the only thing left to lose is the diagnosis, and a stack per thread names the blocked
+    one. Exit status is 0 because the sweep itself succeeded — a hang during teardown is
+    not a failed sweep, and a driver checking status must not be told otherwise.
+    """
+
+    # Resolved here rather than as a default argument, which would bind the constant at
+    # import time and leave it looking like a knob it isn't.
+    grace = SHUTDOWN_GRACE_SECONDS if grace is None else grace
+
+    def watchdog() -> None:
+        time.sleep(grace)
+        print(
+            f"\n[evals] still alive {grace:.0f}s after finishing — this is the teardown "
+            f"hang in docs/bugs/eval-sweep-hang-after-errored-example.md. "
+            f"Thread stacks follow, then exiting 0; the sweep's results are complete.",
+            flush=True,
+        )
+        faulthandler.dump_traceback()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+    # Daemon, or the watchdog would be one more thread holding the process open.
+    threading.Thread(target=watchdog, daemon=True, name="evals-exit-watchdog").start()
 
 
 async def main() -> None:
@@ -185,6 +239,13 @@ async def main() -> None:
         for seed_id in sorted(errored):
             print(f"[evals]   {seed_id}")
 
+    # Last statement in `main`: from here on the process owes nothing but its own exit.
+    _arm_exit_watchdog()
+
 
 if __name__ == "__main__":
+    # One signal to a stack dump, so a recurrence of the teardown hang is diagnosed
+    # rather than guessed at: `kill -USR1 <pid>` prints every thread's stack to stderr
+    # and leaves the process running.
+    faulthandler.register(signal.SIGUSR1)
     asyncio.run(main())
