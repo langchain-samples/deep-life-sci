@@ -9,13 +9,13 @@ and each per-article prefix already contains everything we need: a 924-byte meta
 sidecar with the licence and retraction flags, the JATS XML, a plain-text rendering PMC
 did for us, and — the part nothing else provides — the figure images. `efetch db=pmc`
 gives none of that and makes you download 11.5 MB to learn what a LIST call answers for
-free. See `pmc_api_notes/` for the measurements.
+free.
 
 The guards here, like the ones in `pubmed.py`, each correspond to a verified failure mode:
 
 1. `efetch db=pmc` reports a closed article as HTTP 200 with a complete `<front>` — title,
    authors, abstract — and no `<body>`, with no error anywhere. We sidestep it entirely:
-   in this bucket, an article with no objects is an article with no full text, full stop.
+   in this bucket, an article with no objects is treated as an article with no full text.
 2. The object key carries a version suffix that CANNOT be guessed. Observed versions in a
    145-paper corpus: 1 (x73), 2 (x2), and 319 (x2). Hardcoding `.1` silently 404s.
 3. A figure named in the JATS may not be retrievable at all. Across 409 figures in 77
@@ -24,10 +24,9 @@ The guards here, like the ones in `pubmed.py`, each correspond to a verified fai
    MAX_BINARY_BYTES ceiling, above which `read_file` errors instead of returning an
    image. Both are detected before staging, and reported apart, because the remedies
    differ: one is gone for good, the other is a real image the sandbox can't carry.
-4. Legacy paths (`oa.fcgi`, `oa_package/`, `oa_comm/`, `deprecated/`) are withdrawn on or
-   after 2026-08-24. `deprecated/` still returns 200 today, which makes it a trap: code
-   written against it passes testing now and breaks later. Only the flat
-   `PMC{id}.{version}/` layout is used here.
+4. The legacy paths (`oa.fcgi`, `oa_package/`, `oa_comm/`, `deprecated/`) are withdrawn.
+   Some of them still answer 200, which makes them a trap: code written against one passes
+   testing and breaks later. Only the flat `PMC{id}.{version}/` layout is used here.
 5. `"".join(node.itertext())` — correct for an abstract — silently fuses every paragraph
    in a body, because itertext inserts nothing between elements. See `_block_text`.
 
@@ -64,9 +63,8 @@ BUCKET = "https://pmc-oa-opendata.s3.amazonaws.com"
 # resolve — we don't know which directory to look in until after this lookup.
 RESOLVED_CACHE = PMC_CACHE / "_resolved"
 
-# S3 imposes no NCBI-style limit, but unbounded fan-out on a 200-paper corpus is still
-# rude and gains nothing — the wall clock is dominated by the largest object, not by
-# queue depth.
+# S3 imposes no NCBI-style limit, but unbounded fan-out on a 200-paper corpus buys
+# nothing — the wall clock is dominated by the largest object, not by queue depth.
 S3_CONCURRENCY = 16
 
 # deepagents' MAX_BINARY_BYTES. A binary file over this returns an ERROR from read_file
@@ -272,7 +270,7 @@ _LIFTED_TAGS = frozenset({"table-wrap", "fig", "supplementary-material", "table-
 def _block_text(node: ET.Element, skip_first_title: bool = False) -> str:
     """Flatten an element to text with paragraph structure preserved.
 
-    ⚠️ `"".join(node.itertext())` is wrong here even though it's right for an abstract.
+    **`"".join(node.itertext())` is wrong here**, even though it's right for an abstract.
     itertext inserts nothing between elements, so consecutive <p> children come back
     fused — a body renders as '...regulates ferroptosis.The P47S polymorphism...' with no
     break anywhere. Every sentence boundary at a paragraph edge disappears, which is
@@ -315,7 +313,7 @@ def _caption_text(parent: ET.Element) -> str:
 
 # Strips '1.', '3.2)', 'IV.' from a heading. The separator is REQUIRED, which is what
 # keeps the roman-numeral branch from eating the 'I' in 'Introduction' and leaving
-# 'ntroduction' — a bug this normaliser had on the first pass.
+# 'ntroduction'.
 _SEC_NUM_RE = re.compile(r"^\s*(?:\d+(?:\.\d+)*[.)]?\s+|[IVX]{1,5}[.)]\s*)")
 
 # Canonical buckets, checked in order. Substring matching against the normalised title,
@@ -384,7 +382,7 @@ def _untitled_section(nodes: list[ET.Element], lead: str | None) -> dict | None:
 def _parse_sections(body: ET.Element) -> list[dict]:
     """Top-level sections, in document order.
 
-    ⚠️ Body content outside a <sec> is content, and keying the fallback on "no <sec>
+    **Body content outside a <sec> is content**, and keying the fallback on "no <sec>
     children at all" is not enough to catch it. Science research articles are deposited
     as a run of bare <p> children followed by a single 'Supplementary Material' <sec>,
     which is one <sec> — so the old `if not secs` fallback never fired and the whole

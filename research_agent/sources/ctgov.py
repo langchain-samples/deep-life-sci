@@ -2,7 +2,7 @@
 
 The registry answers what PubMed structurally cannot: what was *registered*, including
 the trials that never produced a paper. See `docs/ctgov_concept.md` for why that is worth
-wiring in, and `docs/ctgov_api_notes/` for the probe results behind every number here.
+wiring in; every number below comes from a probe against the live API.
 
 This module reads almost nothing like `pubmed.py`, for two reasons that invert:
 
@@ -28,7 +28,7 @@ Three behaviours still return a *wrong answer rather than an error*, and each ha
 3. `countTotal` is opt-in *and first-page-only*: omit it and there is no `totalCount` key
    at all, and a page-2 response never carries one even when page 1 asked.
 
-A fourth is a footgun rather than an API bug: an unfiltered `/studies` is legal and
+A fourth is a usage trap rather than an API bug: an unfiltered `/studies` is legal and
 returns all 599k studies, so a tool assembling params from optional arguments can scan the
 whole registry by accident. `ctgov_search` refuses an empty query outright.
 """
@@ -158,9 +158,9 @@ def validate_nct_ids(ids: list[str]) -> tuple[list[str], list[str]]:
 # for and the caller cannot accidentally receive a whole record. Measured at ~750 bytes
 # (~185 tokens) per study against a corpus mean of 17,279 bytes — a 23x reduction.
 #
-# `pmc_locate` learned this the hard way: it returns 2,019 tokens per paper and the
-# system prompt has to beg the model to project it down before returning it. Here the
-# projection is unavoidable, which is the point.
+# Contrast `pmc_locate`, which returns 2,019 tokens per paper and leaves it to the system
+# prompt to tell the model to project that down before returning it. Here the projection
+# is unavoidable, which is the point.
 CORE_FIELDS = (
     "NCTId", "BriefTitle", "Acronym", "OverallStatus", "WhyStopped",
     "StudyType", "Phase", "EnrollmentCount", "EnrollmentType",

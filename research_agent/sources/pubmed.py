@@ -1,8 +1,8 @@
 """PubMed E-utilities client and the two agent tools.
 
 The defensive guards in here are not generic paranoia — each one corresponds to a
-verified failure mode of the live API. See `pubmed_api_notes/` for the probe results.
-The three that produce *wrong answers rather than errors*:
+verified failure mode of the live API. The ones that produce *wrong answers rather than
+errors*:
 
 1. efetch tokenizes malformed PMIDs and returns unrelated papers ('42.9' -> PMIDs 42
    and 9), so ids are validated against ^\\d+$ before any request goes out.
@@ -453,7 +453,7 @@ def _text_of(node: ET.Element) -> str:
 def _article_ids(art: ET.Element) -> dict[str, str]:
     """The article's OWN ids, from the scoped ArticleIdList only.
 
-    ⚠️ Do not reach for `.//ArticleIdList/ArticleId` here. Every entry in a record's
+    **Never** reach for `.//ArticleIdList/ArticleId` here. Every entry in a record's
     reference list carries its own `ArticleIdList`, so `.//` matches all of them —
     PMID 29695998 has **58** — and a last-wins dict comprehension over that returns a
     *cited paper's* ids. Measured: it reported `pmc: PMC5379068` for a paper whose real

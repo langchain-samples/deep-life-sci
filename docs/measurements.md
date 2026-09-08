@@ -8,11 +8,12 @@ gateway and the live NCBI APIs, not estimated.
 Read this with `docs/concept.md` before changing the shape of the agent. `CLAUDE.md`
 states the rules these numbers produced; this file is the evidence.
 
-## Profile comparison
+## Two model pairs on the same question
 
 **The profile names below are historical.** `models.py` no longer has a profile enum —
-each role is configured by `{ROOT,SUBAGENT,JUDGE}_{MODEL,PROVIDER,EFFORT}` instead. The
-pairs these runs used, as env:
+each of the four roles is configured by
+`{ROOT,SUBAGENT,SEARCH,JUDGE}_{MODEL,PROVIDER,EFFORT}` instead. The pairs these runs
+used, as env:
 
 | was | now |
 |---|---|
@@ -35,31 +36,37 @@ moved. See [After the sandbox](#after-the-sandbox) for sandbox-era figures.
 The demo question: *"recent papers on base editing in the liver — which used in vivo
 mouse models?"*, one run per profile.
 
+**This is one run each, on one question, over different corpora.** The agent chose its
+own `retmax`, so the two runs did not read the same papers — 49 against 22. What follows
+is a record of what one run looked like on this workload. It is not a benchmark, and
+nothing in it generalises to either model family or to a different question.
+
 | | `anthropic` | `openai` |
 |---|---|---|
 | root / subagent | sonnet-4.6 / haiku-4.5 | gpt-5.6-terra / gpt-5.6-luna |
 | papers analysed | 22 | **49** |
 | wall clock | 107s | **46s** |
-| cost | $0.32 | **$0.083** |
-| **per paper** | $0.0146 · 4.9s | **$0.0017 · 0.9s** |
+| cost, whole run | 3.9× | **1×** |
+| **cost per paper** | 8.6× | **1×** |
+| seconds per paper | 4.9s | **0.9s** |
 | root turns | 6 | **2** |
 | subagent cache reads | 0 of 96k input | **103k of 129k input** |
 
-The `openai` profile did **more than twice the work for a quarter of the cost in half
-the time**. Per paper that's ~8× cheaper and ~5× faster. Two things drive it:
+Cost is given as a ratio, normalised to the `openai` run. On this workload that pair
+covered more papers, at lower cost and lower latency per paper. Two things visible in the
+traces account for most of the difference:
 
 1. **Root turns: 2 vs 6.** terra planned, searched, fetched, fanned out and synthesised
    in two turns. Sonnet took six, and root occupancy is where the latency lives — 54% of
    wall for terra vs 79% for Sonnet.
-2. **Subagent caching actually works.** luna read 103k of its 129k input from cache.
+2. **Subagent caching behaved differently.** luna read 103k of its 129k input from cache.
    Haiku read *zero* and wrote cache on nearly every token — see
-   [the caching trap](#the-subagent-caching-trap).
+   [prompt caching on single-turn leaves](#prompt-caching-and-single-turn-subagents).
 
-Caveats: one run each, and the agent chose its own `retmax`, so the paper counts differ
-(49 vs 22) — this is a directional comparison, not a controlled benchmark. Both runs hit
-a warm abstract cache, so PubMed time was negligible in both. Output quality wasn't
-graded, though the GPT-5.6 run did separate out rat/organoid/human studies rather than
-lumping them in.
+Further caveats, on top of the n=1 and the differing corpora: both runs hit a warm
+abstract cache, so PubMed time was negligible in both. Output quality wasn't graded,
+though the GPT-5.6 run did separate out rat/organoid/human studies rather than lumping
+them in. Neither pair was tuned for this question.
 
 ## Where the time and cost go
 
@@ -70,10 +77,10 @@ Both profiles show the same shape: **the root agent dominates, not the fan-out.*
 | anthropic | 79% | 58% |
 | openai | 54% | 80% |
 
-Under `anthropic`, 22 Haiku subagents cost $0.134 against the root's $0.187 — and 40.6s
-of subagent compute compressed into 14.2s of wall time. Under `openai`, 49 luna
-subagents cost $0.017 total. The cheap-model-on-leaves split works in both; the expense
-is the orchestrator re-reading a growing transcript.
+Under `anthropic`, 22 Haiku subagents accounted for 42% of the run's cost against the
+root's 58% — and 40.6s of subagent compute compressed into 14.2s of wall time. Under
+`openai`, 49 luna subagents accounted for 20%. The cheap-model-on-leaves split works in
+both; the expense is the orchestrator re-reading a growing transcript.
 
 Input dominates output roughly 3:1 overall.
 
@@ -83,25 +90,25 @@ run costs two HTTP requests regardless of how many papers are analysed.
 ## Prompt caching on the gateway
 
 For Anthropic models `research_agent/models.py` uses the gateway's **Anthropic-native**
-path rather than its OpenAI-compatible one, because their prompt caching only survives on
-the native path:
+path rather than its OpenAI-compatible one. Prompt caching is only observed on the native
+path, so that is the path to configure:
 
 | path | Anthropic model, repeated 14k-token prefix |
 |---|---|
-| `/v1/chat/completions` (OpenAI-compatible) | `cached_tokens: 0`, with *and* without an explicit `cache_control` block — the gateway drops it |
+| `/v1/chat/completions` (OpenAI-compatible) | `cached_tokens: 0`, with *and* without an explicit `cache_control` block |
 | `/anthropic/v1/messages` (native) | `cache_creation_input_tokens: 14413`, then `cache_read_input_tokens: 14413` |
 
 This only affects Anthropic models routed through the OpenAI-compatible shim. Native
 OpenAI models on `/v1` cache automatically and server-side — the `openai` profile
 measured 103k cache reads with no configuration at all.
 
-## The subagent caching trap
+## Prompt caching and single-turn subagents
 
 `AnthropicPromptCachingMiddleware` applies `cache_control` to subagent prompts too, but
 each subagent is a fresh single-turn agent holding a unique abstract — there is nothing
-for a later call to reuse. Measured: Haiku wrote 96,019 cache tokens and read **0**,
-paying the cache-write premium for a cache that never hits. The root, by contrast, got
-76% of its input from cache and that's the whole saving.
+for a later call to reuse. Measured: Haiku wrote 96,019 cache tokens and read **0**. Cache
+writes are billed at a premium, and a leaf that never gets a second turn never earns it
+back. The root, by contrast, got 76% of its input from cache and that's the whole saving.
 
 This is a property of the *leaves*, not the profile, so it applies to any profile with
 Anthropic subagents — `anthropic` and `mixed` both. On either, disable caching on the
@@ -126,9 +133,6 @@ example at a time.
 | citations_exist | 8/9 applicable | 8/9 applicable |
 | produced_expected_artifacts | 2/2 applicable | **1/2** |
 | wall clock, 11 examples | 16m23s | 10m53s |
-
-Experiments `pubmed-claude-sonnet-5-medium-eb50afd6` and
-`pubmed-gpt-5.6-terra-medium-41f78442` in LangSmith.
 
 What made terra the default is the tie, not a win. The two roots failed the **same four
 rubric seeds** — `base-editing-t-cells-convergence`, `fmt-cdiff-placebo-trials`,
@@ -165,7 +169,7 @@ Three sweeps over the same 11-example dataset on 2026-08-24, notes off
 | artifacts | 1/2 | 2/2 | 1/2 |
 | median run latency | 31.0s | 48.2s | 36.2s |
 | tokens | 2,101,686 | 2,034,659 | 1,650,743 |
-| cost | $1.54 | $1.38 | **$0.88** |
+| cost, relative | 1.75× | 1.57× | **1×** |
 | error rate | 0 | 0 | 0 |
 
 **luna-low scored identically to Haiku 4.5 cell for cell** — every seed, all three
@@ -177,7 +181,7 @@ latency per run, and it *lost* a citation on `psilocybin-depression-unpublished`
 exactly one cell: the missing `tpd-publication-volume` deliverable. Hence `ROOT_EFFORT=low`
 as the default.
 
-Two caveats on the $0.88, since it is the headline:
+Two caveats on the 43%, since it is the headline:
 
 - **n=1 per configuration, 11 examples, no repeats.** Token counts vary run to run. Read
   43% as a direction, not a constant.

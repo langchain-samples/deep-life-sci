@@ -98,11 +98,11 @@ async def rubric_judge(run, example) -> dict:
     question = (example.inputs or {}).get("question") or ""
     # The judge is told what reached `/workspace/out` because a rubric that asks for a
     # deliverable is otherwise unverifiable from where it sits, and it does not abstain —
-    # it infers. On 2026-09-01 `hpa-ras-isoform-tissue-heatmap` published a `chart`,
-    # scored 1.0 on `produced_expected_artifacts`, named all three tissues correctly, and
-    # was still failed by this evaluator "because it does not actually provide a heatmap
-    # image as required". Two evaluators contradicting each other on one run is the
-    # signature of a grader reasoning about a field it was never shown.
+    # it infers. Without the names it has failed a run that published exactly the chart the
+    # rubric asked for, on the grounds that the answer text did not provide one, while
+    # `produced_expected_artifacts` scored the same run 1.0. Two evaluators contradicting
+    # each other on one run is the signature of a grader reasoning about a field it was
+    # never shown.
     artifacts = [n for n in ((run.outputs or {}).get("artifact_names") or []) if n]
 
     if not rubric:

@@ -4,13 +4,13 @@ ClinicalTrials.gov registry.
 The guards in `pubmed.py` and `pmc.py` are not boilerplate. Each one corresponds to a
 verified API failure mode that returns a *wrong answer rather than an error* — PMID
 tokenization, silent query rewriting, esummary's 500-UID cap answering HTTP 200, closed
-articles served as a complete `<front>` with no `<body>`. See `docs/pubmed_api_notes/`
-and `docs/pmc_api_notes/` for the probe results behind each.
+articles served as a complete `<front>` with no `<body>`. Each module's docstring lists
+the failures its guards exist for.
 
 `ctgov.py` needs far fewer of them, and for a reason worth knowing before editing it:
 that API rejects bad input with a 400 naming the offending token instead of quietly
 returning something plausible. What it needs instead is *rate discipline* — roughly one
-request per second, measured, with no `Retry-After` to obey. See `docs/ctgov_api_notes/`.
+request per second, measured, with no `Retry-After` to obey.
 
 `web.py` is the odd one out: it has no API of its own. Web search runs *inside the model
 provider*, so that module is a bound tool spec and a digest parser rather than an HTTP

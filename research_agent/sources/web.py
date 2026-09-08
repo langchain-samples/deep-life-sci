@@ -84,9 +84,9 @@ def _failed(query: str, reason: str) -> dict:
     **This must not raise.** A tool exception inside `eval` is not handed back to the
     JavaScript — it propagates out of the interpreter and kills the whole run, so one
     failed search destroys a completed fan-out that had nothing to do with the web. That
-    is not hypothetical: a provider bio-risk filter (`code: bio_policy`) rejected a query
-    about a bacterial toxin's NLS and took down an otherwise clean run, on a question
-    PubMed alone could answer.
+    is not hypothetical: a provider content filter can reject a query outright, and on
+    biomedical subject matter that happens for questions the tool-backed sources answer
+    without complaint.
 
     So a failure comes back as an ordinary digest with an empty `answer` and the reason in
     `warnings`, which is the channel the prompt already teaches the model to check. The

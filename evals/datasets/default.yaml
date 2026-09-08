@@ -55,7 +55,7 @@
   question: What NLS did nishikubo identify in CdtB?
   expects_artifact: []
   rubric: >-
-    Nishikubo et. al. mapped the NLS to residues 48–124 in the N-terminal region of CdtB
+    Nishikubo et al. mapped the NLS to residues 48–124 in the N-terminal region of CdtB
 
 # Q3
 - id: cunningham-druggability-subnetwork
@@ -171,7 +171,8 @@
 
     Credit if the terminated trial and at least three of the withdrawn ones are named by
     NCT number with their stated reason. A sixth trial appearing after August 2026 is not
-    a failure; neither is quoting `why_stopped` verbatim including its sponsor typos.
+    a failure; neither is quoting `why_stopped` verbatim, typos in the registry text
+    included.
 
     Fail if a reason is paraphrased into something the registry does not say, if a
     WITHDRAWN trial (zero participants enrolled) is described as having produced or failed

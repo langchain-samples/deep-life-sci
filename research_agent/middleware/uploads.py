@@ -15,7 +15,7 @@ The durable copy lives in the LangGraph store, namespaced per thread. Three plac
 possible and the store is the only one that is all three of durable, out of model context,
 and free of per-checkpoint cost:
 
-* **Model context** — what upstream's attachment flow does. A 2k-row CSV is 100-200k chars
+* **Model context** — where an attachment lands by default. A 2k-row CSV is 100-200k chars
   re-sent on every turn, in an agent whose entire design is that payloads never reach the
   root transcript (`pmc_locate` exists for exactly this reason). The model also could not
   compute over it without retyping the file into `writeFile`.
@@ -367,8 +367,8 @@ class UploadMiddleware(AgentMiddleware):
         """Persist what just arrived, then return every upload this thread owns.
 
         Without a store — the CLI, or a server configured without one — this degrades to
-        "whatever arrived on this turn". That is enough for a one-shot run and honestly
-        insufficient for turn 2, which `_reconcile` reports rather than papers over.
+        "whatever arrived on this turn". That is enough for a one-shot run but not for
+        turn 2, which `_reconcile` reports rather than papers over.
         """
         if store is None:
             return {file["name"]: file["data"] for file in harvested}

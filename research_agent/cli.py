@@ -53,9 +53,9 @@ DEMO_QUESTION = (
 async def stream_answer(agent, question: str) -> None:
     """Run the agent, printing the final answer as it is generated.
 
-    Synthesis is the single longest span in a run — 23.4s and 32.2s in the two traces
-    from thread 019fde6d-d25c-77b3-a751-56c6b7aa4ead, against a measured 48-60 tok/s
-    for Sonnet with a 1.6s time-to-first-token. `ainvoke` returns nothing until that
+    Synthesis is the single longest span in a run — 23.4s and 32.2s in two measured
+    runs, against 48-60 tok/s for Sonnet with a 1.6s time-to-first-token. `ainvoke`
+    returns nothing until that
     span completes, so the user waits the full ~30s staring at a blank terminal for
     text that was ready to show after 1.6s. Streaming does not make the run shorter;
     it removes almost all of the *perceived* latency of its slowest part.

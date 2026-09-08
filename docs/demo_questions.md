@@ -103,17 +103,23 @@ using the labels beats reading the whole abstract.
 
 ## Poor fits, for contrast
 
-Worth knowing where this agent will disappoint, so a demo doesn't wander into it:
+Where this agent will disappoint, and why:
 
-- **Anything needing full text.** Abstracts only. No PMC, no figures, no supplementary
-  tables. "What buffer did they use?" is unanswerable.
-- **Anything needing data outside PubMed and ClinicalTrials.gov.** No GEO, no dbGaP, no
-  citation counts, no web search. It cannot tell you what a paper's impact was.
+- **Full text of anything outside PMC's open-access subset.** Roughly half of PMIDs
+  resolve to a retrievable body; for the rest there is the abstract and nothing more. So
+  "what buffer did they use?" is answerable for an open-access paper and not for a
+  paywalled one, and the agent should say which it is looking at.
+- **Citation counts and bibliometrics.** No citation index is wired in, so the agent
+  cannot tell you what a paper's downstream impact was. Web search may turn up a figure
+  for one named paper; it is not a systematic source and shouldn't be treated as one.
+- **Primary data repositories.** No GEO, SRA, dbGaP or PDB. The agent reads what papers
+  and trial records *say* about their data, never the deposited data itself.
 - **Posted trial results.** The registry tells you a trial *has* a results section and
   links its publications; it will not read the posted outcome tables back to you. Ask for
   the paper instead.
 - **Genomics file formats.** The sandbox has the Python stack (biopython included), not
-  PLINK or bcftools, and no way to fetch a VCF. It computes over what the abstracts yield.
+  PLINK or bcftools, and cannot install more mid-run. It computes over what the papers
+  and records yield, not over a VCF.
 - **Author disambiguation.** `first_author`/`last_author` are strings from PubMed. Two
   different people named J. Zhang are one string.
 - **Exhaustive claims.** The agent targets ≤200 papers and shapes queries to get there,

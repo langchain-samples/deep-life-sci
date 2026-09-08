@@ -65,10 +65,10 @@ def build_agent(backend):
     # ClinicalTrials.gov's ~1 req/sec limit survivable: a fan-out of leaves that could
     # each fetch would trip it at twelve.
     #
-    # `middleware: []` does NOT mean "no middleware". deepagents unconditionally prepends
-    # FilesystemMiddleware + summarization + PatchToolCalls + prompt caching to whatever
-    # a spec declares (graph.py:667), so a leaf built with `middleware: []` still ends up
-    # holding the default filesystem toolset:
+    # `middleware: []` does NOT mean "no middleware". deepagents prepends its own
+    # FilesystemMiddleware + summarization + PatchToolCalls + prompt caching to whatever a
+    # spec declares, so a leaf built with `middleware: []` still ends up holding the
+    # default filesystem toolset:
     #
     #     ['delete', 'edit_file', 'execute', 'glob', 'grep', 'ls', 'read_file',
     #      'write_file']
@@ -87,22 +87,22 @@ def build_agent(backend):
           need nothing on disk. Their prompts say "you have no tools and cannot retrieve
           anything". `tools: []` alone did not make that true — see the note above — so
           this narrows the default filesystem to the single tool FilesystemMiddleware
-          refuses to drop (filesystem.py:1648 requires `read_file`). One tool the leaf has
-          no use for is the floor; the point is that `execute`, `grep`, `write_file` and
-          the rest are gone.
+          refuses to drop: `read_file` is required and cannot be excluded. One tool the
+          leaf has no use for is the floor; the point is that `execute`, `grep`,
+          `write_file` and the rest are gone.
         * **The figure analyst** is handed a sandbox path rather than an image, and
           `read_file` on that path is what turns it into something the model can see. For
           it the floor is exactly the tool it needs.
 
         The cost of a leaf that can reach the filesystem is measured, not hypothetical.
-        In trace 019fde70-69b6-7190-a969-a6a60e52894d three of nine abstract-analysts
-        called `read_file` on paths they invented — `/dev/null` twice, and
-        `/tmp/pubmed_abstract.txt` — looking for an abstract that was already in the
-        prompt. Each error bought a second model turn, and those three were the slowest
-        analysts in the fan-out (21.0s, 21.5s, 24.0s against 17.3s for the clean ones).
-        In 019fe907-abed-70c0-b589-2cfcb3ef5d2b, with the full default toolset in hand,
-        6 of 30 analysts called tools and one spent 36.1s in a single `grep` — a 57.0s
-        task against a 16.1s median, setting the critical path the whole `eval` waited on.
+        In one run three of nine abstract-analysts called `read_file` on paths they
+        invented — `/dev/null` twice, and `/tmp/pubmed_abstract.txt` — looking for an
+        abstract that was already in the prompt. Each error bought a second model turn,
+        and those three were the slowest analysts in the fan-out (21.0s, 21.5s, 24.0s
+        against 17.3s for the clean ones). In another, with the full default toolset in
+        hand, 6 of 30 analysts called tools and one spent 36.1s in a single `grep` — a
+        57.0s task against a 16.1s median, setting the critical path the whole `eval`
+        waited on.
 
         Every such call also opens a sandbox WebSocket, which is the same connection that
         returned HTTP 502 and destroyed a completed 18-way fan-out (see sandbox.py).
@@ -114,16 +114,15 @@ def build_agent(backend):
             "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
         }
 
-    # deepagents auto-adds a `general-purpose` subagent (graph.py:751) built with
-    # `"model": model` — the *root* model object, ROOT_TIMEOUT and all — plus the
-    # unrestricted default filesystem, `execute` included. Both halves are wrong here:
+    # deepagents auto-adds a `general-purpose` subagent built with the *root* model
+    # object — ROOT_TIMEOUT and all — plus the unrestricted default filesystem, `execute`
+    # included. Neither half suits this agent:
     #
     # * ROOT_TIMEOUT's `read` is an inter-chunk watchdog, safe only because the root
     #   streams. A subagent's inner agent calls non-streaming, so the same value becomes a
-    #   ceiling on the whole response. In trace 01a04aca-c0cf-7a21-9db6-ae9180cefcd0, when
-    #   `read` was 10s, that was three attempts at ~10s, then APITimeoutError — 31.7s spent
-    #   to fail a ClinicalTrials.gov triage `trial-analyst` would have finished. At today's
-    #   30s the same mistake costs ~90s.
+    #   ceiling on the whole response. Measured with `read` at 10s: three attempts at ~10s,
+    #   then APITimeoutError — 31.7s spent to fail a ClinicalTrials.gov triage a
+    #   `trial-analyst` would have finished. At today's 30s the same mistake costs ~90s.
     # * The unrestricted toolset is the same hazard `analyst_leaf` exists to close.
     #
     # Nothing here should ever route to it: over the project's whole history it has taken
@@ -203,10 +202,9 @@ def build_agent(backend):
                     "read_file",
                     "write_file",
                     # Without this, the only way to change one line of a Python script
-                    # written from JS is to re-emit the whole script. In thread
-                    # 019fe982-9296-7a23-836a-bd3ae24605a1 a single bad `RandomState`
-                    # seed cost 1,845 output tokens and 26s of retyping a 4.5k-char
-                    # matplotlib script that was already on disk.
+                    # written from JS is to re-emit the whole script. Measured: a single
+                    # bad `RandomState` seed cost 1,845 output tokens and 26s of retyping
+                    # a 4.5k-char matplotlib script that was already on disk.
                     "edit_file",
                     "ls",
                     "glob",

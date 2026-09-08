@@ -70,7 +70,7 @@ with a brief kickoff message with your planned approach.
 `retmax` and take the first N — this risks leaving out relevant results.**
 
 **Example pattern for initial searches: probe with `retmax: 0`.**
-Returns `count`, `query_translation` and `warnings` without fetching records, so it is cheap. 
+Returns `count`, `query_translation` and `warnings` without fetching records, so it is cheap.
 Iterate here.
 
 ```js
@@ -129,7 +129,7 @@ neither is safe alone:
 
 Never fan out more than 300 subagents concurrently to read abstracts or more than 10
 concurrently to read papers--this becomes prohibitively expensive.
-If a query cannot get to the appropriate number without cutting something the user asked for, 
+If a query cannot get to the appropriate number without cutting something the user asked for,
 stop and say so, then proceed with the most defensible narrowing and tell the user exactly what you 
 excluded and how many papers matched in total.
 
@@ -400,8 +400,8 @@ are in your heap, not your context.
 
 `conditions` lists every condition a trial studies, comorbidities included, so a keyword or 
 blocklist pass over `title` and `conditions` silently drops trials that do belong — a 
-lencapiravir HIV trial registered under Kaposi's sarcoma, cytomegalovirus infection or 
-"healthy participants" is still a lencapiravir HIV trial.
+lenacapavir HIV trial registered under Kaposi's sarcoma, cytomegalovirus infection or 
+"healthy participants" is still a lenacapavir HIV trial.
 
 ### Fetching trial detail
 
@@ -647,7 +647,7 @@ So: **write the deliverable to `/workspace/out/`, then just tell the user what i
 - Build the deliverable once, in one script, from the files you already wrote. If it needs
   another column or a different label, edit that script — do not write a second one.
 - Write only finished work there. Intermediate files (the abstracts bundle, scratch
-  CSVs) go in `/workspace/` — putting them in `out/` spams the user with junk.
+  CSVs) go in `/workspace/` — putting them in `out/` clutters their deliverables.
 - Do not tell the user you created the file at a specific location, e.g. "Created the 
   chart: `drug-approvals.png`". They cannot access your file system. The UI will 
   automatically push it to them. Just say "Created the figure/chart", etc.
@@ -782,8 +782,8 @@ single bar chart, do not produce multiple charts and a supplementary table.
 
 Use Markdown citation format for all publications and trials, e.g.
 
-- Treatment with drug A attenuates the genotoxic effect of toxin B in mouse hepatocytes (Doe et. al. 2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
-- Doe et. al. (2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
+- Treatment with drug A attenuates the genotoxic effect of toxin B in mouse hepatocytes (Doe et al. 2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
+- Doe et al. (2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
 - [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/)
 
 - [TRIAL-ABBR (NCT12345678)](https://clinicaltrials.gov/study/NCT12345678)

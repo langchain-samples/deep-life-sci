@@ -1,34 +1,32 @@
 # sources/
 
-Every module here has a docstring listing the verified API failure modes its guards exist for,
-and `docs/pubmed_api_notes/`, `docs/pmc_api_notes/`, `docs/ctgov_api_notes/` (all gitignored)
-hold the probe results — the ctgov notes ship a `probe.py` that reproduces every measurement,
-sleeps included. These are the rules those notes add up to.
+Every module here has a docstring listing the API failure modes its guards exist for. These
+are the rules those docstrings add up to.
 
 - **The guards are not boilerplate.** Each matches a failure that returns a *wrong answer
   rather than an error*: PMID tokenization, silent query rewriting, esummary's 500-UID cap
   returning HTTP 200, unguessable PMC object version suffixes, `itertext()` fusing body
-  paragraphs. Don't simplify them away. PubMed field tags are validated locally against the
-  documented set, so supporting a new one means extending that list.
+  paragraphs. Keep them. PubMed field tags are validated locally against the documented set,
+  so supporting a new one means extending that list.
 
 - **ClinicalTrials.gov is the tightest rate limit in the repo, and it is undocumented.**
-  Measured at roughly a 10-token bucket refilling at ~1 req/sec — 12 concurrent requests
-  returned ten 429s — and **the 429 carries no `Retry-After`**, so client-side backoff is the
-  only thing between a fan-out and a dead run. No API key raises it. The design response is to
+  The client paces at ~1 req/sec with backoff, which is deliberately conservative, and
+  **the 429 carries no `Retry-After`**, so client-side backoff is the only thing between a
+  fan-out and a dead run. No API key raises it. The design response is to
   make per-trial fetching unnecessary rather than merely discouraged: `pageSize` reaches 1,000
   and `filter.ids` takes 300, so a 1,000-trial corpus is four requests.
 
 - **`ctgov.py` inverts `pubmed.py`'s validation story on purpose.** That API answers a bad
   field, enum, area, sort or id with an HTTP 400 naming the token, so 4xx bodies are surfaced
-  verbatim and there is **no local `check_field_tags()` analog — do not add one.** Three
+  verbatim and there is **no local `check_field_tags()` analog**, deliberately. Three
   behaviours still return a wrong answer rather than an error and each has a guard: `pageSize`
   clamps silently at 1,000, unknown ids vanish from a `filter.ids` batch with no missing list,
-  and `countTotal` is opt-in and first-page-only. A fourth is a footgun rather than a bug — an
-  unfiltered `/studies` is legal and returns all ~600k studies, which is why `ctgov_search`
+  and `countTotal` is opt-in and first-page-only. A fourth is legal behaviour rather than a
+  defect — an unfiltered `/studies` returns all ~600k studies, which is why `ctgov_search`
   refuses an empty query. Surfacing a 4xx only reaches the model because
   `middleware/tool_errors.py` turns a raised `SourceError` into an `{error}` return —
-  raised out of a PTC tool it ends the run instead. Every source error type subclasses
-  `SourceError` (`_errors.py`) for that reason; a new one that doesn't is a run-killer.
+  raised out of a PTC tool it ends the run instead. Every source error type must subclass
+  `SourceError` (`_errors.py`) for that reason.
 
 - **Registry reference types are not interchangeable.** `referencesModule` mixes RESULT
   (sponsor-designated, and sparse — 1 of 126 references across one measured phase 3 set),

@@ -183,7 +183,7 @@ def sweep(ttl: float | None = None) -> int:
 
     Scoped to `paths.CACHE_ROOTS`, never to `DATA_DIR` itself — that directory is
     operator-configurable and a sweep that recurses into whatever else lives there would
-    be a footgun rather than a cleanup.
+    delete files this module does not own.
 
     Empty directories go too, because the PMC cache mirrors the S3 layout one directory
     per versioned package (`data/pmc/PMC5904197.1/`) and 125 empty husks would make the

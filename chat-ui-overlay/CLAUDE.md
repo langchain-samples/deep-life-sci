@@ -1,6 +1,6 @@
 # chat-ui-overlay/
 
-Our own chat UI components, tracked in git and reviewable in a diff. This directory **mirrors
+This repo's own chat UI components, tracked in git and reviewable in a diff. It **mirrors
 the clone's `src/`** — a file's path here is where it lands — and `setup.py:ensure_overlay`
 copies it in on every setup and launch.
 

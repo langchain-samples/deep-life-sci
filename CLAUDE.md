@@ -73,7 +73,7 @@ research_agent/
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py web.py cache_io.py _http.py
-└── middleware/  artifacts.py uploads.py perf.py progress.py
+└── middleware/  artifacts.py uploads.py perf.py progress.py cadence.py tool_errors.py
 evals/  scripts/  ui/  chat-ui-overlay/  docs/  data/
 ```
 
@@ -127,12 +127,12 @@ the core economy of the design, and these are its rules:
   what it needs with `tools.writeFile`. A within-run optimisation, not a corpus.
 - **`/workspace/out/` is the user deliverables contract**, swept by `ArtifactMiddleware` and
   published through the `ui` state key (`ui/ui.tsx`). The prompt forbids `read_file` on
-  anything in it — reading a PNG back cost more context than an entire run.
+  anything in it — reading a PNG back can cost more context than an entire run.
 - **Web search is a PTC tool, never a spec bound to the root model.** Both providers ship it
   server-side, so binding it lands every retrieved page in root context outside `eval` — 27.9k
   input tokens for one question, measured. `sources/web.py` spends the search in a throwaway
   `search`-role call and returns a digest; a raw provider dict can't reach
-  `create_deep_agent(tools=...)` anyway (`langchain_quickjs/_ptc.py:100` reads `.name`).
+  `create_deep_agent(tools=...)` anyway, since the PTC allowlist reads each tool's `.name`.
 - **`/workspace/uploads/` is not under `out/`**, or a file the user gave us would come back as
   a deliverable of their own question. `UploadMiddleware` strips attachments out of the human
   message before the first model call and passes a manifest instead; the durable copy lives in
@@ -144,16 +144,18 @@ inside one `eval`, so the transcript shows a single unreturned tool call for min
 ### Subagents
 
 Four leaves in `prompts/subagents.py`, wired in `agent.py` by `analyst_leaf()`. Two deepagents
-defaults bite here, and every leaf works around both:
+defaults are worth knowing, and every leaf configures around both:
 
-- subagents **inherit the parent's tools**, so each leaf sets `tools: []` explicitly. Leaving
-  the default toolset in place made models invent paths and doubled their latency.
+- subagents **inherit the parent's tools** by default, so each leaf sets `tools: []`
+  explicitly. Leaving the full toolset in place lets models invent paths and roughly doubles
+  their latency.
 - `middleware: []` does **not** mean "no middleware" — deepagents prepends its own filesystem,
   `execute` included. So each leaf also passes a `FilesystemMiddleware` narrowed to
   `read_file`, the floor it refuses to drop (and what `figure-analyst` needs to see an image).
 
-The auto-added `general-purpose` subagent *does* inherit the PubMed tools and an unrestricted
-filesystem including `execute`. Nothing routes work to it, but don't start.
+The auto-added `general-purpose` subagent keeps both defaults: the PubMed tools and the full
+filesystem. Nothing routes work to it, and nothing should — give a leaf the narrowed
+configuration above instead.
 
 ### Model gateway
 
@@ -164,13 +166,13 @@ Four roles × three independent env vars, defaulting to twelve constants in `mod
 | `ROOT` | `openai/gpt-5.6-terra` | `openai` | `low` |
 | `SUBAGENT` | `openai/gpt-5.6-luna` | `openai` | `low` |
 | `SEARCH` | `openai/gpt-5.6-luna` | `openai` | `low` |
-| `JUDGE` | `openai/gpt-5.6-luna` | `openai` | `low` |
+| `JUDGE` | `openai/gpt-5.6-terra` | `openai` | `low` |
 
 Root runs the larger model, leaves and `SEARCH` the cheaper one; `SEARCH` carries the
 provider's own web search (`WEB_SEARCH_SPECS`), so it must be an id that supports it or the
 call 400s. `models.py`'s docstring has the rest — why three axes rather than named profiles,
-why Anthropic models must go down the native `/anthropic` path or silently lose prompt
-caching, and what an unset `_EFFORT` means on each path. Two things to know before a swap:
+why Anthropic models should go down the native `/anthropic` path — the OpenAI-compatible
+`/v1` path does not carry prompt caching — and what an unset `_EFFORT` means on each path. Two things to know before a swap:
 naming a `_PROVIDER` that the model id's form contradicts makes `_provider_for` raise rather
 than send it down the wrong path, and **Haiku 4.5 has no effort scale**, so
 `SUBAGENT_MODEL=claude-haiku-4-5-20251001` must also clear `SUBAGENT_EFFORT=` or it 400s.
@@ -192,18 +194,18 @@ before changing the behaviour.
   `langgraph dev`, blockbuster turns a blocking `read_text()` in a coroutine into a
   `BlockingError` that kills the run; in production it stalls every other run in the process.
 - **`ResilientSandbox` retries assume idempotence** (`sandbox.py`). It retries transient
-  WebSocket failures below the tool boundary, because one HTTP 502 once destroyed a completed
-  18-way fan-out. A tool whose sandbox command must run exactly once has to be routed around
-  it.
+  WebSocket failures below the tool boundary: without that, a single transient 502 mid-run
+  discards a fan-out's completed work. A tool whose sandbox command must run exactly once has
+  to be routed around it.
 - **A PTC tool must not raise** (`middleware/tool_errors.py`). An exception leaves the
   host-function bridge and ends the *run*, not the call, and JS can only catch it as the
   string `"Host function failed"`. Source failures are wrapped into `{error}` returns in
   `agent.py`; anything new in the `ptc=[...]` allowlist needs the same containment.
 - **Artifact components only render same-origin.** `/ui/{graph}` returns a script tag with a
-  *host-relative* `src`, so a cross-origin frontend (hosted Agent Chat, Studio) 404s it and
-  `LoadExternalComponent` paints an empty div — no console error, the chart just absent. Any
-  frontend needs `/ui/*` proxied. Check the network tab for `/ui/<graph>/entrypoint.js`
-  before suspecting `middleware/artifacts.py` or `ui/ui.tsx`.
+  *host-relative* `src`, so a cross-origin frontend (hosted Agent Chat, Studio) cannot resolve
+  it and renders nothing in its place. Any frontend needs `/ui/*` proxied. Check the network
+  tab for `/ui/<graph>/entrypoint.js` before suspecting `middleware/artifacts.py` or
+  `ui/ui.tsx`.
 - **Graph state is downloaded whole by any client listing threads.** The QuickJS snapshot is
   the heavy one, up to 11 MB of base64 per thread: the sidebar asks for `select`/`extract`,
   not `values` (`patch_thread_search`), and reads get an `_UnboundSandbox` (`graph.py`).

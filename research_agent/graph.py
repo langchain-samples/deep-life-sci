@@ -23,10 +23,10 @@ it against the page, not the API. Cross-origin (hosted Agent Chat, Studio) it 40
 `ArtifactMiddleware`'s components render as an empty div with the run otherwise intact.
 
 **Clients should request `streamMode: ["messages", "updates"]`.** Synthesis is the
-longest single span in a run — 23-32s in the traces from thread
-019fde6d-d25c-77b3-a751-56c6b7aa4ead — and with `updates` alone the answer appears all
-at once when that span ends. `messages` streams it token by token instead, at a measured
-1.6s to first token. The run takes the same time either way; the wait stops being blank.
+longest single span in a run — 23-32s measured — and with `updates` alone the answer
+appears all at once when that span ends. `messages` streams it token by token instead, at
+a measured 1.6s to first token. The run takes the same time either way; the wait stops
+being blank.
 `updates` is worth keeping alongside it for the tool-call and `ui` artifact events.
 """
 
@@ -144,8 +144,8 @@ async def make_graph(config: RunnableConfig):
     # `_acquire` is both the initial lookup and the recovery path: it re-creates the
     # sandbox under the same thread-derived name if the container is gone. Handing it to
     # the backend lets a connection failure mid-run be repaired without the model ever
-    # seeing an error string — which is exactly what it could not do in trace
-    # 019fde6d-d267-70f0-924b-e0cccae622be, where one 502 cost ~46s of a 101s run.
+    # seeing an error string — which is exactly what it could not do in the measured run
+    # where a single 502 cost ~46s of a 101s run.
     #
     # Files written before the container died do not come back. That is a real loss, but
     # a strictly smaller one than failing the tool call: /workspace/out is swept and

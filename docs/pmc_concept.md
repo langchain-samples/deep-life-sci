@@ -4,8 +4,8 @@ Extends [`concept.md`](concept.md), which closes with *"To start with, we'll jus
 abstract, since that's always just text. Papers, with their associated multimodal and
 multi-file-type data will come later."* This is later.
 
-Principle, unchanged: **this is a demo. Keep everything as simple as possible.** The
-measured facts behind every number here are in [`pmc_api_notes/`](pmc_api_notes/).
+Principle, unchanged: **this is a demo. Keep everything as simple as possible.** Every
+number here was measured against the live services rather than estimated.
 
 ---
 
@@ -18,8 +18,8 @@ is the one people expect.
 full text is **10,056 tokens** — 40× larger. The current design's signature move, 200
 papers → 200 concurrent subagents in one `Promise.all`, costs ~50k tokens on abstracts and
 **~850k tokens** on the 77 full texts we measured. Full text therefore cannot be the
-default path; it is an *escalation on a shortlist*. This is the single most important
-design consequence and it is not a multimodal problem at all.
+default path; it is an *escalation on a shortlist*. That is the consequence the rest of
+this document is built around, and it is not a multimodal problem at all.
 
 **2. Availability is a cliff, and it fails silently.** Only **53% of PMIDs** end up with
 retrievable full text (61% have a PMCID; 87% of those are actually available). Worse,
@@ -32,8 +32,8 @@ answer the agent reports, not a gap it papers over.
 
 **3. Multimodal data is not in the E-utilities API at all.** JATS gives you
 `<graphic xlink:href="fendo-09-00124-g001.jpg"/>` — a bare filename. Every documented way
-to resolve it to a URL 404s, and the one service that did resolve it is **withdrawn on or
-after 2026-08-24** (this was written 2026-08-07, when that was still seventeen days out).
+to resolve it to a URL 404s, and the one service that did resolve it was **withdrawn on
+2026-08-24**.
 
 ## Recommendation 1: don't add a second E-utilities call — use the S3 bucket
 
@@ -43,10 +43,12 @@ The obvious move is `efetch db=pmc`. Don't. Use the **PMC Cloud Service** open-d
 https://pmc-oa-opendata.s3.amazonaws.com/PMC{id}.{version}/
 ```
 
-No auth, no API key, and **no NCBI rate limit** — 88 concurrent LIST requests completed in
-**0.4 seconds**, against E-utilities' 3/sec. For an architecture whose whole premise is
-fan-out, that is decisive. `concept.md` names the 3-req/sec limit as *"the constraint
-driving the above"*; on this path the constraint mostly lifts.
+No auth, no API key, and none of E-utilities' 3-req/sec metering — it is an object store,
+not a queried service. For an architecture whose whole premise is fan-out, that is
+decisive. `concept.md` names the 3-req/sec limit as *"the constraint driving the above"*;
+on this path the constraint mostly lifts. The client still caps itself with a semaphore at
+`S3_CONCURRENCY = 16`, which is conservative for a bucket and keeps a large fan-out from
+opening an unbounded number of connections.
 
 Each per-article prefix holds exactly what we need and nothing we have to derive:
 
@@ -68,8 +70,9 @@ Two traps to encode in the client, both verified:
 - **Never hardcode the `.1` version suffix.** Observed versions: 1 (×73), 2 (×2), and
   **319** (×2). Read the version off the LIST response.
 - **Never build against `oa.fcgi`, `oa_package/`, `oa_comm/`, or `deprecated/` paths.**
-  The `deprecated/` prefixes still return 200 *today* and vanish on the 24th — code
-  written against them passes testing this week and breaks in two.
+  The `deprecated/` prefixes returned 200 right up to the 2026-08-24 retirement and then
+  stopped, so code written against them would have passed its tests and broken shortly
+  after.
 
 `esearch`/`esummary`/`efetch db=pubmed` stay exactly as they are. And `pubmed_search`
 gets the PMCID for **free** — `esummary`'s `articleids` already contains it, so
@@ -96,7 +99,7 @@ question; see below.
 
 Supplementary `.xlsx` files are close to free given the existing `execute` surface — write
 one into the sandbox and `pandas` reads it — so `fetch_supplementary` is a natural fourth,
-but it belongs in a later phase.
+and it is the last of the four to be worth building.
 
 ## Recommendation 3: the escalation ladder is the prompt's job
 
@@ -114,8 +117,8 @@ the whole paper:
 | figure image (vision) | a vision call | the answer is only in the picture |
 
 The rule to state plainly: **abstracts triage the corpus, full text answers on ≤10–20
-papers.** A 200-paper full-text fan-out is a bug, not thoroughness. And `pmc_locate`
-before `fetch_full_text`, always.
+papers.** A 200-paper full-text fan-out is the failure mode the ladder exists to prevent.
+And `pmc_locate` before `fetch_full_text`, always.
 
 ## Recommendation 4: every tool feeds a fan-out, and delegation is the default
 
@@ -144,17 +147,16 @@ The per-tool split:
 | `fetch_full_text` | **subagents** — `full-text-analyst` | 10k tokens/paper |
 | `fetch_figures` | **subagents** — `figure-analyst` | image blocks |
 
-> **Corrected during implementation.** I estimated `pmc_locate` at ~50 tokens/paper. Its
-> actual return is **2,019 tokens/paper** — 155,496 across 77 papers — because it carries
-> every figure caption in full (1,455 of those 2,019). The *decision* it supports is
-> still tiny; the payload isn't. This doesn't change the architecture, since PTC keeps
-> results in the JS heap and only returned values reach context, but it does mean the
-> prompt must tell the agent to project the result down before returning it. The
-> projected triage summary measures 40 tokens/paper.
->
-> Same correction, sharper: `fetch_full_text` for a **single** paper is ~10,645 tokens
-> against `max_result_chars=40,000` (≈10,000 tokens). It isn't that a corpus overflows
-> one result — one paper does.
+`pmc_locate` is triage, but it is not cheap to *return*: its payload is **2,019
+tokens/paper** — 155,496 across 77 papers — because it carries every figure caption in
+full (1,455 of those 2,019). The *decision* it supports is tiny; the payload is not. This
+doesn't change the architecture, since PTC keeps results in the JS heap and only returned
+values reach context, but it does mean the prompt has to tell the agent to project the
+result down before returning it. The projected triage summary measures 40 tokens/paper.
+
+The same point, sharper, one rung up: `fetch_full_text` for a **single** paper is ~10,645
+tokens against `max_result_chars=40,000` (≈10,000 tokens). It isn't that a corpus
+overflows one result — one paper does.
 
 `full-text-analyst` is nearly free to build: it's `abstract-analyst` with a different
 system prompt and a larger input. The existing fan-out snippet already works unchanged —
@@ -178,9 +180,9 @@ question, no fan-out to amortise — delegating just adds a hop.
 
 ## Recommendation 5: figures — `read_file` already does this, no custom tool needed
 
-I initially proposed a custom `ask_about_figure` Python vision tool here, on the
-assumption that images couldn't reach a subagent. **That was wrong**, and the corrected
-design is much simpler.
+A custom `ask_about_figure` Python vision tool is the obvious move here, on the assumption
+that images can't reach a subagent. It isn't needed: they can, by a route that is much
+simpler.
 
 `task()` genuinely does take a string only — verified in
 `langchain_quickjs/_subagent.py`, which passes `{"description": str, "subagent_type": ...}`
@@ -198,10 +200,11 @@ So the figure fan-out is the existing architecture with nothing new bolted on:
    the question in the string description.
 3. The subagent calls `read_file` on the path and *sees the figure*.
 
-And `abstract-analyst` **already has exactly the middleware this needs** — `agent.py:111`
-gives it `FilesystemMiddleware(backend=backend, tools=["read_file"])`, because
-`read_file` is the floor that `FilesystemMiddleware` won't let you omit. The capability
-has been sitting there unused.
+And `abstract-analyst` **already has exactly the middleware this needs**:
+`analyst_leaf()` in `agent.py` gives every leaf a
+`FilesystemMiddleware(backend=backend, tools=["read_file"])`, because `read_file` is the
+floor that `FilesystemMiddleware` won't let you omit. The capability has been sitting
+there unused.
 
 Two useful properties of the fallback behaviour, both read off the source:
 
@@ -212,9 +215,10 @@ Two useful properties of the fallback behaviour, both read off the source:
   profile still gets the image rather than failing closed. Good default, but it means a
   genuinely non-vision model would be found out at runtime rather than at build time.
 
-Caveat on honesty: this is verified from library source, not from a run. **Smoke-test
-`read_file` on a real JPEG through the LangSmith sandbox as the first task of Phase 2** —
-it's the one assumption the figure work rests on.
+Caveat on honesty: the paragraph above is read off library source, not off a run. The
+whole figure path rests on that one assumption, so it was worth confirming against a real
+JPEG staged through the LangSmith sandbox before anything was built on it — see
+[What shipped](#what-shipped-and-what-it-does).
 
 The three destinations for a figure still need to stay distinct:
 
@@ -239,26 +243,26 @@ manuscripts, in PMC by funder mandate rather than an open licence.
 
 `TDM` means *mine it, don't redistribute it*. So: **analysing a TDM/ND paper is fine;
 copying its figure into the user's download folder is not.** That's a concrete gate on
-destination (c) above, keyed off a field we already have in the sidecar. For a life
-sciences client this is a strong demo beat and it costs one conditional.
+destination (c) above, keyed off a field we already have in the sidecar — a real
+compliance behaviour for one conditional.
 
-## Phasing
+## What shipped, and what it does
 
-All three phases are implemented in `pmc.py` and wired through `agent.py`. Each was
+All of the below is implemented in `pmc.py` and wired through `agent.py`. Each part was
 verified end to end against the live services with a real agent run.
 
-**Phase 1 — text only. ✅** `pmc_locate` + `fetch_full_text` with section slicing and
-captions, a `full-text-analyst` subagent, host-side cache, prompt ladder. No vision, no
-new UI, no new middleware. This alone unlocks the thing abstracts genuinely cannot do:
-*"read the methods of these eight papers and tell me the mouse strain and dose."*
+**Text.** `pmc_locate` + `fetch_full_text` with section slicing and captions, a
+`full-text-analyst` subagent, host-side cache, prompt ladder. No vision, no new UI, no new
+middleware. This alone unlocks the thing abstracts genuinely cannot do: *"read the methods
+of these eight papers and tell me the mouse strain and dose."*
 
 *Verified:* a 12-paper base-editing query fanned out `full-text-analyst` subagents over
 methods sections and returned per-paper delivery vehicles and doses (AAV9 at 1×10¹² vg,
 LNP at 2.5 mg/kg, hydrodynamic injection at 30 µg) — none of which appear in an abstract —
 while correctly reporting the 2 papers with no PMC full text.
 
-**Phase 2 — figures. ✅** `fetch_figures`, a `figure-analyst` subagent reading images via
-`read_file`, and license-gated export to `out/`.
+**Figures.** `fetch_figures`, a `figure-analyst` subagent reading images via `read_file`,
+and license-gated export to `out/`.
 
 *Verified:* the load-bearing question — does `read_file` return a usable image block to a
 PTC-dispatched subagent — is **yes**. The analyst read GLUT1/GLUT4 box labels, node
@@ -266,9 +270,9 @@ colours and arrowhead shapes off a staged JPEG, none of which are in the caption
 agent reached it by the intended ladder: `pmc_locate` → check `readable_in_sandbox` →
 stage → delegate, without fetching body text it didn't need.
 
-**Phase 3 — supplementary data. ✅** Route `.xlsx`/`.csv` into the sandbox and let the
-existing `execute` surface do the work. Highest ratio of demo value to new code in the
-whole plan, because it reuses everything.
+**Supplementary data.** Route `.xlsx`/`.csv` into the sandbox and let the existing
+`execute` surface do the work. Highest ratio of capability to new code in the whole
+design, because it reuses everything.
 
 *Verified:* a 117×12 supplementary spreadsheet loaded into pandas, summary statistics
 computed, and a chart written to `out/` — with the licence checked first.
@@ -289,17 +293,19 @@ PDFs.
 
 `efetch db=pmc` (rate-limited, no images, no sidecar), the BioC API (nice, but a third API
 for what S3's `.txt` already gives), Europe PMC (fully works — keep as fallback only),
-OAI-PMH (built for corpus harvesting, not per-article lookup), and PDFs. Reasoning for
-each in [`pmc_api_notes/`](pmc_api_notes/) §9.
+OAI-PMH (built for corpus harvesting, not per-article lookup), and PDFs — the reason in
+each case is the parenthesis beside it.
 
 ## Risks
 
-- **2026-08-24.** The retirement lands mid-build. The proposed path is the surviving one,
-  but the new layout is young and thinly documented — I derived it by listing the bucket,
-  not from docs. Worth re-probing right after the cutover.
-- **Both beta surfaces still apply.** The interpreter and dynamic subagents were already
-  flagged to clients. The new combination of them — a `read_file` image block inside a
-  PTC-dispatched subagent — has since been verified end to end (see Phasing, Phase 2), so
-  this is now the ordinary beta caveat rather than an open question.
+- **The 2026-08-24 retirement.** The S3 path above is the one that survived it, but that
+  layout is young and thinly documented: it is described here from the bucket's own
+  contents rather than from published documentation, so it is worth re-checking whenever
+  the client starts returning nothing.
+- **Both beta surfaces still apply.** The interpreter and dynamic subagents are beta APIs
+  and may move between deepagents releases. The combination of them used here — a
+  `read_file` image block inside a PTC-dispatched subagent — is verified end to end (see
+  [What shipped](#what-shipped-and-what-it-does)), so it is the ordinary beta caveat
+  rather than an open question.
 - **53% coverage will surprise a biologist.** Better to make it a headline the agent
   reports ("full text available for 41 of 78 papers") than a caveat buried in a footnote.

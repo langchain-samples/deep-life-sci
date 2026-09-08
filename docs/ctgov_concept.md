@@ -5,12 +5,9 @@ cover what PubMed knows about *papers*. This covers what the registry knows abou
 *studies* — including the ones that never produced a paper, which is the gap no amount of
 PubMed tooling closes.
 
-Principle, unchanged: **this is a demo. Keep everything as simple as possible.** The
-measured facts behind every number here are in [`ctgov_api_notes/`](ctgov_api_notes/),
-probed against the live API on 2026-08-20 (API v2.0.5, data timestamp 2026-08-19).
-
-`demo_questions.md` currently lists ClinicalTrials.gov under what the agent explicitly
-cannot reach. This is the proposal to remove that line.
+Principle, unchanged: **this is a demo. Keep everything as simple as possible.** Every
+number here was measured against the live API on 2026-08-20 (API v2.0.5, data timestamp
+2026-08-19).
 
 ---
 
@@ -20,14 +17,16 @@ Three things, in descending order of how much they constrain the design. The ord
 almost exactly inverted from PMC, which is the interesting part.
 
 **1. The rate limit is the binding constraint, and it is tight.** PMC lifted the
-constraint `concept.md` was built around — 88 concurrent S3 LISTs in 0.4s against
-E-utilities' 3/sec. ClinicalTrials.gov puts it back, harder. Measured: **~1 request/second
-sustained, bursts of ~10 tolerated, 12 concurrent returns ten 429s** — and the 429 carries
-**no `Retry-After` header**, so there is nothing to obey and the client's own backoff is
-the only thing between a fan-out and a dead run.
+constraint `concept.md` was built around — its S3 path is not metered the way E-utilities'
+3/sec is. ClinicalTrials.gov puts the constraint back, harder. The ceiling is
+undocumented: NLM publishes no number, there is no API key to raise it with, and a 429
+from this API carries **no `Retry-After` header**, so there is nothing to obey and the
+client's own backoff is the only thing between a fan-out and a dead run. The client
+therefore paces at **~1 request/second**, deliberately conservative, with every request in
+the module passing through one process-wide throttle.
 
-That is 3× slower than unkeyed NCBI and 10× slower than keyed. Every `S3_CONCURRENCY = 16`
-instinct from `pmc.py` is wrong here.
+That is 3× slower than unkeyed NCBI and 10× slower than keyed, so `pmc.py`'s
+`S3_CONCURRENCY = 16` does not transfer.
 
 The saving grace is that the API is built so you don't need concurrency: `pageSize` goes to
 1,000 and `filter.ids` takes **300 ids in one verified call**. A 1,000-trial corpus is four
@@ -35,7 +34,7 @@ requests. The design job is to make per-trial fetching *impossible to express*, 
 discouraged.
 
 **2. The API fails loudly, which deletes most of the expected work.** This is the opposite
-of PubMed, and it is worth stating plainly because it changes the effort estimate:
+of PubMed, and it is worth stating plainly because it removes a whole category of guard:
 
 | input | PubMed | ClinicalTrials.gov |
 |---|---|---|
@@ -88,10 +87,10 @@ record. Paginates internally via `pageToken`. Supports a `retmax=0`-style probe 
 `pubmed_search`.
 
 This is the one real difference from `pmc_locate`, and it is deliberate. `pmc_locate`
-returns 2,019 tokens/paper and the prompt has to beg the agent to project it down before
-returning it — a correction `pmc_concept.md` records after the fact. Here the projection
-is free, server-side, and unavoidable. **Do not repeat that mistake by returning whole
-studies and trusting the prompt.**
+returns 2,019 tokens/paper and the prompt has to press the agent to project it down before
+returning it — a cost `pmc_concept.md` documents. Here the projection is free,
+server-side, and unavoidable, which is a stronger guarantee than returning whole studies
+and trusting the prompt to shrink them.
 
 **`ctgov_fetch(nct_ids, include=[...])`** — batch by `filter.ids`, chunked at 200 for URL
 headroom (300 verified working at ~3.6 kB of URL; there is no documented POST form). This
@@ -108,9 +107,10 @@ An eligibility criteria block is roughly four abstracts. A 200-trial fan-out is 
 safe, and it is the same shape as the existing one.
 
 **`ctgov_results(nct_ids, outcomes=[...])`** — the 45,000-token tier, deliberately
-separate and deliberately narrow. **I would cut this from Phase 1** (see
-[Phasing](#phasing)): almost every question that reaches for it is better served by the
-*paper* the trial links to, which the bridge below gives you for free.
+separate and deliberately narrow. It is not built (see
+[What is built](#what-is-built-and-what-is-not)): almost every question that reaches for
+it is better served by the *paper* the trial links to, which the bridge below gives you
+for free.
 
 ### Everything needs flattening
 
@@ -129,40 +129,39 @@ count and it is entirely mechanical.
 
 ## Recommendation 2: rate discipline is the architecture
 
-`concept.md` named NCBI's 3/sec as *"the constraint driving the above"*. State the CTG
-number the same way, because it is stricter:
+`concept.md` named NCBI's 3/sec as *"the constraint driving the above"*. The CTG figure
+is stated the same way, because it is stricter:
 
 ```
-_min_interval()  ->  1.0s      (pubmed.py: 0.34s unkeyed, 0.11s keyed)
-concurrency      ->  <= 8      (pmc.py: 16)
-Retry-After      ->  never sent; _backoff_delay always falls through to the jittered ceiling
+_min_interval()   ->  1.0s      (pubmed.py: 0.34s unkeyed, 0.11s keyed)
+RETRY_BASE_DELAY  ->  2.0s      (pubmed.py: 1.0s)
+Retry-After       ->  never sent; _backoff_delay always falls through to the jittered ceiling
 ```
+
+No separate concurrency cap is needed, because every request in the module passes through
+that one throttle: a `Promise.all` of ten searches is paced exactly as ten sequential ones
+would be. The higher retry base matters for the same reason — against a bucket that
+refills at 1/sec, a one-second retry is just the next request in the burst that provoked
+the 429.
 
 The existing **"subagents do no I/O"** invariant is not merely preserved — it becomes
-load-bearing in a harder way. Fifty subagents hitting NCBI collect 429s; **twelve** hitting
-CTG collect 429s. The measured ladder:
+load-bearing in a harder way. The registry tolerates far less burst than NCBI does and
+offers no key to raise its ceiling, so batch-fetching up front is the only shape that
+survives a fan-out at all.
 
-| pattern | result |
-|---|---|
-| 3 / 5 / 8 concurrent | all 200 |
-| **12 concurrent** | **10× 429, 2× 200** |
-| 30 sequential, unpaced (5.4 req/s) | 10 ok, **20 errors** |
-| 12 requests at 2.0 req/s | 10 ok, 2 errors |
-| 12 requests at 1.0 req/s | **12 ok, 0 errors** |
-
-Shared HTTP machinery is a judgment call. `_throttle`, `_backoff_delay`, `RETRY_STATUSES`
+Shared HTTP machinery was a judgment call. `_throttle`, `_backoff_delay`, `RETRY_STATUSES`
 and the retry loop in `pubmed.py:_request` are ~60 lines CTG needs almost verbatim, but
-with a different interval, no `Retry-After`, and a different base URL. `pmc.py` already
-chose to duplicate rather than share. **Follow that precedent** — one more copy is cheaper
-than a three-way abstraction over three genuinely different rate-limit regimes.
+with a different interval, no `Retry-After`, and a different base URL. `pmc.py` had
+already chosen to duplicate rather than share, and one more copy looked cheaper than a
+three-way abstraction over three genuinely different rate-limit regimes.
 
-> **Superseded.** The duplication above shipped and was later consolidated into
-> `sources/_http.py` (`Throttle`, `backoff_delay`, `chunks`, `RETRY_STATUSES`). The
-> feared three-way abstraction did not materialise: `pmc.py` talks to S3, which is not
-> metered this way and caps concurrency with a semaphore instead, so the shared module
-> spans two callers rather than three. Each keeps its own `Throttle` instance — the
-> buckets are metered independently — and each keeps its own `_request`, which is where
-> the POST branch, the 4xx handling and the exception types genuinely differ.
+What the code settled on is a narrower version of sharing. The common parts live in
+`sources/_http.py` (`Throttle`, `backoff_delay`, `chunks`, `RETRY_STATUSES`), and the
+feared three-way abstraction does not arise: `pmc.py` talks to S3, which is not metered
+this way and caps concurrency with a semaphore instead, so the shared module spans two
+callers rather than three. Each caller keeps its own `Throttle` instance — the buckets are
+metered independently — and its own `_request`, which is where the POST branch, the 4xx
+handling and the exception types genuinely differ.
 
 ## Recommendation 3: the bridges are the reason to do this
 
@@ -200,14 +199,14 @@ reachable from PubMed alone.
 
 ## Recommendation 4: the escalation ladder is the prompt's job, again
 
-The prompt already carries the real design work, and it is already 504 lines. Realistically
-**+120 lines**, covering:
+The prompt already carries the real design work. The registry adds one more segment to
+it, covering:
 
 1. **When to reach for the registry at all.** The likeliest failure mode is the model
    searching CTG for questions PubMed answers better, or the reverse. This needs to be as
    sharp as the existing `eval`-vs-`execute` line, which took real tuning. **This is the
-   only item here that is behaviour rather than documentation, and it is where the budget
-   goes.**
+   only item here that is behaviour rather than documentation, and it is where the tuning
+   effort goes.**
 2. **Essie query syntax**, a second query language next to the boolean/field-tag table.
    Its search areas do synonym expansion (`isSynonyms: true` on `BriefTitle`,
    `OfficialTitle`, `Condition`) — `query.cond=heart attack` returns 3,920 against
@@ -290,19 +289,19 @@ One non-guard worth a comment rather than code: `/stats/size` reported 599,324 s
 while a live unfiltered search reported 599,549 in the same session. The stats endpoints
 lag slightly. Fine for a denominator, wrong for a count the user will quote.
 
-## Phasing
+## What is built, and what is not
 
-**Phase 1 — search and fetch.** `ctgov_search` + `ctgov_fetch`, `trial-analyst`, host-side
-cache with TTL, prompt segment, rate discipline. No results section, no cross-source
-joins in the prompt beyond mentioning `referencesModule.pmid` exists. This alone answers
-the registry-only question class.
+**Search and fetch.** `ctgov_search` + `ctgov_fetch`, `trial-analyst`, a host-side cache
+with TTL, a prompt segment and the rate discipline above. That much alone answers the
+registry-only question class.
 
-**Phase 2 — the bridges.** Prompt snippets for all three joins, and the eval seed that
-depends on them. This is the phase that justifies the integration; it is almost entirely
-prompt work, because the data is already in what Phase 1 returns.
+**The bridges.** Prompt snippets for all three joins, plus the eval seed that depends on
+them. This is what justifies the integration, and it is almost entirely prompt work,
+because the data is already in what search and fetch return.
 
-**Phase 3 — `ctgov_results`, if an eval demands it.** 13.3% of trials, 45,000 tokens each,
-and usually strictly worse than the linked paper. Do not build it speculatively.
+**Not `ctgov_results`.** 13.3% of trials have posted results, each costs ~45,000 tokens,
+and the linked paper is usually a strictly better answer. Building it speculatively would
+buy a rare capability at the price of the run's whole context budget.
 
 ## Evals
 
@@ -325,26 +324,14 @@ and usually strictly worse than the linked paper. Do not build it speculatively.
 `runner.py`'s `RunResult` needs no change. Root-context size is exactly the number that
 would catch a bad projection.
 
-## Files touched
+## Where it sits in the codebase
 
-| file | change |
-|---|---|
-| `research_agent/sources/ctgov.py` | **new**, ~450 lines |
-| `research_agent/sources/__init__.py` | export the tools |
-| `research_agent/paths.py` | `CTGOV_CACHE` |
-| `research_agent/agent.py` | entries in `tools=[]`, `ptc=[]`, `subagents=[]` |
-| `research_agent/prompts/system.py` | ~+120 lines |
-| `research_agent/prompts/subagents.py` | `TRIAL_ANALYST` |
-| `research_agent/prompts/__init__.py` | re-export |
-| `evals/datasets/default.yaml` | 2–3 seeds |
-| `docs/demo_questions.md` | remove the ClinicalTrials.gov exclusion |
-| `research_agent/sources/CLAUDE.md` | the rate-limit invariant, at minimum |
-
-**Not touched:** `sandbox.py`, `models.py`, `middleware/`, `runner.py`, `graph.py`,
-`cli.py`. CTG is a pure host-side HTTP source with no sandbox involvement — no figures, no
-binary staging, no `make_sandbox_tools`-style factory. Structurally the easy kind of
-source, which is most of why the estimate is a day of implementation plus a day of prompt
-tuning against evals rather than the multi-phase build PMC needed.
+The registry is a pure host-side HTTP source: `sources/ctgov.py` plus its exports, a cache
+path in `paths.py`, entries in `agent.py`'s `tools`/`ptc`/`subagents` lists, and the prompt
+segments. `sandbox.py`, `models.py`, `middleware/`, `runner.py`, `graph.py` and `cli.py`
+are untouched by it — there are no figures, no binary staging, no
+`make_sandbox_tools`-style factory. Structurally it is the easy kind of source, which is
+most of why it needed nothing like the staged build PMC did.
 
 ## Explicitly out of scope
 
@@ -352,7 +339,7 @@ tuning against evals rather than the multi-phase build PMC needed.
   `fields=NCTId&format=csv` is a 400. The agent writes its own spreadsheets in the sandbox
   anyway.
 - **The two-phase freshness check.** TTL first; see Recommendation 6.
-- **`ctgov_results` in Phase 1.** See Phasing.
+- **`ctgov_results`.** See [What is built](#what-is-built-and-what-is-not).
 - **The WHO ICTRP and EU CTR registries.** Real coverage gaps for non-US trials, but a
   third registry for a demo that has not yet shipped the first one.
 - **Bulk dataset download.** There is no working `/studies/download`; 599k studies is not
@@ -360,9 +347,9 @@ tuning against evals rather than the multi-phase build PMC needed.
 
 ## Risks
 
-- **The rate limit is undocumented.** NLM publishes no number. Everything in
-  Recommendation 2 is measured, not promised, and could move without notice. Build the
-  retry path as if the limit will tighten, and re-probe before any demo that fans out.
+- **The rate limit is undocumented.** NLM publishes no number, so the pacing in
+  Recommendation 2 is a conservative choice rather than a contract, and the real ceiling
+  could move without notice. The retry path is built as if the limit will tighten.
 - **Trial records mutate under the eval set.** Unlike PMIDs, an NCT record's status and
   enrollment change. Every trial-based rubric needs a date bound or it rots. This is a
   standing curation cost the PubMed seeds do not carry.
@@ -371,6 +358,6 @@ tuning against evals rather than the multi-phase build PMC needed.
   cross-contamination — `AREA[Phase]PHASE3` sent to `pubmed_search`, or `[pt]` sent to
   `ctgov_search`. Both 400 or return zero rather than lying, so it is recoverable, but it
   is worth an explicit line in the prompt and a look in the eval trajectories.
-- **`resultsSection` is a context bomb.** 45,000 tokens, and the model has no way to know
-  that before asking. If Phase 3 ever happens, the tool must cap or slice by outcome
-  measure rather than trusting the prompt.
+- **`resultsSection` is large enough to swamp a run.** 45,000 tokens, and the model has no
+  way to know that before asking. If `ctgov_results` is ever built, it must cap or slice by
+  outcome measure rather than trusting the prompt.
