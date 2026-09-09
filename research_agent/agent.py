@@ -55,11 +55,7 @@ def build_agent(backend):
             "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
         }
 
-    # deepagents auto-adds a `general-purpose` subagent on the root model with the
-    # unrestricted filesystem. ROOT_TIMEOUT's `read` watchdog is safe only because the
-    # root streams; a subagent calls non-streaming, so it becomes a hard response ceiling.
-    # Both providers are registered because ROOT_PROVIDER is an env axis. `task` survives:
-    # it disappears only when no synchronous subagents remain.
+    # Disable deepagents auto-added `general-purpose` subagent
     _NO_GENERAL_PURPOSE = HarnessProfile(
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
     )
