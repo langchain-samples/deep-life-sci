@@ -58,6 +58,12 @@ PACKAGES = [
     # directly, which would bypass sources/pubmed.py's rate limiting, tokenization
     # guards and cache — that path stays host-side. The prompt says so too.
     "biopython==1.88",
+    # The text layer of an uploaded PDF. Pure Python and ~500KB, and it is what makes a
+    # paper the user attached readable at all: ~70% of the literature is not in PMC OA,
+    # so a PDF is the only route to it. `middleware/upload_probe.py` extracts to a
+    # sidecar so the body reaches `document-analyst` and never the root transcript.
+    # No OCR here — a scanned PDF is reported as having no text rather than guessed at.
+    "pypdf==6.18.0",
     # ~120MB wheel and the bulk of this script's runtime, but the only real option for
     # SMILES, descriptors, fingerprints and 2D depiction.
     "rdkit==2026.3.5",
@@ -84,7 +90,14 @@ BUILD = (
 
 VERIFY = (
     'python3 -c "import numpy, pandas, scipy, matplotlib, openpyxl, docx, pptx; '
-    "import statsmodels, sksurv, sklearn, Bio; "
+    "import statsmodels, sksurv, sklearn, Bio, pypdf; "
+    # Pillow arrives transitively via matplotlib rather than being pinned, and the upload
+    # probe reads an attached image's dimensions with it. Asserted here so a future
+    # matplotlib that drops the dependency fails the build instead of a user's upload.
+    "import PIL.Image; "
+    # The two biopython parsers the upload probe depends on. Importing `Bio` alone does
+    # not prove either submodule came along.
+    "from Bio import Medline, SeqIO; "
     "from rdkit import Chem, rdBase; from rdkit.Chem import Descriptors, Draw; "
     "matplotlib.use('Agg'); import matplotlib.pyplot as plt; "
     "plt.plot([1, 2, 3]); plt.savefig('/workspace/out/_smoke.png'); "
@@ -106,7 +119,7 @@ VERIFY = (
     "print(numpy.__version__, pandas.__version__, scipy.__version__, "
     "matplotlib.__version__, openpyxl.__version__, docx.__version__, "
     "pptx.__version__, statsmodels.__version__, sksurv.__version__, "
-    'sklearn.__version__, Bio.__version__, rdBase.rdkitVersion)"'
+    'sklearn.__version__, Bio.__version__, pypdf.__version__, rdBase.rdkitVersion)"'
 )
 
 

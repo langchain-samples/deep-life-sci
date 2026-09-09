@@ -40,6 +40,7 @@ from research_agent.middleware.uploads import UploadMiddleware
 from research_agent.models import root_model, subagent_model
 from research_agent.prompts import (
     ABSTRACT_ANALYST,
+    DOCUMENT_ANALYST,
     FIGURE_ANALYST,
     FULL_TEXT_ANALYST,
     TRIAL_ANALYST,
@@ -81,7 +82,7 @@ def build_agent(backend):
         """A leaf on the cheap model, narrowed to `read_file` and nothing else.
 
         The two leaf kinds arrive at the same restriction from opposite directions, which
-        is why one function serves both:
+        is why one function serves them all:
 
         * **The text analysts** (abstract, full-text) have their payload in the prompt and
           need nothing on disk. Their prompts say "you have no tools and cannot retrieve
@@ -90,9 +91,10 @@ def build_agent(backend):
           refuses to drop (filesystem.py:1648 requires `read_file`). One tool the leaf has
           no use for is the floor; the point is that `execute`, `grep`, `write_file` and
           the rest are gone.
-        * **The figure analyst** is handed a sandbox path rather than an image, and
+        * **The figure and document analysts** are handed a sandbox path rather than a
+          payload — an image, or the text extracted out of an uploaded PDF — and
           `read_file` on that path is what turns it into something the model can see. For
-          it the floor is exactly the tool it needs.
+          them the floor is exactly the tool they need.
 
         The cost of a leaf that can reach the filesystem is measured, not hypothetical.
         In trace 019fde70-69b6-7190-a969-a6a60e52894d three of nine abstract-analysts
@@ -138,7 +140,7 @@ def build_agent(backend):
     # these providers in the same process — `graph.py` builds only ours.
     #
     # The `task` tool survives this: it disappears only when no synchronous subagents
-    # remain, and the four leaves below are synchronous.
+    # remain, and the five leaves below are synchronous.
     _NO_GENERAL_PURPOSE = HarnessProfile(
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
     )
@@ -170,6 +172,10 @@ def build_agent(backend):
             analyst_leaf(FULL_TEXT_ANALYST),
             analyst_leaf(FIGURE_ANALYST),
             analyst_leaf(TRIAL_ANALYST),
+            # Reads a path rather than being handed text, like figure-analyst and for the
+            # same reason: an uploaded PDF's extracted text is a file in the sandbox
+            # (`middleware/upload_probe.py`) and far too large for a task description.
+            analyst_leaf(DOCUMENT_ANALYST),
         ],
         backend=backend,
         middleware=[

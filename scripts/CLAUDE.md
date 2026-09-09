@@ -52,12 +52,15 @@ Every patch function's docstring says what it is for. What is not in any one of 
   search-and-replace on upstream's own product name, so a clone patched under an earlier name
   has no `Agent Chat` left to match — and the clone being gitignored makes that list the only
   record the rename has.
-- **The upload allowlist tests `isSupportedUpload`/`isSpreadsheetUpload`, never the MIME
-  list.** Windows with Excel installed reports a `.csv` as `application/vnd.ms-excel` and some
-  browsers report `""`: extension first, MIME second. `accept="*/*"` stays on the composer
-  input so a `.xls` reaches the toast telling the user to re-save it rather than being greyed
-  out of the picker. Images and PDFs stay refused — an attachment the graph does not intercept
-  is model context and nothing else.
+- **The upload allowlist tests `isSupportedUpload`/`isSandboxUpload`, never the MIME list.**
+  Windows with Excel installed reports a `.csv` as `application/vnd.ms-excel` and some browsers
+  report `""`: extension first, MIME second. `accept="*/*"` stays on the composer input so a
+  `.xls` reaches the toast telling the user to re-save it rather than being greyed out of the
+  picker. **Every accepted upload becomes a `type: "file"` block, images included** — upstream
+  sends an image as a `type: "image"` block because upstream wants it in model context, and
+  here it is transport to the sandbox. Keep the two halves in step with `UPLOAD_KINDS` in
+  `research_agent/middleware/uploads.py`: a type the UI accepts and the graph has no reader for
+  is model context and nothing else, which is the outcome both lists exist to prevent.
 
 The `/ui/:path*` rewrite is the one patch that is load-bearing rather than cosmetic: without
 it the artifact components never render (see the same-origin invariant in the root

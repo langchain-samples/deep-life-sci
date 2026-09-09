@@ -100,6 +100,13 @@ OUT_DIR = f"{WORKSPACE}/out"
 # IDLE_TTL_SECONDS is replaced by an empty one. See `middleware/uploads.py`.
 UPLOAD_DIR = f"{WORKSPACE}/uploads"
 
+# What the upload probe parses *out* of an attachment: a bibliography normalised to JSON,
+# a PDF's text layer, a compound table. A subdirectory rather than a suffix convention
+# because `middleware/uploads.py` inventories the upload directory by filename to decide
+# what still needs staging, and a directory falls out of that `isfile` check for free —
+# so a sidecar is never mistaken for something the user attached.
+UPLOAD_DERIVED_DIR = f"{UPLOAD_DIR}/derived"
+
 __all__ = [
     "ABSTRACT_CACHE",
     "BOOT_TIMEOUT_SECONDS",
@@ -111,6 +118,7 @@ __all__ = [
     "OUT_DIR",
     "PMC_CACHE",
     "REPO_ROOT",
+    "UPLOAD_DERIVED_DIR",
     "UPLOAD_DIR",
     "WORKSPACE",
 ]

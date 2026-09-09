@@ -33,6 +33,10 @@ data/
 # read at run time from outside the image, so the file itself is never needed in here.
 .env
 
+# Example attachments for trying the composer by hand. 3 MB of PDFs, figures and
+# reference exports that nothing at run time reads.
+samples/
+
 # Measures the agent rather than being part of it, and nothing shipped should carry a test
 # framework (see CLAUDE.md on why evals/ sits outside the package). Safe to drop because
 # [tool.setuptools] names the packages explicitly and the version is static — the build

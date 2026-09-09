@@ -34,13 +34,33 @@ message id, which `add_messages` treats as a replacement rather than an append. 
 is consequently in exactly one checkpoint (the input write) and in no request to the model.
 
 What the model gets instead is a manifest appended to the system prompt: filename, size,
-row count, column names. That is the part worth context — a model that knows the columns
-writes pandas that works first time — and it costs a few hundred characters instead of a
-file. It changes only when an upload does, so the prompt-cache prefix is stable across the
-turns of a conversation.
+and whatever shape the file turned out to have. That is the part worth context — a model
+that knows the columns writes pandas that works first time — and it costs a few hundred
+characters instead of a file. It changes only when an upload does, so the prompt-cache
+prefix is stable across the turns of a conversation.
 
-Only the root agent sees any of this. Subagents get their payload in their own prompts and
-do no I/O (see `agent.py`), which is unchanged: an upload is root-level analysis.
+**Not every upload's useful form is the file.** `UPLOAD_KINDS` names six, and they divide
+into two halves by what the agent does next:
+
+* **A file to compute over** — a table, a compound set, a sequence set. The
+  materialisation is the file itself, and the manifest describes its shape so the agent
+  can open it with pandas or rdkit.
+* **A corpus, or a document to read** — a bibliography, a PDF, an image. Here the file is
+  a container for something else, and the manifest carries *that*: the PMID list a
+  reference export resolves to, the path a PDF's text layer was written to, the path an
+  image can be handed to `figure-analyst` at. This half is the point. A `.ris` out of
+  Zotero becomes 200 PMIDs the agent hydrates with `fetchAbstracts` and fans out over —
+  the operation the whole PTC design exists for — and a PDF is the ~70% of the literature
+  that is not in PMC OA finally becoming readable, without its 40k characters landing in
+  root context on the way.
+
+Whatever a probe parses out goes to a sidecar under `paths.UPLOAD_DERIVED_DIR` rather than
+into the manifest whenever it is bigger than a handful of lines. `upload_probe.py` is the
+reader for all of it, and it runs in the sandbox because that is where pandas, rdkit,
+pypdf and biopython are.
+
+Only the root agent sees any of this. Subagents get their payload — or, for an upload, a
+path — in their own prompts and do no I/O of their own (see `agent.py`).
 """
 
 from __future__ import annotations
@@ -51,6 +71,8 @@ import json
 import logging
 import posixpath
 import re
+import shlex
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
@@ -58,17 +80,72 @@ from langchain_core.messages import HumanMessage
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
-from research_agent.paths import UPLOAD_DIR
+from research_agent.paths import UPLOAD_DERIVED_DIR, UPLOAD_DIR
 
 logger = logging.getLogger(__name__)
 
-# What the agent can actually do something with. `.xls` is absent on purpose: reading it
-# needs `xlrd`, which is not in the snapshot, and `sandbox.py` blocks runtime installs — so
-# accepting one would fail deep inside a run instead of at the composer. `_REJECTED` below
-# turns it into a sentence the user reads before sending. Adding a format here means adding
-# its reader to `scripts/build_snapshot.py` and rebuilding the snapshot, or every clone that
-# already built one hits that install block.
-UPLOAD_SUFFIXES = frozenset({".csv", ".tsv", ".xlsx", ".xlsm"})
+# What the agent can do something with, and which probe in `upload_probe.py` describes it.
+# This mapping is the single source of both: `UPLOAD_SUFFIXES` is derived from it, and the
+# probe is handed it as JSON rather than carrying a second copy that could drift.
+#
+# `.xls` is absent on purpose: reading it needs `xlrd`, which is not in the snapshot, and
+# `sandbox.py` blocks runtime installs — so accepting one would fail deep inside a run
+# instead of at the composer. `_REJECTED` below turns it into a sentence the user reads
+# before sending. Adding a format here means adding its reader to
+# `scripts/build_snapshot.py` and rebuilding the snapshot, or every clone that already
+# built one hits that install block.
+#
+# `.txt` is the one entry the suffix does not settle — a PMID list and a headerless TSV
+# both arrive as one — so the probe sniffs its contents and may override this to
+# `citations`. Everything else is decided here.
+UPLOAD_KINDS: dict[str, str] = {
+    # Tabular. `.gz` is handled by suffix-stripping rather than by an entry of its own
+    # (see `_base_suffix`), which is what gets a real omics table under MAX_UPLOAD_BYTES.
+    ".csv": "tabular",
+    ".tsv": "tabular",
+    ".txt": "tabular",
+    ".xlsx": "tabular",
+    ".xlsm": "tabular",
+    # Bibliographies. The one upload kind whose useful materialisation is not the file but
+    # the PMID list inside it — a reference manager export becomes a corpus the agent
+    # hydrates with `fetchAbstracts` and fans out over.
+    ".nbib": "citations",
+    ".medline": "citations",
+    ".ris": "citations",
+    ".bib": "citations",
+    ".bibtex": "citations",
+    # A paper the agent cannot otherwise reach: ~70% of the literature is not in PMC OA.
+    ".pdf": "pdf",
+    # Compound sets. rdkit is already the heaviest thing in the snapshot.
+    ".sdf": "chem",
+    ".mol": "chem",
+    ".smi": "chem",
+    ".smiles": "chem",
+    # Sequences. biopython is a parser here and nothing else — see the note on it in
+    # `scripts/build_snapshot.py`.
+    ".fasta": "sequence",
+    ".fa": "sequence",
+    ".fna": "sequence",
+    ".faa": "sequence",
+    ".gb": "sequence",
+    ".gbk": "sequence",
+    ".genbank": "sequence",
+    # A gel, a blot, a panel out of a figure. Intercepted rather than left to ride into
+    # model context, because `figure-analyst` reads an image from a path for a fraction of
+    # what the root model pays to look at it.
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".webp": "image",
+}
+
+UPLOAD_SUFFIXES = frozenset(UPLOAD_KINDS)
+
+# Read once at import and shipped to the sandbox over a heredoc on the turns that need it.
+# A file rather than a string literal because it is real Python that ruff should lint and
+# a human should be able to read — see its module docstring for why it runs over there.
+_PROBE_SOURCE = (Path(__file__).with_name("upload_probe.py")).read_text(encoding="utf-8")
 
 # Formats a user plausibly attaches and we deliberately decline. Stripped from the message
 # like a real upload, but with the reason in place of a path — left in, the block reaches a
@@ -89,6 +166,18 @@ MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 # count of what was elided is enough for the model to know to inspect the rest itself.
 MAX_PREVIEW_COLUMNS = 40
 
+# How many PMIDs a citation export may put in the manifest before it is described by its
+# counts and its sidecar instead. A reference manager library runs to thousands, and the
+# whole point of that path is that the identifiers reach `fetchAbstracts` rather than the
+# prompt — the sidecar is how a long one gets there (see the citations block in
+# `prompts/system.py`). A short bibliography is worth inlining: the model can fan out on
+# it without a round trip to read the file back.
+MAX_MANIFEST_IDS = 100
+
+# Molecules, sequences and the like are listed as a handful of examples, never in full.
+# The point is to show the model the shape of the records in the sidecar.
+MAX_PREVIEW_ITEMS = 5
+
 # Per thread. A user attaching twenty spreadsheets to one conversation is a mistake we
 # should not silently absorb into every subsequent turn's materialisation.
 MAX_FILES_PER_THREAD = 20
@@ -108,51 +197,17 @@ if os.path.isdir(root):
             print(json.dumps({"name": name, "bytes": os.path.getsize(path)}))
 """
 
-# Runs in the sandbox after materialisation. pandas is the reader rather than csv/openpyxl
-# directly because pandas is what the agent will use, so a file this parses is a file the
-# agent's own code can open — and a file it cannot parse is worth saying so about here,
-# before the model writes a script against a shape that does not exist.
-_PROBE_SCRIPT = """\
-import json, os
-root = %(root)r
-max_cols = %(max_cols)d
-try:
-    import pandas as pd
-except Exception:
-    pd = None
-names = sorted(os.listdir(root)) if os.path.isdir(root) else []
-for name in names:
-    path = os.path.join(root, name)
-    if not os.path.isfile(path):
-        continue
-    rec = {"name": name, "path": path, "bytes": os.path.getsize(path)}
-    if pd is None:
-        rec["note"] = "pandas unavailable in this sandbox"
-    else:
-        try:
-            frame = None
-            if name.lower().endswith((".xlsx", ".xlsm")):
-                sheets = pd.read_excel(path, sheet_name=None)
-                rec["sheets"] = [str(s) for s in sheets]
-                frame = next(iter(sheets.values())) if sheets else None
-            else:
-                sep = "\\t" if name.lower().endswith(".tsv") else ","
-                frame = pd.read_csv(path, sep=sep)
-            if frame is not None:
-                rec["rows"] = int(frame.shape[0])
-                cols = [str(c) for c in frame.columns]
-                rec["columns"] = cols[:max_cols]
-                if len(cols) > max_cols:
-                    rec["more_columns"] = len(cols) - max_cols
-        except Exception as exc:
-            rec["note"] = ("could not parse: " + type(exc).__name__ + ": " + str(exc))[:200]
-    print(json.dumps(rec))
-"""
 
+def _heredoc(script: str, **env: str) -> str:
+    """Wrap a Python script for `execute`, quoted so the shell expands nothing in it.
 
-def _heredoc(script: str) -> str:
-    """Wrap a Python script for `execute`, quoted so the shell expands nothing in it."""
-    return "python3 - <<'__UPLOADS_EOF__'\n" + script + "__UPLOADS_EOF__"
+    Configuration goes in as environment variables rather than by interpolating values
+    into the source. `upload_probe.py` is a real file this repo lints and a human reads,
+    and a `%(root)s` in the middle of it would make it neither.
+    """
+    prefix = "".join(f"{key}={shlex.quote(value)} " for key, value in sorted(env.items()))
+    body = script if script.endswith("\n") else script + "\n"
+    return prefix + "python3 - <<'__UPLOADS_EOF__'\n" + body + "__UPLOADS_EOF__"
 
 
 def _parse_lines(output: str) -> list[dict[str, Any]]:
@@ -179,7 +234,17 @@ def _safe_name(raw: str) -> str:
 
 
 def _suffix(name: str) -> str:
-    return posixpath.splitext(name)[1].lower()
+    """The suffix that decides how a file is read, seeing through `.gz`.
+
+    A DESeq2 table, a MAF and a GEO series matrix all routinely arrive gzipped, and
+    compression is also what gets a real omics table under `MAX_UPLOAD_BYTES`. The file
+    stays compressed on disk — pandas, `gzip` and biopython all read it that way — so
+    this is only about picking the reader. Mirrored by `upload_probe.base_suffix`.
+    """
+    lowered = str(name or "").lower()
+    if lowered.endswith(".gz"):
+        lowered = lowered[: -len(".gz")]
+    return posixpath.splitext(lowered)[1]
 
 
 def _thread_key() -> str:
@@ -206,26 +271,130 @@ def _human_size(size: Any) -> str:
     return f"{value:.1f} MB"
 
 
-def _render_manifest(manifest: list[dict[str, Any]]) -> str:
-    """The block appended to the system prompt. Shapes and names, never contents."""
-    lines = []
-    for record in manifest:
-        parts = [_human_size(record.get("bytes"))]
+def _count(value: Any, singular: str, plural: str | None = None) -> str:
+    """`1 molecule`, `12 molecules`. The manifest is prose the model reads, not a table."""
+    number = int(value or 0)
+    word = singular if number == 1 else (plural or singular + "s")
+    return f"{number:,} {word}"
+
+
+def _ids(record: dict[str, Any], key: str) -> str:
+    """A capped identifier list, with the count of what was left out."""
+    values = record.get(key) or []
+    text = ", ".join(str(v) for v in values)
+    if more := record.get("more_" + key):
+        text += f", ... (+{more} more, all of them in the sidecar below)"
+    return text
+
+
+def _detail(record: dict[str, Any]) -> list[str]:
+    """The one-line summary for a record, per kind.
+
+    Every line here is a line in the root model's system prompt, so each field has to
+    earn it: a shape it can write code against, or an identifier it can look up. See the
+    rules at the top of `upload_probe.py`.
+    """
+    kind = record.get("kind") or "tabular"
+    parts = [_human_size(record.get("bytes"))]
+
+    if kind == "tabular":
         if record.get("rows") is not None:
-            columns = record.get("columns") or []
-            width = len(columns) + int(record.get("more_columns") or 0)
+            width = len(record.get("columns") or []) + int(record.get("more_columns") or 0)
             parts.append(f"{int(record['rows']):,} rows x {width} columns")
         if record.get("sheets"):
             parts.append("sheets: " + ", ".join(record["sheets"]))
-        detail = ", ".join(parts)
-        line = f"- {record.get('path') or record.get('name')} — {detail}"
-        if record.get("columns"):
-            line += "\n  columns: " + ", ".join(record["columns"])
-            if record.get("more_columns"):
-                line += f", ... (+{record['more_columns']} more)"
-        if record.get("note"):
-            line += f"\n  note: {record['note']}"
+    elif kind == "citations":
+        parts.append(_count(record.get("references"), "reference"))
+        if record.get("with_pmid") is not None:
+            parts.append(f"{int(record['with_pmid']):,} with a PMID")
+        if record.get("with_doi_only"):
+            parts.append(f"{int(record['with_doi_only']):,} with a DOI but no PMID")
+    elif kind == "pdf":
+        if record.get("pages") is not None:
+            parts.append(_count(record["pages"], "page"))
+        if record.get("chars"):
+            parts.append(f"{int(record['chars']):,} chars of text")
+    elif kind == "chem":
+        parts.append(_count(record.get("molecules"), "molecule"))
+        if record.get("unparsed"):
+            parts.append(f"{int(record['unparsed'])} unparseable")
+    elif kind == "sequence":
+        fmt = record.get("format") or "sequence"
+        parts.append(_count(record.get("sequences"), f"{fmt} record"))
+        if record.get("molecule"):
+            parts.append(str(record["molecule"]))
+        if record.get("total_residues"):
+            parts.append(f"{int(record['total_residues']):,} residues total")
+    elif kind == "image":
+        if record.get("width"):
+            fmt = record.get("format") or ""
+            parts.append(f"{record['width']}x{record['height']} {fmt}".strip())
+
+    return [p for p in parts if p]
+
+
+def _extra_lines(record: dict[str, Any]) -> list[str]:
+    """The indented lines under a record: columns, identifiers, sidecar paths, samples."""
+    kind = record.get("kind") or "tabular"
+    lines: list[str] = []
+
+    if kind == "tabular" and record.get("columns"):
+        line = "columns: " + ", ".join(record["columns"])
+        if record.get("more_columns"):
+            line += f", ... (+{record['more_columns']} more)"
         lines.append(line)
+    elif kind == "citations":
+        if record.get("pmids"):
+            lines.append("PMIDs: " + _ids(record, "pmids"))
+        if record.get("refs_path"):
+            lines.append(
+                f"parsed references (pmid, doi, title, journal, year, authors): "
+                f"{record['refs_path']}"
+            )
+    elif kind == "pdf":
+        if record.get("title"):
+            lines.append(f"title: {record['title']}")
+        for key in ("doi", "pmid"):
+            if record.get(key):
+                lines.append(f"{key} found in the text: {record[key]}")
+        if record.get("text_path"):
+            lines.append(f"extracted text ({int(record.get('lines') or 0):,} lines): "
+                         f"{record['text_path']}")
+    elif kind == "chem":
+        if record.get("properties"):
+            line = "SDF properties: " + ", ".join(record["properties"])
+            if record.get("more_properties"):
+                line += f", ... (+{record['more_properties']} more)"
+            lines.append(line)
+        if record.get("mols_path"):
+            lines.append(f"parsed molecules (name, smiles, formula, mw): {record['mols_path']}")
+        for sample in record.get("samples") or []:
+            lines.append(
+                f"e.g. {sample.get('name')} — {sample.get('formula')}, MW {sample.get('mw')}"
+            )
+    elif kind == "sequence":
+        if record.get("seqs_path"):
+            lines.append(f"parsed records (id, description, length): {record['seqs_path']}")
+        unit = "bp" if record.get("molecule") == "nucleotide" else "aa"
+        for sample in record.get("samples") or []:
+            lines.append(
+                f"e.g. {sample.get('id')} ({sample.get('length')} {unit}): "
+                f"{sample.get('description')}"
+            )
+
+    if record.get("note"):
+        lines.append(f"note: {record['note']}")
+    return lines
+
+
+def _render_manifest(manifest: list[dict[str, Any]]) -> str:
+    """The block appended to the system prompt. Shapes and identifiers, never contents."""
+    lines = []
+    for record in manifest:
+        kind = record.get("kind") or "tabular"
+        head = f"- {record.get('path') or record.get('name')} [{kind}] — "
+        head += ", ".join(_detail(record))
+        lines.append("\n  ".join([head, *_extra_lines(record)]))
     return "<uploaded_files>\n" + "\n".join(lines) + "\n</uploaded_files>"
 
 
@@ -257,12 +426,14 @@ class UploadMiddleware(AgentMiddleware):
         backend: Any,
         *,
         upload_dir: str = UPLOAD_DIR,
+        derived_dir: str = UPLOAD_DERIVED_DIR,
         max_bytes: int = MAX_UPLOAD_BYTES,
         max_files: int = MAX_FILES_PER_THREAD,
     ) -> None:
         super().__init__()
         self.backend = backend
         self.upload_dir = upload_dir.rstrip("/")
+        self.derived_dir = derived_dir.rstrip("/")
         self.max_bytes = max_bytes
         self.max_files = max_files
 
@@ -313,19 +484,33 @@ class UploadMiddleware(AgentMiddleware):
 
     def _read_block(self, block: Any) -> dict[str, Any] | None:
         """Interpret one content block. `None` means "not an upload, leave it alone"."""
-        if not isinstance(block, dict) or block.get("type") != "file":
+        # `image` as well as `file`, because a client that has not been taught this
+        # agent's conventions still sends a PNG the way LangChain's multimodal helpers
+        # build one — and an image left in place is a payload in root context, which is
+        # the thing `figure-analyst` exists to avoid.
+        if not isinstance(block, dict) or block.get("type") not in ("file", "image"):
             return None
 
         metadata = block.get("metadata") or {}
+        mime = str(block.get("mimeType") or block.get("mime_type") or "")
         raw_name = metadata.get("filename") or metadata.get("name") or ""
         name = _safe_name(raw_name)
         suffix = _suffix(name)
 
+        # A pasted screenshot arrives with no filename at all. Naming it off the MIME
+        # type is the difference between staging it for `figure-analyst` and letting the
+        # whole image through into root context because it had no extension to match.
+        if not suffix and mime.startswith("image/"):
+            suffix = "." + mime.partition("/")[2].split("+")[0].lower()
+            if suffix in UPLOAD_SUFFIXES:
+                name = f"{name}{suffix}"
+
         if suffix in _REJECTED:
             return {"name": name, "marker": f"[attachment {name} not read: {_REJECTED[suffix]}]"}
         if suffix not in UPLOAD_SUFFIXES:
-            # A PDF or an image is a model-context attachment rather than a data file, and
-            # not something this middleware has any business intercepting.
+            # Something the sandbox has no reader for. Left in place, so it reaches the
+            # provider as whatever kind of block it is and fails — or works — on its own
+            # terms rather than being silently swallowed here.
             return None
 
         data = block.get("data")
@@ -351,7 +536,7 @@ class UploadMiddleware(AgentMiddleware):
             "name": name,
             "path": path,
             "bytes": len(payload),
-            "mime": block.get("mimeType") or "application/octet-stream",
+            "mime": mime or "application/octet-stream",
             "data": payload,
             # No path in it: the UI joins these text blocks into the user's own chat bubble
             # (`getContentString`), so a sandbox path here shows up inside their question.
@@ -415,8 +600,20 @@ class UploadMiddleware(AgentMiddleware):
         }
 
     async def _probe(self) -> list[dict[str, Any]]:
+        """Describe every staged file, using the readers that live in the sandbox.
+
+        The probe runs where the file already is, with the same pandas, rdkit, pypdf and
+        biopython the agent's own code will use — so a shape in the manifest is a shape
+        the agent can reproduce. See `upload_probe.py` for what each kind reports.
+        """
         command = _heredoc(
-            _PROBE_SCRIPT % {"root": self.upload_dir, "max_cols": MAX_PREVIEW_COLUMNS}
+            _PROBE_SOURCE,
+            UPLOADS_ROOT=self.upload_dir,
+            UPLOADS_DERIVED=self.derived_dir,
+            UPLOADS_KINDS=json.dumps(UPLOAD_KINDS, separators=(",", ":")),
+            UPLOADS_MAX_COLS=str(MAX_PREVIEW_COLUMNS),
+            UPLOADS_MAX_ITEMS=str(MAX_PREVIEW_ITEMS),
+            UPLOADS_MAX_IDS=str(MAX_MANIFEST_IDS),
         )
         result = await self.backend.aexecute(command)
         return _parse_lines(getattr(result, "output", "") or "")

@@ -73,7 +73,7 @@ research_agent/
 ├── models.py paths.py                    gateway routing, host-side paths
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py web.py cache_io.py _http.py
-└── middleware/  artifacts.py uploads.py perf.py progress.py
+└── middleware/  artifacts.py uploads.py upload_probe.py perf.py progress.py
 evals/  scripts/  ui/  chat-ui-overlay/  docs/  data/
 ```
 
@@ -114,6 +114,11 @@ sandbox as a real file before `figure-analyst` can `read_file` it.
 `CodeInterpreterMiddleware` and dynamic subagents are both **beta** — their APIs may move
 between deepagents releases.
 
+**An upload format lives in four places**: `UPLOAD_KINDS` (`middleware/uploads.py`), a probe
+branch (`middleware/upload_probe.py`), a prompt segment (`prompts/system.py`), and the composer's
+allowlist (`scripts/setup.py:patch_upload_kinds`) — plus `build_snapshot.py` and a rebuild if the
+reader needs a library, since `sandbox.py` blocks runtime installs.
+
 ### What must never enter root context
 
 PTC tool output is marshalled into the JS heap and never reaches the model's context. That is
@@ -137,13 +142,17 @@ the core economy of the design, and these are its rules:
   a deliverable of their own question. `UploadMiddleware` strips attachments out of the human
   message before the first model call and passes a manifest instead; the durable copy lives in
   the LangGraph store, per thread, because a container is reaped on `IDLE_TTL_SECONDS`.
+  **That manifest is shapes and identifiers, never contents** — `middleware/upload_probe.py`
+  runs in the sandbox and writes anything larger to a sidecar under `uploads/derived/` for a
+  subagent or `execute` to read, because an uploaded PDF's body in root context costs exactly
+  what `pmc_locate` exists to save.
 
 `middleware/progress.py` is the run's only visible output while it works — everything happens
 inside one `eval`, so the transcript shows a single unreturned tool call for minutes.
 
 ### Subagents
 
-Four leaves in `prompts/subagents.py`, wired in `agent.py` by `analyst_leaf()`. Two deepagents
+Five leaves in `prompts/subagents.py`, wired in `agent.py` by `analyst_leaf()`. Two deepagents
 defaults bite here, and every leaf works around both:
 
 - subagents **inherit the parent's tools**, so each leaf sets `tools: []` explicitly. Leaving

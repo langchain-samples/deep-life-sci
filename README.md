@@ -20,7 +20,9 @@ A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overvi
 
 * **Web search** - agentic search over the entire open web
 
-* **CSV/Excel upload** - upload your data files and let the agent do analyses on them
+* **File upload** - attach a spreadsheet, a reference-manager export (.nbib/.ris/.bib),
+  a PDF, a compound set (.sdf/.smi), FASTA/GenBank, or a figure. Tables get analysed;
+  a bibliography becomes a corpus the agent hydrates from PubMed and reads across
 
 ## Quickstart
 

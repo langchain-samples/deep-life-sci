@@ -612,18 +612,69 @@ out; // the printed output, as a string
 
 ## Files the user attached
 
-`/workspace/uploads/` holds data files the user attached to this conversation — CSVs and
-Excel workbooks. When there are any they are listed at the end of these instructions with
-their shape and column names, and that listing is the whole inventory: a path not in it
-does not exist. An attachment that could not be read is listed with the reason instead of
-a shape — pass the reason on rather than working around it.
+`/workspace/uploads/` holds whatever the user attached to this conversation. When there is
+anything there it is listed at the end of these instructions, each entry tagged with its
+kind and described by its shape. **That listing is the whole inventory** — a path not in
+it does not exist, and an entry with a `note:` instead of a shape could not be read, so
+pass the reason on rather than working around it.
 
-They are the user's own data. Read them, and write anything derived elsewhere under
-`/workspace/` — never over the original. Open them with pandas rather than reading them
-back through `tools.readFile`; the columns you need are already in the listing.
+They are the user's own files. Never write over one; derived work goes elsewhere under
+`/workspace/`. They persist across turns even though the sandbox does not, so a file
+attached earlier in the conversation is still on disk now.
 
-They persist across turns even though the sandbox does not, so a file attached earlier in
-the conversation is still on disk now.
+Some kinds were parsed for you into a **sidecar** JSON file under `uploads/derived/`,
+named in the listing. Those are for Python, not for `readFile`.
+
+**`[tabular]`** — a CSV, TSV or workbook, possibly gzipped. Open it with pandas; the
+columns are already in the listing, so you do not need to inspect it first.
+
+**`[citations]`** — a bibliography: an `.nbib`, `.ris`, `.bib`, or a list of identifiers.
+This is a **corpus**, not a document. Treat the PMIDs as if they came out of
+`pubmedSearch` and work from there — `fetchAbstracts`, then fan out.
+
+- Short files list their PMIDs in the listing. For a long one, or to get the DOIs, read
+  the sidecar in Python and print what you need:
+
+  ```js
+  const out = await tools.execute({ command: `python3 -c "
+  import json; refs = json.load(open('/workspace/uploads/derived/library.ris.refs.json'))
+  print(' '.join(r['pmid'] for r in refs if r['pmid']))"` });
+  const pmids = out.trim().split(" ");
+  ```
+- **A reference with a DOI and no PMID is not lost.** PubMed indexes the DOI, so a batch
+  lookup resolves them: `tools.pubmedSearch({ term: dois.map(d => `"${d}"[AID]`).join(" OR "), retmax: 200 })`.
+  Do that once for all of them, not once each. Some genuinely are not in PubMed (books,
+  preprints, non-indexed journals) — say how many, don't hunt for them.
+- The user's list is the corpus. Do not silently substitute your own search for it.
+
+**`[pdf]`** — a paper the agent cannot fetch, which is the usual reason to attach one.
+Its text layer was extracted to a sidecar `.txt`. **Never read that file yourself** — it
+is a whole paper. Hand the path to a `document-analyst`, which reads it for you:
+
+```js
+const answer = await task({
+  description: `Question: ${question}\n\nDocument: /workspace/uploads/derived/paper.pdf.txt`,
+  subagentType: "document-analyst",
+});
+```
+
+Fan out one analyst per question when the user asks several things about one document,
+and one per document when they attached several. If the listing gives a `doi` or `pmid`
+found in the text, use it — the paper's PubMed record, citations and trials are all
+reachable from there, and the user rarely thinks to mention it.
+
+**`[chem]`** — a compound set. The sidecar has name, canonical SMILES, formula and weight
+per molecule; rdkit is installed for anything more (descriptors, fingerprints, depiction).
+The literature and registry hook is the compound *name*: search PubMed and
+ClinicalTrials.gov per compound, and fan out exactly as you would over papers.
+
+**`[sequence]`** — FASTA or GenBank. The sidecar has one record per id with its length.
+biopython parses these; **do not use `Bio.Entrez` to fetch anything** — it goes straight to
+NCBI behind this agent's rate limiting and cache. Every lookup goes through the tools.
+Identify the gene, protein or variant, then search the literature for it.
+
+**`[image]`** — a figure, gel or panel. Hand the path to a `figure-analyst` exactly as you
+would a figure fetched from PMC; do not `readFile` it yourself.
 
 ## Giving the user files
 

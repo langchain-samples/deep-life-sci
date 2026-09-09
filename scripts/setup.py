@@ -361,7 +361,8 @@ PATCH_MARKS = {
     "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
     "flask": ("src/components/thread/index.tsx", "FlaskSVG", True),
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
-    "uploads": ("src/hooks/use-file-upload.tsx", "isSpreadsheetUpload", True),
+    "uploads": ("src/hooks/use-file-upload.tsx", "isSupportedUpload", True),
+    "upload-kinds": ("src/lib/multimodal-utils.ts", "isSandboxUpload", True),
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
     "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
     "thread-search": ("src/providers/Thread.tsx", "first_message", True),
@@ -401,6 +402,7 @@ def apply_patches() -> None:
     patch_flask()
     patch_empty_ai_turns()
     patch_uploads()
+    patch_upload_kinds()
     patch_progress_events()
     patch_progress_row()
     patch_thread_search()
@@ -904,6 +906,204 @@ def patch_uploads() -> None:
     for key, text in contents.items():
         paths[key].write_text(text, encoding="utf-8")
     say(TAG, "opened CSV/TSV/xlsx uploads in the chat UI")
+
+
+# `patch_uploads` above opened the composer to spreadsheets. This widens it to everything
+# `research_agent/middleware/uploads.py` now has a reader for — bibliographies, PDFs,
+# compound sets, sequences and images — and is a separate patch rather than an edit inside
+# that one so a clone already carrying the spreadsheet allowlist picks the rest up. Its
+# anchors are therefore `patch_uploads`'s own output, verbatim.
+#
+# The other half of the widening is that **every** accepted upload now becomes a
+# `type: "file"` block, images included. Upstream sends an image as a `type: "image"` block
+# because upstream wants it in model context; here it is transport to the sandbox, where
+# `figure-analyst` reads it from a path for a fraction of what the root model pays to look
+# at it. One block type is also one contract for the graph to strip.
+UPLOAD_HELPERS_V2 = """\
+// setup: the attachments this agent can do something with. None of them stay in model
+// context — each rides in as a file block carrying its filename, and the graph takes the
+// payload back out and materialises it in the sandbox (research_agent/middleware/uploads.py,
+// whose UPLOAD_KINDS is the server-side half of this list).
+//
+// Extension first and MIME second, deliberately — see the note in use-file-upload.tsx.
+// `.xls` is in neither list: reading it needs xlrd, which is not in the sandbox snapshot,
+// and the sandbox blocks runtime installs, so it is refused at the composer rather than
+// failing deep inside a run. `application/vnd.ms-excel` is left out for the same reason,
+// even though a Windows .csv arrives claiming it — the extension check has already passed
+// that one by the time MIME is consulted.
+export const UPLOAD_SUFFIXES = [
+  // tables, gzipped or not
+  ".csv", ".tsv", ".txt", ".xlsx", ".xlsm",
+  ".csv.gz", ".tsv.gz", ".txt.gz",
+  // bibliographies
+  ".nbib", ".medline", ".ris", ".bib", ".bibtex",
+  // a paper the agent cannot fetch for itself
+  ".pdf",
+  // compound sets
+  ".sdf", ".sdf.gz", ".mol", ".smi", ".smiles",
+  // sequences
+  ".fasta", ".fa", ".fna", ".faa", ".fasta.gz", ".gb", ".gbk", ".genbank",
+  // figures, gels, panels
+  ".png", ".jpg", ".jpeg", ".gif", ".webp",
+];
+
+// MIME is the fallback, so this only needs the types a browser reliably reports for the
+// list above. Anything it gets wrong is caught by the extension check first.
+export const UPLOAD_TYPES = [
+  "text/csv",
+  "text/plain",
+  "text/tab-separated-values",
+  "application/gzip",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroEnabled.12",
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+
+export function isSandboxUpload(file: File): boolean {
+  const name = file.name.toLowerCase();
+  if (UPLOAD_SUFFIXES.some((suffix) => name.endsWith(suffix))) return true;
+  return UPLOAD_TYPES.includes(file.type);
+}
+
+// Normalised off the extension, because the browser's value is the unreliable half and the
+// server keys on the extension as well. A type the browser reported is better than nothing
+// for anything not listed here — the graph never reads it, but the dedupe check does.
+export function uploadMimeType(file: File): string {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".xlsx"))
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".xlsm")) return "application/vnd.ms-excel.sheet.macroEnabled.12";
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".gz")) return "application/gzip";
+  if (name.endsWith(".tsv")) return "text/tab-separated-values";
+  if (name.endsWith(".csv")) return "text/csv";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".gif")) return "image/gif";
+  if (name.endsWith(".webp")) return "image/webp";
+  return file.type || "text/plain";
+}
+
+"""
+
+UPLOAD_HEADER_V2 = """\
+// setup: everything research_agent/middleware/uploads.py has a reader for. None of it is
+// model context — the graph lifts the payload off the human message before the first model
+// call and materialises it in the sandbox at /workspace/uploads, so a table gets computed
+// over, a bibliography becomes a corpus, and a PDF or an image is read by a cheap subagent
+// instead of by the root model. See scripts/CLAUDE.md.
+export const SUPPORTED_FILE_TYPES: string[] = [...UPLOAD_TYPES];
+
+// Every call site below tests these rather than the list, because a MIME-only check rejects
+// the file the user came to attach: Windows with Excel installed reports a .csv as
+// `application/vnd.ms-excel`, and some browsers report "" or application/octet-stream.
+export function isSupportedUpload(file: File): boolean {
+  return isSandboxUpload(file);
+}
+
+// Which uploads become a `type: "file"` block rather than an image one: all of them. An
+// image is transport to the sandbox here rather than model context, so it takes the same
+// shape as everything else and the graph has one block type to strip.
+export function isFileBlockUpload(file: File): boolean {
+  return isSandboxUpload(file);
+}
+
+export const UNSUPPORTED_FILE_TITLE = "That file type isn't supported";
+export const UNSUPPORTED_FILE_BODY =
+  "Tables, bibliographies (.nbib/.ris/.bib), PDFs, .sdf/.smi, FASTA/GenBank and images.";"""
+
+# `fileToContentBlock`'s spreadsheet branch, as patch_uploads leaves it, and the branch
+# that replaces it. The image branch below it becomes unreachable rather than wrong — an
+# accepted image is caught here first, and the name of the guard is what keeps that legible.
+_LIB_BRANCH_OLD = (
+    "  if (isSpreadsheetUpload(file)) {\n"
+    "    return {\n"
+    '      type: "file",\n'
+    "      mimeType: spreadsheetMimeType(file),\n"
+    "      data: await fileToBase64(file),\n"
+    "      metadata: { filename: file.name },\n"
+    "    };\n"
+    "  }\n"
+)
+_LIB_BRANCH_NEW = (
+    "  if (isSandboxUpload(file)) {\n"
+    "    return {\n"
+    '      type: "file",\n'
+    "      mimeType: uploadMimeType(file),\n"
+    "      data: await fileToBase64(file),\n"
+    "      metadata: { filename: file.name },\n"
+    "    };\n"
+    "  }\n"
+)
+
+UPLOAD_KIND_EDITS = [
+    (
+        "hook",
+        "import {\n"
+        "  fileToContentBlock,\n"
+        "  isSpreadsheetUpload,\n"
+        "  spreadsheetMimeType,\n"
+        "  SPREADSHEET_TYPES,\n"
+        '} from "@/lib/multimodal-utils";',
+        "import {\n"
+        "  fileToContentBlock,\n"
+        "  isSandboxUpload,\n"
+        "  uploadMimeType,\n"
+        "  UPLOAD_TYPES,\n"
+        '} from "@/lib/multimodal-utils";',
+    ),
+    ("hook", UPLOAD_HEADER, UPLOAD_HEADER_V2),
+    (
+        "hook",
+        "b.mimeType === spreadsheetMimeType(file) &&",
+        "b.mimeType === uploadMimeType(file) &&",
+    ),
+    ("lib", UPLOAD_HELPERS, UPLOAD_HELPERS_V2),
+    ("lib", _LIB_BRANCH_OLD, _LIB_BRANCH_NEW),
+    (
+        "lib",
+        "    SPREADSHEET_TYPES.includes((block as { mimeType: string }).mimeType)\n",
+        "    UPLOAD_TYPES.includes((block as { mimeType: string }).mimeType)\n",
+    ),
+    (
+        "lib",
+        "  // spreadsheet type — transport for the graph rather than model context\n",
+        "  // any accepted upload — transport for the graph rather than model context\n",
+    ),
+]
+
+
+def patch_upload_kinds() -> None:
+    """Widen the composer from spreadsheets to every attachment the agent has a reader for."""
+    paths = {
+        "hook": chat_ui_dir() / "src" / "hooks" / "use-file-upload.tsx",
+        "lib": chat_ui_dir() / "src" / "lib" / "multimodal-utils.ts",
+    }
+    if any(not path.is_file() for path in paths.values()):
+        return
+    if _marked("upload-kinds"):
+        return
+
+    contents = {key: path.read_text(encoding="utf-8") for key, path in paths.items()}
+
+    # All or nothing, for the same reason patch_uploads is: half of this is the UI accepting
+    # a file and the other half is the block shape the graph strips. A partial apply is an
+    # upload that silently goes nowhere.
+    for key, old, _ in UPLOAD_KIND_EDITS:
+        if old not in contents[key]:
+            say(TAG, f"warning: {paths[key]} is not the shape expected; left the upload "
+                     "allowlist at spreadsheets only. Missing anchor:")
+            print(old)
+            return
+    for key, old, new in UPLOAD_KIND_EDITS:
+        contents[key] = contents[key].replace(old, new)
+    for key, text in contents.items():
+        paths[key].write_text(text, encoding="utf-8")
+    say(TAG, "widened chat UI uploads to bibliographies, PDFs, chemistry, sequences and images")
 
 
 # The agent does its work inside one `eval` call, so the transcript shows a single tool call

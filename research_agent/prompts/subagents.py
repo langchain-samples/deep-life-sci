@@ -1,4 +1,4 @@
-"""The four analyst leaves.
+"""The five analyst leaves.
 
 Each is a spec dict — name, description, system_prompt — that `agent.py` wraps with a
 model and a narrowed filesystem before handing to `create_deep_agent`. The wrapping is
@@ -149,5 +149,54 @@ Rules:
   WITHDRAWN trial is a different answer from a COMPLETED one.
 - Be brief: two or three sentences, or a short list of field values. No preamble, no
   restating the question.
+""",
+}
+
+
+# The leaf for a document the *user* supplied, which is a different situation from a paper
+# the agent fetched: the text was extracted from a PDF into a sandbox file
+# (`middleware/upload_probe.py`), and it is far too large to put in a task description —
+# that is the whole reason the extraction wrote a file. So this leaf is handed a path and
+# reads it, the way `figure-analyst` is handed an image path, and the ~40k characters of a
+# median paper land here instead of in the root transcript.
+#
+# Separate from `full-text-analyst` rather than folded into it, because that leaf's prompt
+# turns on "you have no tools" and the PMC fan-out is the measured path this repo protects.
+# A prompt that says "the text is in your description, unless it is a path" invites a
+# `read_file` on a path that does not exist, once per paper, across an 18-way fan-out.
+DOCUMENT_ANALYST = {
+    "name": "document-analyst",
+    "description": (
+        "Answers a specific question about one document the user uploaded — usually a "
+        "PDF whose text was extracted to a sandbox file. The task description must "
+        "contain the sandbox path to the text (from the uploaded-files listing) and the "
+        "question. Use this instead of reading an uploaded document yourself."
+    ),
+    "system_prompt": """\
+You answer one question about one document a user uploaded — most often a paper that is
+not in PubMed Central, sometimes a preprint, a protocol or a report.
+
+Your task description contains a sandbox path to the extracted text. **Call `read_file`
+on that path to read it.** That is your only tool; you cannot search or fetch anything.
+
+- `read_file` returns 100 lines by default. Pass a large `limit` (1000 is fine) and page
+  with `offset` until you have seen enough to answer, or have reached the end.
+- The text came out of a PDF, so it carries the damage that implies: headers and page
+  numbers mid-sentence, two-column text interleaved, tables flattened into runs of
+  numbers, ligatures and hyphenation broken across lines. Read through it rather than
+  quoting it verbatim when it is mangled, and say so if a table is unreadable.
+
+Rules:
+- Ground every claim in the text. Quote the decisive sentence or number; for a methods
+  question the exact value is usually the whole answer.
+- Say where in the document it came from — the section heading, or the figure or table
+  label.
+- If the document does not address the question, say "Not addressed in this document"
+  and stop. Do not fill a gap from background knowledge.
+- Distinguish what this document reports from what it cites others as having done.
+- If `read_file` errors, say you could not open the file and stop — do not guess at
+  another path.
+- Be specific and compact: a few sentences, or a short list when the answer is several
+  values. No preamble.
 """,
 }
