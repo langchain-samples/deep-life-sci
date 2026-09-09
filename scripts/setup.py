@@ -156,14 +156,26 @@ def ensure_langsmith_key() -> None:
     than the personal key doing the tracing. Editing `LANGSMITH_GATEWAY_API_KEY` in .env by
     hand is how that is done, and it is only ever filled in when empty, so a hand-edited
     one survives every later `setup.py`.
+
+    An exported `LC_GATEWAY_KEY` is adopted rather than prompted for. A deployment that
+    issues a per-machine gateway *service* key — so model spend stays capped and
+    attributable — already holds the value in the environment, and copying the tracing key
+    into the gateway slot instead 403s at the first model call, which reads like a broken
+    install rather than a wrong key.
     """
     ask_key(
         "LANGSMITH_API_KEY",
-        "LangSmith API key, for models, tracing and sandboxes (lsv2_...)",
+        "LangSmith API key, for tracing and sandboxes (lsv2_...)",
         "lsv2_",
     )
-    if not env_value("LANGSMITH_GATEWAY_API_KEY"):
-        set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
+    if env_value("LANGSMITH_GATEWAY_API_KEY"):
+        return
+    if gateway := os.environ.get("LC_GATEWAY_KEY", "").strip():
+        set_env("LANGSMITH_GATEWAY_API_KEY", gateway)
+        say(TAG, "using LC_GATEWAY_KEY from the environment for model calls "
+                 "(tracing keeps LANGSMITH_API_KEY)")
+        return
+    set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
 
 
 def ensure_env() -> None:

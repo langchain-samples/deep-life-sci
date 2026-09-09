@@ -58,6 +58,7 @@ os.environ.setdefault("RESEARCH_AGENT_CACHE_TTL", "off")
 
 from langsmith import aevaluate  # noqa: E402
 
+from evals import dataset_name  # noqa: E402
 from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
 from research_agent.models import (  # noqa: E402
     check_gateway_config,
@@ -66,7 +67,10 @@ from research_agent.models import (  # noqa: E402
 )
 from research_agent.runner import run_once  # noqa: E402
 
-DATASET = "deep-life-sci-default"
+# Resolved after `.env` is loaded above, so `EVALS_DATASET_PREFIX` set either way reaches
+# it. Shared with `sync.py` through `evals/__init__.py` — the writer and the reader of a
+# dataset must not carry the name separately.
+DATASET = dataset_name()
 
 # One container per example, each fanning out internally. One at a time is what a laptop's
 # connection pool and NCBI's 10 req/sec stay comfortable with; raise it with --concurrency.

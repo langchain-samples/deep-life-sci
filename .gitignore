@@ -32,6 +32,7 @@ docs/pubmed_api_notes/
 docs/pmc_api_notes/
 docs/ctgov_api_notes/
 docs/prompt-experiments-*/
+docs/langsmith_migration_record.md
 evals/datasets/archive/
 evals/taxonomy/
 evals/ground_truth_reports/
