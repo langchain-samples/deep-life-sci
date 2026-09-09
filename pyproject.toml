@@ -64,7 +64,7 @@ evals = [
 
 # Explicit rather than inferred. Without this, setuptools' flat-layout auto-discovery
 # decides what a "package" is by scanning the repo root, which now contains `evals/`,
-# `scripts/`, `ui/` and `docs/` — it would either ship them or refuse to build, and
+# `scripts/` and `ui/` — it would either ship them or refuse to build, and
 # `langgraph.json`'s `"dependencies": ["."]` is what installs this at deploy time.
 [build-system]
 requires = ["setuptools>=77"]

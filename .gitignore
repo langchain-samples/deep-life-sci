@@ -25,14 +25,10 @@ ui/node_modules/
 # anyone can re-fetch.
 data/
 
-# Local scratch: API probe notes, eval planning and per-sweep reports. None of it is
-# input to the agent or the eval harness — the canonical seeds are
+# Local scratch: design notes, API probe notes, eval planning and per-sweep reports. None
+# of it is input to the agent or the eval harness — the canonical seeds are
 # evals/datasets/*.yaml.
-docs/pubmed_api_notes/
-docs/pmc_api_notes/
-docs/ctgov_api_notes/
-docs/prompt-experiments-*/
-docs/langsmith_migration_record.md
+docs/
 evals/datasets/archive/
 evals/taxonomy/
 evals/ground_truth_reports/

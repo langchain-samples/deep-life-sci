@@ -88,13 +88,12 @@ JUDGE_EFFORT = "low"
 
 # Why these. terra and Sonnet 5 score the same as the root: over the eval dataset both hit
 # 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie on
-# quality makes it a cost decision, and every head-to-head in docs/measurements.md puts
-# terra far ahead per paper. Swapping back is one variable: `ROOT_MODEL=claude-sonnet-5` is
-# the previous default, `claude-sonnet-4-6` the one before it, and both share these leaves,
+# quality makes it a cost decision, and every head-to-head so far puts terra far ahead per
+# paper. Swapping back is one variable: `ROOT_MODEL=claude-sonnet-5` is the previous
+# default, `claude-sonnet-4-6` the one before it, and both share these leaves,
 # so either isolates the root — but watch root context when you do, because Sonnet 5 costs
 # 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s
-# -> 76s on semaglutide-weightloss-boxplot), and that budget is what docs/measurements.md
-# is about.
+# -> 76s on semaglutide-weightloss-boxplot).
 #
 # The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
 # dataset, notes off and judge pinned, terra-low/luna-low scored the same *cell for cell*
@@ -112,7 +111,7 @@ JUDGE_EFFORT = "low"
 # model across providers, so they are a prompt, tool or criteria problem rather than a
 # model-selection one.
 #
-# The older latency measurements in docs/measurements.md were taken against Haiku leaves.
+# The older latency measurements above were taken against Haiku leaves.
 # `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
 # has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
 # gateway answers the parameter with a 400.

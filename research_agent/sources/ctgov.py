@@ -1,8 +1,8 @@
 """ClinicalTrials.gov API v2 client and the two agent tools.
 
 The registry answers what PubMed structurally cannot: what was *registered*, including
-the trials that never produced a paper. See `docs/ctgov_concept.md` for why that is worth
-wiring in; every number below comes from a probe against the live API.
+the trials that never produced a paper. Every number below comes from a probe against the
+live API.
 
 This module reads almost nothing like `pubmed.py`, for two reasons that invert:
 

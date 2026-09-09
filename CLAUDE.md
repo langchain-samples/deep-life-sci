@@ -10,10 +10,8 @@ A Deep Agents demo: a PubMed/PMC research assistant for life scientists. It sear
 retrieves abstracts and PMC full text, queries ClinicalTrials.gov, searches the web for what
 neither holds, fans out cheap subagents across papers, and computes/plots in a sandbox.
 
-Read `docs/concept.md` (design rationale) and `docs/measurements.md` (the numbers behind
-the architectural choices) before changing the shape of the agent; `docs/ctgov_concept.md`
-and `docs/pmc_concept.md` cover those two surfaces. `README.md` is human setup only — keep
-it to what a new user needs to run the thing, nothing more.
+`README.md` is human setup only — keep it to what a new user needs to run the thing,
+nothing more.
 
 ## Commands
 
@@ -74,7 +72,7 @@ research_agent/
 ├── prompts/     system.py subagents.py
 ├── sources/     pubmed.py pmc.py ctgov.py web.py cache_io.py _http.py
 └── middleware/  artifacts.py uploads.py perf.py progress.py cadence.py tool_errors.py
-evals/  scripts/  ui/  chat-ui-overlay/  docs/  data/
+evals/  scripts/  ui/  chat-ui-overlay/  data/
 ```
 
 Three entry points build the **same** agent via `agent.py:build_agent(backend)`, which only

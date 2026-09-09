@@ -87,7 +87,6 @@ scripts/              setup.py (one-time setup), dev.py (chat stack), build_snap
 research_agent/       the agent: assembly, entry points, tools, prompts, middleware
 evals/                LangSmith datasets + evaluators
 ui/                   artifact components rendered by the chat frontend
-docs/                 design notes and demo questions
 ```
 
 ## Disclaimer
