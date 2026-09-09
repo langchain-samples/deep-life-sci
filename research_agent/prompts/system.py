@@ -18,7 +18,6 @@ remain the main tuning lever in this repo — which is why `evals/` scores them.
 
 from __future__ import annotations
 
-import os
 from datetime import date
 
 _TEMPLATE = """\
@@ -802,32 +801,8 @@ the contents of a paper or trial from parametric memory--read (or have a subagen
 relevant information.
 """
 
-IMPROVEMENT_NOTES = """\
-## Identifying issues and improvements
 
-If you encounter any issues with either of the APIs or are forced by the configuration or your
-toolset into a pattern that requires you to waste time or tokens, use the write_file tool to write
-a *brief* (sentence-to-paragraph-length) description of the issue/bug/inefficient pattern to /workspace, 
-optionally with a suggestion for improvement. Be sure to include the phrase AGENT NOTE so it can be 
-found later by automated review. Be sure to do this at least once per run.
-"""
-
-
-def notes_requested() -> bool:
-    """Whether this run should ask the agent for AGENT NOTEs.
-
-    Read from the environment inside the function, not at import, for the same reason
-    `models.py` does it: `cli.py` and `evals/run.py` both call `load_dotenv(override=True)`
-    after importing this module.
-    """
-    return os.environ.get("RESEARCH_AGENT_NOTES", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-
-
-def build_system_prompt(
-    today: date | None = None, *, improvement_notes: bool | None = None
-) -> str:
+def build_system_prompt(today: date | None = None) -> str:
     """The root prompt, with today's date substituted in.
 
     Called per `build_agent()` rather than at import, so a `langgraph dev` server that
@@ -839,15 +814,5 @@ def build_system_prompt(
 
     `str.replace`, not `.format()` — the prompt body is full of JS object literals, and
     every `{...}` in it would be read as a field name.
-
-    `improvement_notes` asks the agent to self-report bugs and wasteful patterns. It is
-    review instrumentation, not agent behaviour worth shipping on: it spends tokens and a
-    `write_file` call on every run, and the notes land in a container that is deleted at
-    session end, so the trace is the only copy. Off unless asked for, explicitly or via
-    `RESEARCH_AGENT_NOTES=1`. It appends *last* so the prefix a notes run shares with an
-    ordinary one is byte-identical, which is what the root model's cache is keyed on.
     """
-    if improvement_notes is None:
-        improvement_notes = notes_requested()
-    prompt = _TEMPLATE if not improvement_notes else f"{_TEMPLATE}\n{IMPROVEMENT_NOTES}"
-    return prompt.replace("{{TODAY}}", (today or date.today()).isoformat())
+    return _TEMPLATE.replace("{{TODAY}}", (today or date.today()).isoformat())

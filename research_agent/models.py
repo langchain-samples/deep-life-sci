@@ -96,7 +96,7 @@ JUDGE_EFFORT = "low"
 # -> 76s on semaglutide-weightloss-boxplot).
 #
 # The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
-# dataset, notes off and judge pinned, terra-low/luna-low scored the same *cell for cell*
+# dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
 # as terra-low/haiku-4.5 -- every seed, all three evaluators -- for ~40% less on 21% fewer
 # tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
 # rather than a constant: it is one run of 11 examples with no repeats.
