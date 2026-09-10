@@ -391,7 +391,11 @@ def _render_manifest(manifest: list[dict[str, Any]]) -> str:
     """The block appended to the system prompt. Shapes and identifiers, never contents."""
     lines = []
     for record in manifest:
-        kind = record.get("kind") or "tabular"
+        # No kind means no probe ran — a recycled sandbox, or a probe that died before
+        # reaching this file. Say so rather than falling back to a default: labelling an
+        # undescribed file `tabular` invites exactly the code-against-a-shape-that-is-not-
+        # there that the note beside it exists to prevent.
+        kind = record.get("kind") or "unread"
         head = f"- {record.get('path') or record.get('name')} [{kind}] — "
         head += ", ".join(_detail(record))
         lines.append("\n  ".join([head, *_extra_lines(record)]))
@@ -663,6 +667,23 @@ class UploadMiddleware(AgentMiddleware):
             }
             for name in lost
             if name not in known
+        )
+        known.update(lost)
+
+        # Staged, but the probe never reported on it. `upload_probe.py` turns a failure to
+        # read one file into a `note` and flushes each record as it goes, so this is the
+        # narrow case where its driver died outright — and a manifest that is simply
+        # shorter is indistinguishable from a smaller upload. The model has to be able to
+        # say "I could not read the file you sent"; silence is the one answer it cannot
+        # give. Reconciled against what we staged rather than against a re-inventory,
+        # which would cost another round trip to say the same thing.
+        manifest.extend(
+            {
+                "name": name,
+                "path": f"{self.upload_dir}/{name}",
+                "note": "could not be described — the probe did not report on this file",
+            }
+            for name in sorted((set(durable) | set(present)) - known)
         )
         return manifest
 

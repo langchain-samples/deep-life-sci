@@ -589,8 +589,9 @@ def main() -> None:
         if not os.path.isfile(path):
             continue
         suffix = base_suffix(name)
-        record = {"name": name, "path": path, "bytes": os.path.getsize(path)}
+        record = {"name": name, "path": path}
         try:
+            record["bytes"] = os.path.getsize(path)
             kind = resolve_kind(path, suffix)
             record["kind"] = kind
             PROBES[kind](path, suffix, record, name)
