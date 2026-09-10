@@ -47,6 +47,12 @@ KINDS = json.loads(os.environ.get("UPLOADS_KINDS") or "{}")
 MAX_COLS = int(os.environ.get("UPLOADS_MAX_COLS") or 40)
 MAX_ITEMS = int(os.environ.get("UPLOADS_MAX_ITEMS") or 5)
 MAX_IDS = int(os.environ.get("UPLOADS_MAX_IDS") or 100)
+MAX_FIGURES = int(os.environ.get("UPLOADS_MAX_FIGURES") or 12)
+
+# A PDF's image XObjects are mostly furniture: publisher logos, rules, icons, the tiles a
+# vector plot was rasterised into. Area is the cheapest filter that keeps them out, and a
+# panel worth sending to `figure-analyst` is never smaller than this.
+MIN_FIGURE_PIXELS = 200 * 200
 
 DOI = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 PMID_URL = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d{6,8})")
@@ -91,6 +97,15 @@ def write_sidecar(name: str, payload) -> str:
             handle.write(payload)
         else:
             json.dump(payload, handle)
+    return path
+
+
+def write_sidecar_bytes(name: str, payload: bytes) -> str:
+    """`write_sidecar` for something that is not text. Same directory, same reasons."""
+    os.makedirs(DERIVED, exist_ok=True)
+    path = os.path.join(DERIVED, name)
+    with open(path, "wb") as handle:
+        handle.write(payload)
     return path
 
 
@@ -375,6 +390,54 @@ def probe_citations(path: str, suffix: str, record: dict, name: str) -> None:
 # -- pdf -----------------------------------------------------------------------------
 
 
+def extract_figures(reader, name: str, record: dict) -> None:
+    """Write the embedded images out as files, so a figure is reachable at all.
+
+    `figure-analyst` reads an image from a path — that is the whole reason `fetch_figures`
+    materialises PMC figures instead of returning them. An uploaded PDF had no equivalent,
+    so a question whose answer sits in a plot or a gel was unanswerable from the text
+    sidecar alone. This closes that, and it is also what makes a scanned PDF readable:
+    with no text layer, the page images *are* the document.
+
+    Paths only in the record, never the bytes — the rules at the top of this file apply
+    here exactly as they do to a PDF's text.
+    """
+    from PIL import Image
+
+    paths: list[str] = []
+    skipped = 0
+    for number, page in enumerate(reader.pages, start=1):
+        try:
+            embedded = list(page.images)
+        except Exception:  # noqa: BLE001 - an exotic filter on one page, not a failure
+            continue
+        for index, item in enumerate(embedded, start=1):
+            if len(paths) >= MAX_FIGURES:
+                skipped += 1
+                continue
+            try:
+                with Image.open(io.BytesIO(item.data)) as image:
+                    width, height = image.size
+                    if width * height < MIN_FIGURE_PIXELS:
+                        continue
+                    buffer = io.BytesIO()
+                    # Re-encoded rather than written through: an embedded image can be
+                    # CMYK JPEG, 1-bit CCITT or JPEG2000, and `figure-analyst` needs
+                    # something its reader will open.
+                    image.convert("RGB").save(buffer, format="PNG")
+                paths.append(
+                    write_sidecar_bytes(f"{name}.p{number}.{index}.png", buffer.getvalue())
+                )
+            except Exception:  # noqa: BLE001 - one unreadable image, not a failure
+                continue
+
+    if paths:
+        record["figures"] = len(paths)
+        record["figure_paths"] = paths
+    if skipped:
+        record["more_figures"] = skipped
+
+
 def probe_pdf(path: str, record: dict, name: str) -> None:
     """Extract the text layer to a sidecar. The text itself never comes back from here.
 
@@ -403,11 +466,20 @@ def probe_pdf(path: str, record: dict, name: str) -> None:
     if title := str(metadata.get("/Title") or "").strip():
         record["title"] = title[:200]
 
+    # Before the scanned-PDF return below, because that is the case where the images are
+    # not illustration but the entire document.
+    try:
+        extract_figures(reader, name, record)
+    except Exception as exc:  # noqa: BLE001 - the text is the greater half; keep it
+        record["figures_note"] = f"no figures could be extracted: {type(exc).__name__}"
+
     if len(text.strip()) < 200 * max(1, len(pages)) // 100:
         record["note"] = (
             "almost no extractable text — this is probably a scanned PDF, and there is "
             "no OCR in this sandbox"
         )
+        if record.get("figure_paths"):
+            record["note"] += "; the page images below are the only readable form of it"
         if not text.strip():
             return
 

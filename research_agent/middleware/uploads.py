@@ -174,6 +174,11 @@ MAX_PREVIEW_COLUMNS = 40
 # it without a round trip to read the file back.
 MAX_MANIFEST_IDS = 100
 
+# How many images a PDF may contribute before the rest are counted rather than written.
+# One per panel of a figure-heavy paper is already more than a run will look at, and each
+# one costs a `figure-analyst` call to read.
+MAX_PDF_FIGURES = 12
+
 # Molecules, sequences and the like are listed as a handful of examples, never in full.
 # The point is to show the model the shape of the records in the sidecar.
 MAX_PREVIEW_ITEMS = 5
@@ -360,6 +365,14 @@ def _extra_lines(record: dict[str, Any]) -> list[str]:
         if record.get("text_path"):
             lines.append(f"extracted text ({int(record.get('lines') or 0):,} lines): "
                          f"{record['text_path']}")
+        if record.get("figure_paths"):
+            head = f"embedded images ({int(record.get('figures') or 0)})"
+            if record.get("more_figures"):
+                head += f", {int(record['more_figures'])} more not extracted"
+            lines.append(head + " — for figure-analyst, not readFile:")
+            lines.extend(f"  {path}" for path in record["figure_paths"])
+        if record.get("figures_note"):
+            lines.append(f"figures: {record['figures_note']}")
     elif kind == "chem":
         if record.get("properties"):
             line = "SDF properties: " + ", ".join(record["properties"])
@@ -618,6 +631,7 @@ class UploadMiddleware(AgentMiddleware):
             UPLOADS_MAX_COLS=str(MAX_PREVIEW_COLUMNS),
             UPLOADS_MAX_ITEMS=str(MAX_PREVIEW_ITEMS),
             UPLOADS_MAX_IDS=str(MAX_MANIFEST_IDS),
+            UPLOADS_MAX_FIGURES=str(MAX_PDF_FIGURES),
         )
         result = await self.backend.aexecute(command)
         return _parse_lines(getattr(result, "output", "") or "")

@@ -663,6 +663,11 @@ and one per document when they attached several. If the listing gives a `doi` or
 found in the text, use it — the paper's PubMed record, citations and trials are all
 reachable from there, and the user rarely thinks to mention it.
 
+Any images embedded in it were written out beside the text and listed as paths. The text
+sidecar holds a figure's caption but not the figure, so a question about what a plot,
+gel or blot actually shows is a `figure-analyst` job, exactly as `[image]` below. When
+the listing says the PDF is scanned, those images are the only readable form of it.
+
 **`[chem]`** — a compound set. The sidecar has name, canonical SMILES, formula and weight
 per molecule; rdkit is installed for anything more (descriptors, fingerprints, depiction).
 The literature and registry hook is the compound *name*: search PubMed and
