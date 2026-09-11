@@ -38,8 +38,7 @@ from dotenv import load_dotenv
 # default pair twice while reporting two different names.
 from research_agent.models import ENV_VARS
 
-_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "RESEARCH_AGENT_CACHE_TTL",
-                                 "RESEARCH_AGENT_NOTES")
+_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "RESEARCH_AGENT_CACHE_TTL")
                   if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_ENV_OVERRIDES)
@@ -58,6 +57,7 @@ os.environ.setdefault("RESEARCH_AGENT_CACHE_TTL", "off")
 
 from langsmith import aevaluate  # noqa: E402
 
+from evals import dataset_name  # noqa: E402
 from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
 from research_agent.models import (  # noqa: E402
     check_gateway_config,
@@ -66,7 +66,10 @@ from research_agent.models import (  # noqa: E402
 )
 from research_agent.runner import run_once  # noqa: E402
 
-DATASET = "deep-life-sci-default"
+# Resolved after `.env` is loaded above, so `EVALS_DATASET_PREFIX` set either way reaches
+# it. Shared with `sync.py` through `evals/__init__.py` — the writer and the reader of a
+# dataset must not carry the name separately.
+DATASET = dataset_name()
 
 # One container per example, each fanning out internally. One at a time is what a laptop's
 # connection pool and NCBI's 10 req/sec stay comfortable with; raise it with --concurrency.
@@ -74,8 +77,7 @@ MAX_CONCURRENCY = 1
 
 # How long a sweep that has printed everything is allowed to spend shutting down.
 # Generous for a real trace drain, which takes seconds, and far short of the failure it
-# exists to bound — see `_arm_exit_watchdog` and
-# `docs/bugs/eval-sweep-hang-after-errored-example.md`.
+# exists to bound — see `_arm_exit_watchdog`.
 SHUTDOWN_GRACE_SECONDS = 120
 
 
@@ -108,16 +110,15 @@ def _arm_exit_watchdog(grace: float | None = None) -> None:
     """Kill the process if it is still alive `grace` seconds after its last line of output.
 
     A sweep can finish every example, score them, print its whole summary and then never
-    return: observed once at 56 minutes, holding the shell that launched it, killable only
-    by signal. To a driver script or a CI job that is indistinguishable from a sweep still
-    running, which is the actual damage — the results were already complete and already in
-    LangSmith.
+    return, holding the shell that launched it and killable only by signal. To a driver
+    script or a CI job that is indistinguishable from a sweep still running, which is the
+    actual damage — the results were already complete and already in LangSmith.
 
-    The cause is downstream of anything this module controls. `aevaluate` creates a
-    `_evaluation_feedback_executor` thread pool and never shuts it down (langsmith 0.10.15,
-    `evaluation/_arunner.py`); its workers are non-daemon, so `concurrent.futures` joins
-    them at interpreter exit with no timeout, and one blocked in a network call blocks the
-    process. Nothing here can bound that join, so bound the process instead.
+    The cause is downstream of anything this module controls: on langsmith 0.10.15,
+    `aevaluate` leaves its feedback-submitting thread pool running. Those workers are
+    non-daemon, so they are joined at interpreter exit with no timeout, and one blocked in
+    a network call blocks the process. Nothing here can bound that join, so bound the
+    process instead.
 
     The dump is the point of the delay: everything a sweep produces is already printed, so
     the only thing left to lose is the diagnosis, and a stack per thread names the blocked
@@ -132,9 +133,9 @@ def _arm_exit_watchdog(grace: float | None = None) -> None:
     def watchdog() -> None:
         time.sleep(grace)
         print(
-            f"\n[evals] still alive {grace:.0f}s after finishing — this is the teardown "
-            f"hang in docs/bugs/eval-sweep-hang-after-errored-example.md. "
-            f"Thread stacks follow, then exiting 0; the sweep's results are complete.",
+            f"\n[evals] still alive {grace:.0f}s after finishing — a non-daemon thread "
+            f"is holding the interpreter open during teardown. Thread stacks follow, then "
+            f"exiting 0; the sweep's results are complete and already in LangSmith.",
             flush=True,
         )
         faulthandler.dump_traceback()

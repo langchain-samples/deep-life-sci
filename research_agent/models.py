@@ -43,12 +43,12 @@ not cosmetically different:
                                                 does NOT work — verified: cached_tokens
                                                 stays 0 on a repeated 14k-token prefix
                                                 even with an explicit cache_control
-                                                block, which the gateway drops.
+                                                block.
 
 So Anthropic models must go native or they silently lose caching. OpenAI models only
 have the OpenAI-compatible path, where caching is automatic and server-side.
 
-Two quirks of the native path, both found the hard way:
+Two things to know about the native path:
   - The base URL must NOT include `/v1`; the Anthropic SDK appends it and
     `/anthropic/v1/v1/messages` returns 501 "path not allow-listed".
   - Model ids are bare there (`claude-sonnet-4-6`). The `anthropic/`-prefixed form is
@@ -87,50 +87,39 @@ JUDGE_PROVIDER = "openai"
 JUDGE_EFFORT = "low"
 
 # Why these. terra and Sonnet 5 score the same as the root: over the eval dataset both hit
-# 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other (probed
-# 2026-08-23, both at ROOT_EFFORT=medium; terra's one regression was the missing deliverable
-# on tpd-publication-volume). A tie on quality makes it a cost decision, and every
-# head-to-head in docs/measurements.md puts terra far ahead per paper. Swapping back is one
-# variable: `ROOT_MODEL=claude-sonnet-5` is the previous default, `claude-sonnet-4-6` the one
-# before it, and both share these leaves, so either isolates the root — but watch root
-# context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k ->
-# 214k chars) for fan-outs 22-62% faster (198s -> 76s on semaglutide-weightloss-boxplot),
-# and that budget is what docs/measurements.md is about.
+# 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie on
+# quality makes it a cost decision, and every head-to-head so far puts terra far ahead per
+# paper. Swapping back is one variable: `ROOT_MODEL=claude-sonnet-5` is the previous
+# default, `claude-sonnet-4-6` the one before it, and both share these leaves,
+# so either isolates the root — but watch root context when you do, because Sonnet 5 costs
+# 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s
+# -> 76s on semaglutide-weightloss-boxplot).
 #
-# The leaves moved from Haiku 4.5 to luna on 2026-08-24 on cost, with quality held flat.
-# Three sweeps over the same dataset, notes off, judge pinned: terra-low/haiku-4.5 scored
-# 7/11 rubric, 9/9 citations, $1.54; terra-low/luna-low scored the same *cell for cell* --
-# every seed, all three evaluators -- for $0.88, 43% less on 21% fewer tokens, at +5s median
-# latency (31.0s -> 36.2s). terra-medium/haiku-4.5 was the third and bought nothing: 7/11
-# again, failing the same four seeds, and it lost a citation on
-# psilocybin-depression-unpublished. `ROOT_EFFORT` is `low` for that reason -- medium cost
-# 53% more latency per run and fixed exactly one cell (the tpd-publication-volume
-# deliverable), which is not a trade worth making the default.
+# The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
+# dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
+# as terra-low/haiku-4.5 -- every seed, all three evaluators -- for ~40% less on 21% fewer
+# tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
+# rather than a constant: it is one run of 11 examples with no repeats.
 #
-# Two caveats attach to that $0.88. It is one run of 11 examples with no repeats, so read
-# 43% as a direction rather than a constant; and the leaves are now the same model and
-# effort as the judge. That is not self-grading -- the judge scores the root's final answer,
-# never leaf output -- but it is a confound worth retiring with a sweep on a different judge
-# before leaning on the number.
+# `ROOT_EFFORT` is `low` for the same kind of reason. terra-medium/haiku-4.5 scored 7/11
+# again, failing the same four seeds and losing a citation on
+# psilocybin-depression-unpublished, for 53% more latency per run; it fixed exactly one
+# cell (the tpd-publication-volume deliverable), which is not a trade worth defaulting to.
 #
 # What did *not* move is the more useful finding: the same four rubric seeds fail in all
 # three configurations. Root effort did not touch them and neither did swapping the leaf
 # model across providers, so they are a prompt, tool or criteria problem rather than a
 # model-selection one.
 #
-# The older latency measurements in docs/measurements.md were taken against Haiku leaves.
+# The older latency measurements above were taken against Haiku leaves.
 # `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
 # has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
 # gateway answers the parameter with a 400.
 #
 # The judge is pinned so that a score change is attributable to the pair under test rather
-# than to the grader. It moved from luna to terra on 2026-09-01: luna failed
+# than to the grader, and it is terra rather than luna because luna failed
 # psilocybin-depression-unpublished on two claims that were both false about the answer in
-# front of it -- that the answer had used the wrong denominator when it had reported the
-# registry's own count as the rubric asks, and that three reclassified trials carried no
-# stated reason when each carried one inline. A grader that misreads the answer is a worse
-# confound than a costlier one, and it also retires the note above about the leaves sharing
-# the judge's model and effort.
+# front of it. A grader that misreads the answer is a worse confound than a costlier one.
 
 # Per-socket deadlines on the root model's streaming call. Components, not a scalar:
 # the read timeout is the gap *between* chunks, not the whole request, so `read` is a
@@ -143,27 +132,22 @@ JUDGE_EFFORT = "low"
 # longer than `read` dies after three attempts at ~3x it.
 #
 # This is the same pathology SUBAGENT_TIMEOUT_SECONDS below was written for, on the one
-# role that never got the fix. langchain-openai forwards an unset timeout as a meaningful
-# None, so the SDK client ended up as `httpx.Timeout(timeout=None)` — no connect, read,
-# write or pool deadline at any layer — and a gateway that stopped responding was waited
-# on forever. Observed in thread 01a045c2-ff60-7b33-b5e5-bb62573052af: the run entered the
-# model node, opened one socket to the gateway, and sat there at 0% CPU with the socket in
-# CLOSE_WAIT (the peer had already sent FIN). The `model` node never returned and the
-# thread stayed `busy`, blocking every later turn on it.
+# role that never got the fix. An unset timeout is forwarded to the SDK client as a
+# meaningful `None` — `httpx.Timeout(timeout=None)`, no connect, read, write or pool
+# deadline at any layer — so a gateway that stops responding is waited on forever.
+# Observed: the run entered the model node, opened one socket to the gateway, and sat
+# there at 0% CPU with the socket in CLOSE_WAIT (the peer had already sent FIN). The
+# `model` node never returned and the thread stayed `busy`, blocking every later turn.
 #
-# `read` was 10s, chosen against a measured gap distribution: root streaming, max
-# inter-chunk gap 0.39-0.64s over 10 short calls and 0.76-1.54s over 3 replays of that
-# thread's 27-message payload — ~6.5x headroom over the worst observed.
-#
-# The ~15s (worst 18.86s) origin tax noted under SUBAGENT_TIMEOUT_SECONDS does not appear
-# on the root path — root TTFT measured 0.32-1.54s — so it looks like a fan-out effect of
-# 18 concurrent calls rather than something every first call pays. Whatever the cause, the
-# response is the same: raise `read`, don't go back to a scalar.
+# `read` is set against the measured inter-chunk gap on this path — worst observed ~1.5s,
+# over replays of a 27-message payload — so 30s is ample headroom for a slow chunk while
+# still bounding a socket that has gone silent. Raise it if a role needs more; do not go
+# back to a scalar timeout.
 #
 # max_retries stays at its default of 2, which covers request establishment: a stall
 # *before* the first token is retried transparently. A stall *after* the response object
-# exists is not — the SDK does not retry mid-stream — which is why the trace above failed
-# after a single silent wait rather than three attempts at it. That is a visible failure
+# exists is not — the SDK does not retry mid-stream — which is why the failure above was
+# a single silent wait rather than three attempts at it. That is a visible failure
 # rather than a silent recovery, and still strictly better than a hang. Worst-case
 # detection of a genuinely dead socket is now ~90s (3 attempts x 30s), up from ~30s, and
 # still far inside CodeInterpreterMiddleware's 900s.
@@ -171,12 +155,11 @@ ROOT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 # Wall-clock ceiling on a single analyst request. Nothing else imposes one.
 #
-# langchain-anthropic treats an unset timeout as a *meaningful* None and forwards it
-# (chat_models.py:1269), so the client ends up as `httpx.Timeout(timeout=None)` — no
-# connect, read, write or pool deadline at any layer. The Anthropic SDK's own 10-minute
-# DEFAULT_TIMEOUT never applies either: messages.py:1030 only computes a request timeout
-# when `client.timeout == DEFAULT_TIMEOUT`, and ours is None. A socket that stalls is
-# then waited on forever. In trace 019fe907-abed-70c0-b589-2cfcb3ef5d2b one
+# An unset timeout is forwarded as a *meaningful* None (as of langchain-anthropic 1.5.x),
+# so the client ends up as `httpx.Timeout(timeout=None)` — no connect, read, write or
+# pool deadline at any layer. The Anthropic SDK's own 10-minute default never applies
+# either: it computes a request timeout only when the client still carries that default,
+# and ours is None. A socket that stalls is then waited on forever. Observed: one
 # abstract-analyst's ChatAnthropic call hung with 13 runs blocked behind it and was
 # still pending 40+ minutes later; CodeInterpreterMiddleware(timeout=900) did not free
 # it, because the eval was inside the same stuck await.
@@ -220,11 +203,10 @@ SEARCH_TIMEOUT_SECONDS = 120.0
 # `sources/web.py` exists to spend those tokens in a throwaway call instead.
 #
 # A second trap, if anyone tries it anyway: passing a raw dict through
-# `create_deep_agent(tools=[...])` crashes at `langchain_quickjs/_ptc.py:100`
-# (`AttributeError: 'dict' object has no attribute 'name'`) on the first model call —
-# `filter_tools_for_ptc` reads `.name` off every entry of `request.tools`, which
-# LangChain types as `list[BaseTool | dict[str, Any]]`. Verified against
-# langchain-quickjs 0.3.5.
+# `create_deep_agent(tools=[...])` crashes on the first model call with
+# `AttributeError: 'dict' object has no attribute 'name'` — the PTC tool filter reads
+# `.name` off every entry of `request.tools`, which LangChain types as
+# `list[BaseTool | dict[str, Any]]`. Verified against langchain-quickjs 0.3.5.
 WEB_SEARCH_SPECS = {
     # `max_uses` is a per-request cap on searches, and the only one either path offers.
     # Five is enough for a real question and bounds the cost of a runaway query.

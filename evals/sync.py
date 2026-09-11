@@ -33,10 +33,9 @@ load_dotenv(override=True)
 
 from langsmith import Client  # noqa: E402
 
-DATASETS_DIR = Path(__file__).parent / "datasets"
+from evals import dataset_name  # noqa: E402
 
-# One LangSmith dataset per seed file, named for the file.
-DATASET_PREFIX = "deep-life-sci"
+DATASETS_DIR = Path(__file__).parent / "datasets"
 
 
 def _load(path: Path) -> list[dict]:
@@ -90,7 +89,7 @@ def _split(row: dict) -> tuple[dict, dict, dict]:
 
 def sync_file(client: Client, path: Path) -> None:
     rows = _load(path)
-    name = f"{DATASET_PREFIX}-{path.stem}"
+    name = dataset_name(path.stem)
 
     if client.has_dataset(dataset_name=name):
         dataset = client.read_dataset(dataset_name=name)

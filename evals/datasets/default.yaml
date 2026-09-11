@@ -1,12 +1,9 @@
-# Seeds for the LangSmith dataset `deep-life-sci-default`. Pushed by `evals/sync.py`,
-# which matches on `id` — rewording a question updates its example rather than replacing
-# it, so keep ids stable even when the text around them changes.
+# Seeds for the LangSmith dataset `deep-life-sci-default`, pushed by `evals/sync.py`,
+# which matches on `id` — keep ids stable when rewording a question.
 #
-# Per example: `id` and `question` are required. `expects_artifact` and `rubric` become
-# reference outputs the evaluators compare against; `domain`, `surface` and `notes` are
-# provenance only. Rubrics are graded by a model, not string-matched, so they are written
-# for a reader: state what the right answer contains, then what earns credit and what
-# fails outright.
+# `id` and `question` are required. `expects_artifact` and `rubric` become reference
+# outputs for the evaluators; `domain`, `surface` and `notes` are provenance only.
+# Rubrics are model-graded, not string-matched.
 
 # Q1
 - id: semaglutide-weightloss-boxplot
@@ -55,7 +52,7 @@
   question: What NLS did nishikubo identify in CdtB?
   expects_artifact: []
   rubric: >-
-    Nishikubo et. al. mapped the NLS to residues 48–124 in the N-terminal region of CdtB
+    Nishikubo et al. mapped the NLS to residues 48–124 in the N-terminal region of CdtB
 
 # Q3
 - id: cunningham-druggability-subnetwork
@@ -150,8 +147,7 @@
 
     Fail if activation is called converged, or if the editor is reported as RNP or plasmid.
 
-# Q10 — registry-only. Nothing here is answerable from PubMed: an abandoned trial has no
-# paper, and `why_stopped` is free text the sponsor writes at withdrawal.
+# Q10
 - id: semaglutide-stopped-trials
   question: >-
     Which phase 3 interventional trials of semaglutide in obesity were terminated,
@@ -171,15 +167,15 @@
 
     Credit if the terminated trial and at least three of the withdrawn ones are named by
     NCT number with their stated reason. A sixth trial appearing after August 2026 is not
-    a failure; neither is quoting `why_stopped` verbatim including its sponsor typos.
+    a failure; neither is quoting `why_stopped` verbatim, typos in the registry text
+    included.
 
     Fail if a reason is paraphrased into something the registry does not say, if a
     WITHDRAWN trial (zero participants enrolled) is described as having produced or failed
     to produce results, or if the answer searches PubMed for these trials and reports that
     they do not exist.
 
-# Q11 — the bridge. Needs both sources and one of them twice: the registry to enumerate
-# what was run, PubMed to test each one for a publication.
+# Q11
 - id: psilocybin-depression-unpublished
   question: >-
     Of the completed interventional trials of psilocybin for depression registered on
@@ -270,9 +266,7 @@
     (terminated), CV9202/BI 1361849 NCT03164772 (completed), mRNA-5671/V941 NCT03948763 
     (terminated).
 
-# Q14 — web-only fact with a literature bridge. A label change is a regulatory action:
-# it has no paper of its own, but the evidence behind it does, so the answer has to come
-# off the agency site and out of PubMed and keep the two straight.
+# Q14
 - id: car-t-secondary-malignancy-label
   question: >-
     What did FDA change about the boxed warnings on approved CAR-T products, and is the
@@ -298,8 +292,7 @@
     as peer-reviewed evidence. Fail if a boxed warning is reported as withdrawn. Fail if
     IEC-EC is given as class-wide, or the T-cell malignancy warning as Carvykti-only.
 
-# Q15 — web numbers into the sandbox. The counts are agency statistics with no PubMed
-# record; the trend, the baseline and the plot are the agent's own work.
+# Q15
 - id: fda-novel-approvals-trend
   question: >-
     Plot CDER novel drug approvals per year since 2010 and tell me how 2025 compared to

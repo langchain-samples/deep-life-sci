@@ -79,7 +79,7 @@ def answering(port: int, path: str = "/ok", timeout: float = 5.0) -> bool:
 
     Generous timeout on purpose. A healthy server can be slow to this if its event loop is
     momentarily blocked (the asyncio.to_thread rule in sources/cache_io.py is about exactly
-    that), and calling a working server dead is the more annoying error of the two.
+    that), and calling a working server dead is the worse of the two errors.
     """
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout) as r:
@@ -186,9 +186,9 @@ def pnpm_command(tag: str = "setup") -> Pnpm | None:
     Three rungs, cheapest first, all landing on the same version:
 
       1. `pnpm` on PATH        — no download. pnpm 9+ re-execs itself at the pin, so this
-                                 is reproducible too (verified: a global 11.x runs as 10.5.1
-                                 inside the clone). An older pnpm reports its own version,
-                                 fails the match below, and falls through.
+                                 is reproducible too: a newer global pnpm runs as the pinned
+                                 version inside the clone. An older pnpm reports its own
+                                 version, fails the match below, and falls through.
       2. `corepack pnpm`       — bundled with node, downloads the pin to a per-user cache.
       3. `npm exec --yes <pin>` — the rung that survives corepack being unbundled. Caches
                                  under ~/.npm, so it needs no writable node prefix either.

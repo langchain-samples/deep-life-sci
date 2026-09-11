@@ -3,18 +3,11 @@
 `run.py:target` catches agent exceptions and returns `{"answer": "", "error": ...}` rather
 than raising, so one transient failure cannot abort a sweep. The cost of that trade is that
 a dead run reaches the evaluators looking like a real run whose answer happens to be empty,
-and each of them reached a different, wrong conclusion about it:
-
-    rubric_judge                  False  "run produced no answer"
-    citations_exist               None   "no PMIDs cited — not applicable to this answer"
-    produced_expected_artifacts   False  "expected ['image'], published []"
-
-None of those is recoverable from the score column. On 2026-09-01 six of eleven examples
-died on an APITimeoutError (a client-side deadline in `models.py:ROOT_TIMEOUT`, since
-fixed) and the sweep reported it as a rubric regression from 7/11 to 4/11, an artifact
-regression from 0.50 to 0.00, and — worst of the three — a *perfect* 1.00 on
-`citations_exist`, because the None branch quietly dropped every dead run from the
-denominator. The infrastructure failure was invisible in all three numbers.
+and each of them draws a different, wrong conclusion from it: one reads it as a bad answer,
+one as a missing artifact, and one — worst of the three — as *not applicable*, which drops
+the dead run from its own denominator and raises the aggregate. None of that is recoverable
+from the score column, so a batch of runs that died on infrastructure reads as a quality
+regression, or as an improvement.
 
 `None` rather than `False` because that is already this package's word for "not scoreable",
 and `judge.py` had settled the principle for the case one layer up: a judge whose own output
@@ -23,7 +16,7 @@ the numbers." An agent that never answered is the same kind of event.
 
 The guard alone would make the failure *invisible* instead of merely misattributed, so it
 is only half the fix: `run.py` counts errored examples and prints them, and that is what
-keeps a sweep with six dead runs from reading like a clean one.
+keeps a sweep with dead runs in it from reading like a clean one.
 """
 
 from __future__ import annotations

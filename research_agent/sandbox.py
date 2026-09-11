@@ -18,14 +18,11 @@ the sandbox dataplane. When that upgrade is rejected the SDK raises
 `SandboxConnectionError`, and the exception propagates all the way out of the `eval`
 tool as a string the model has to read and reason about.
 
-That is the wrong layer to handle it. Observed in trace
-`019fde6d-d267-70f0-924b-e0cccae622be`: an `eval` that had already fanned out to 18
-`abstract-analyst` subagents and collected all 18 answers was killed by a single
-`HTTP 502` on a WebSocket upgrade, 15.5s in. Every answer was discarded. The model
-then spent five more turns re-deriving state it had lost — `1 + 1` to probe whether
-the interpreter was alive, then a hardcoded PMID list because it no longer trusted
-its own variables — and re-ran the same fan-out three more times. Roughly 46s of a
-101s run.
+That is the wrong layer to handle it. In one measured run an `eval` that had already
+fanned out to 18 `abstract-analyst` subagents and collected all 18 answers was killed by
+a single `HTTP 502` on a WebSocket upgrade, 15.5s in. Every answer was discarded, and the
+model spent five further turns re-deriving state it had lost before re-running the same
+fan-out three more times — roughly 46s of a 101s run.
 
 A rejected upgrade is transient: the dataplane is recycling, or the router briefly has
 no healthy backend. The SDK treats plain `SandboxConnectionError` as permanent (only
@@ -37,8 +34,8 @@ deliberately:
 filesystem tools are read/write/list against a workspace, and `execute` runs stats and
 plots that are safe to re-run. If you add a tool whose sandbox command must run
 exactly once (appending to a file, incrementing a counter, POSTing somewhere), route
-it around this wrapper. The alternative is what the trace shows: throwing away minutes
-of completed work because a socket blinked.
+it around this wrapper. The alternative is the run above: minutes of completed work
+discarded for one transient transport failure.
 """
 
 from __future__ import annotations
@@ -165,8 +162,8 @@ DEFAULT_MAX_DELAY = 4.0
 # `execute()`/`aexecute()` is the one place every shell command the model can issue
 # passes through (see class docstring), which makes it the only place a package
 # install can be blocked for good instead of "for as long as the model reads the
-# prompt telling it not to." Observed in trace 019fe937-1bf6-7d61-9ca8-658c53dfd8ae:
-# the model tried `pip install openpyxl`, hit PEP 668's externally-managed-environment
+# prompt telling it not to." Observed in one run: the model tried `pip install openpyxl`,
+# hit PEP 668's externally-managed-environment
 # error, retried with `--break-system-packages`, and only then got what
 # `build_snapshot.py` was already supposed to have baked in. A stale or incomplete
 # snapshot should fail loudly and tell the model to say so — not send it down a

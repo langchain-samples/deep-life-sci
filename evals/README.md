@@ -63,7 +63,7 @@ artifact kinds, the rubric clause that decided the verdict.
 The judge is given the *names* of the artifacts the run published, not just the answer
 text. Without them a rubric asking for a deliverable is unverifiable from where the judge
 sits, and it does not abstain — it infers absence from the prose and fails a run that
-produced the chart. `evaluators/judge.py` records the case that forced this.
+produced the chart.
 
 `score: None` still means *not applicable*, not `False`. A question with no required
 artifact, or an answer that legitimately cites no papers, is excluded from that
@@ -75,9 +75,10 @@ same in the numbers.
 An **errored run** is that same kind of event and is scored `None` by all three, via the
 one guard in `evaluators/_guard.py`. `run.py:target` returns agent failures rather than
 raising them, so a dead run otherwise arrives looking like a real one with an empty answer
-— and the three evaluators used to disagree about what that meant, one of them scoring a
-sweep with six dead runs a perfect 1.00. `None` keeps them out of the aggregates, and
-`run.py` prints the errored seeds and a count so they cannot hide there instead.
+— and without the guard the three evaluators each drew a different, wrong conclusion from
+that, one of them reading it as *not applicable* and raising its own aggregate. `None`
+keeps them out of the aggregates, and `run.py` prints the errored seeds and a count so they
+cannot hide there instead.
 
 ## Isolation and cost
 

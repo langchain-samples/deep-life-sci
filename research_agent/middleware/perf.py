@@ -1,48 +1,28 @@
-"""Event-loop instrumentation for the `eval` fan-out.
+"""Optional event-loop instrumentation for the `eval` fan-out.
 
-## What this exists to answer
+A fan-out of subagent LLM calls inside `eval` can take far longer than the same calls
+take on their own, with durations that stay flat regardless of how many tokens came
+back — which is waiting rather than generating. Two candidate mechanisms were measured
+and **eliminated**: gateway throttling (18 concurrent calls sustained 83–103 tok/s with
+zero 429s) and per-call subagent recompilation (building a subagent measures 0.4ms, and
+driving the compiled subagent 18-way through `asyncio.gather` completes in 2.2s wall
+with 1.2ms peak loop lag).
 
-Subagent LLM calls made inside `eval` run far below the rate the gateway serves. From
-thread `019fde6d-d25c-77b3-a751-56c6b7aa4ead`:
+This module is the diagnostic for what is left. It samples event-loop lag for the
+duration of each `eval` / `execute` call, which separates two very different situations:
 
-| fan-out                     |  n | output tokens | duration      | tok/s  |
-|-----------------------------|----|---------------|---------------|--------|
-| trace A, first              | 18 | 60–99         | 14.34–14.55s  | 4–7    |
-| trace B                     |  9 | 232–405       | 17.24–18.57s  | 13–22  |
-| trace A, later fan-outs     |  8–18 | ~60–110    | 1.2–2.8s      | 30–73  |
-| measured gateway baseline   | 18 | —             | —             | ~100   |
-
-The tell is that duration is flat regardless of how many tokens came back — an 18-way
-burst where the 60-token and the 99-token response both land at 14.4s ± 0.1s is not
-generating, it is waiting.
-
-Two candidate mechanisms were tested and **eliminated**:
-
-* *The gateway throttles concurrent bursts.* No — 18 concurrent Haiku calls measured
-  83–103 tok/s with zero 429s, against 15M ITPM / 2.25M OTPM headroom.
-* *`task()` recompiles the subagent graph per call when a `responseSchema` is passed*
-  (it does — `_select_subagent` calls `_compile_spec` per invocation). Not the cause:
-  `create_sub_agent` measures 0.4ms, and driving the compiled subagent 18-way through
-  `asyncio.gather` completes in 2.2s wall with 1.2ms peak loop lag.
-
-So the tax is introduced somewhere in the `eval` -> QuickJS -> LangGraph-server path
-that those two experiments bypassed, and it is not yet root-caused. Rather than ship a
-fix for a mechanism nobody has confirmed, this ships the measurement that separates the
-two remaining explanations:
-
-* **Loop starvation** — something CPU-bound on the server's event loop (state copying,
-  checkpoint serialisation, tracing payloads) stalls the concurrent HTTP reads. Shows
-  up here as large `lag_max`/`lag_p95`.
-* **Something else entirely** — the requests really are in flight that long. Shows up
-  as low lag with a long `eval` wall time, which points at the QuickJS bridge or at the
+* **Loop starvation** — something CPU-bound on the event loop the tool call runs on
+  (state copying, checkpoint serialisation, tracing payloads) is holding off the
+  concurrent HTTP reads. Shows up here as large `lag_max`/`lag_p95`.
+* **Genuine wall time** — the requests really are in flight that long. Shows up as low
+  lag with a long `eval` wall time, which points at the QuickJS bridge or at the
   per-invocation state copy rather than at the loop.
 
-Every `task()` from the interpreter is marshalled onto the server's event loop via
-`asyncio.run_coroutine_threadsafe` (`langchain_quickjs/_repl.py:609`), so if the loop
-is starved during a fan-out, this sampler is on the same loop and will see it.
+Every `task()` from the interpreter is marshalled onto the server's event loop, so a
+loop starved during a fan-out is a loop this sampler is on and will see.
 
-Enabled by default; set `PERF_PROBE=0` to turn off. The sampler costs one 50ms timer
-per in-flight `eval`.
+Opt-in: off unless `PERF_PROBE=1` is set. The sampler costs one 50ms timer per
+in-flight `eval`.
 """
 
 from __future__ import annotations
@@ -72,8 +52,8 @@ REPORT_THRESHOLD_MS = 50.0
 
 
 def enabled() -> bool:
-    """Whether probing is on. Defaults to on; `PERF_PROBE=0` disables."""
-    return os.environ.get("PERF_PROBE", "1").strip().lower() not in {"0", "false", "no"}
+    """Whether probing is on. Off unless `PERF_PROBE=1` (or any other truthy value)."""
+    return os.environ.get("PERF_PROBE", "0").strip().lower() not in {"0", "false", "no"}
 
 
 class LoopLagProbe(AgentMiddleware):

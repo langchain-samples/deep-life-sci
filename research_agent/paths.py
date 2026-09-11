@@ -43,7 +43,7 @@ CTGOV_CACHE = DATA_DIR / "trials"
 
 # Everything `cache_io.sweep` is allowed to delete from. Named explicitly rather than
 # walking DATA_DIR, because RESEARCH_AGENT_DATA_DIR can point anywhere and a sweep that
-# recurses into whatever else lives there is a footgun, not a cleanup.
+# recurses into whatever else lives there would delete files it does not own.
 CACHE_ROOTS = (ABSTRACT_CACHE, PMC_CACHE, CTGOV_CACHE)
 
 # How long an idle thing stays alive — both a sandbox container and a host cache entry.
@@ -62,9 +62,9 @@ IDLE_TTL_SECONDS = 600
 # How long a stopped sandbox is kept before the platform deletes it.
 #
 # Set explicitly because the platform default is 14 days, and a stopped sandbox still
-# pins the snapshot it booted from: 30 of them, one per thread, blocked
-# `build_snapshot.py` from replacing `pubmed-py-bio` with a 409 for a week. Bounding the
-# runtime with IDLE_TTL_SECONDS alone leaves that pileup.
+# pins the snapshot it booted from. Enough of them accumulate, one per thread, that
+# `build_snapshot.py` can no longer replace the snapshot they hold — it answers 409.
+# Bounding the runtime with IDLE_TTL_SECONDS alone leaves that pileup.
 #
 # This is set at *creation*, which is what makes it the real guarantee. Anything we do on
 # the way out — a `finally`, an explicit delete — is lost precisely when it is needed: a
@@ -76,8 +76,8 @@ DELETE_AFTER_STOP_SECONDS = 172_800
 #
 # A slow boot is a failure, not something to wait out: the user is watching a spinner and
 # a snapshot that has stopped restoring quickly is a problem to surface, not absorb. The
-# platform's own compaction rollout took restores from 2.9s to 67s, which is what this
-# ceiling is calibrated against — comfortably above a healthy boot, far below a sick one.
+# ceiling is calibrated against observed worst-case restore latency — comfortably above a
+# healthy boot (~3s), far below a run of restores that have gone bad.
 #
 # Enforced client-side by `wait_for_sandbox`. `create_sandbox(wait_for_ready=True)` cannot
 # do it: its `timeout` is a server-side hint (a 1s budget still returned ready at 2.9s),

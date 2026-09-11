@@ -18,7 +18,6 @@ remain the main tuning lever in this repo — which is why `evals/` scores them.
 
 from __future__ import annotations
 
-import os
 from datetime import date
 
 _TEMPLATE = """\
@@ -70,7 +69,7 @@ with a brief kickoff message with your planned approach.
 `retmax` and take the first N — this risks leaving out relevant results.**
 
 **Example pattern for initial searches: probe with `retmax: 0`.**
-Returns `count`, `query_translation` and `warnings` without fetching records, so it is cheap. 
+Returns `count`, `query_translation` and `warnings` without fetching records, so it is cheap.
 Iterate here.
 
 ```js
@@ -129,7 +128,7 @@ neither is safe alone:
 
 Never fan out more than 300 subagents concurrently to read abstracts or more than 10
 concurrently to read papers--this becomes prohibitively expensive.
-If a query cannot get to the appropriate number without cutting something the user asked for, 
+If a query cannot get to the appropriate number without cutting something the user asked for,
 stop and say so, then proceed with the most defensible narrowing and tell the user exactly what you 
 excluded and how many papers matched in total.
 
@@ -400,8 +399,8 @@ are in your heap, not your context.
 
 `conditions` lists every condition a trial studies, comorbidities included, so a keyword or 
 blocklist pass over `title` and `conditions` silently drops trials that do belong — a 
-lencapiravir HIV trial registered under Kaposi's sarcoma, cytomegalovirus infection or 
-"healthy participants" is still a lencapiravir HIV trial.
+lenacapavir HIV trial registered under Kaposi's sarcoma, cytomegalovirus infection or 
+"healthy participants" is still a lenacapavir HIV trial.
 
 ### Fetching trial detail
 
@@ -707,7 +706,7 @@ So: **write the deliverable to `/workspace/out/`, then just tell the user what i
 - Build the deliverable once, in one script, from the files you already wrote. If it needs
   another column or a different label, edit that script — do not write a second one.
 - Write only finished work there. Intermediate files (the abstracts bundle, scratch
-  CSVs) go in `/workspace/` — putting them in `out/` spams the user with junk.
+  CSVs) go in `/workspace/` — putting them in `out/` clutters their deliverables.
 - Do not tell the user you created the file at a specific location, e.g. "Created the 
   chart: `drug-approvals.png`". They cannot access your file system. The UI will 
   automatically push it to them. Just say "Created the figure/chart", etc.
@@ -842,8 +841,8 @@ single bar chart, do not produce multiple charts and a supplementary table.
 
 Use Markdown citation format for all publications and trials, e.g.
 
-- Treatment with drug A attenuates the genotoxic effect of toxin B in mouse hepatocytes (Doe et. al. 2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
-- Doe et. al. (2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
+- Treatment with drug A attenuates the genotoxic effect of toxin B in mouse hepatocytes (Doe et al. 2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
+- Doe et al. (2020, Science, PMID [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/))
 - [12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/)
 
 - [TRIAL-ABBR (NCT12345678)](https://clinicaltrials.gov/study/NCT12345678)
@@ -862,32 +861,8 @@ the contents of a paper or trial from parametric memory--read (or have a subagen
 relevant information.
 """
 
-IMPROVEMENT_NOTES = """\
-## Identifying issues and improvements
 
-If you encounter any issues with either of the APIs or are forced by the configuration or your
-toolset into a pattern that requires you to waste time or tokens, use the write_file tool to write
-a *brief* (sentence-to-paragraph-length) description of the issue/bug/inefficient pattern to /workspace, 
-optionally with a suggestion for improvement. Be sure to include the phrase AGENT NOTE so it can be 
-found later by automated review. Be sure to do this at least once per run.
-"""
-
-
-def notes_requested() -> bool:
-    """Whether this run should ask the agent for AGENT NOTEs.
-
-    Read from the environment inside the function, not at import, for the same reason
-    `models.py` does it: `cli.py` and `evals/run.py` both call `load_dotenv(override=True)`
-    after importing this module.
-    """
-    return os.environ.get("RESEARCH_AGENT_NOTES", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-
-
-def build_system_prompt(
-    today: date | None = None, *, improvement_notes: bool | None = None
-) -> str:
+def build_system_prompt(today: date | None = None) -> str:
     """The root prompt, with today's date substituted in.
 
     Called per `build_agent()` rather than at import, so a `langgraph dev` server that
@@ -899,15 +874,5 @@ def build_system_prompt(
 
     `str.replace`, not `.format()` — the prompt body is full of JS object literals, and
     every `{...}` in it would be read as a field name.
-
-    `improvement_notes` asks the agent to self-report bugs and wasteful patterns. It is
-    review instrumentation, not agent behaviour worth shipping on: it spends tokens and a
-    `write_file` call on every run, and the notes land in a container that is deleted at
-    session end, so the trace is the only copy. Off unless asked for, explicitly or via
-    `RESEARCH_AGENT_NOTES=1`. It appends *last* so the prefix a notes run shares with an
-    ordinary one is byte-identical, which is what the root model's cache is keyed on.
     """
-    if improvement_notes is None:
-        improvement_notes = notes_requested()
-    prompt = _TEMPLATE if not improvement_notes else f"{_TEMPLATE}\n{IMPROVEMENT_NOTES}"
-    return prompt.replace("{{TODAY}}", (today or date.today()).isoformat())
+    return _TEMPLATE.replace("{{TODAY}}", (today or date.today()).isoformat())

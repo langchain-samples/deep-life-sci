@@ -75,9 +75,9 @@ def ask_secret(prompt: str) -> str:
     """Read a credential without echoing it.
 
     `input()` would print the key into the terminal, from where it reaches scrollback, a
-    `script` log, and any screen share or pasted transcript — a real key was leaked that
-    way. Only ever called behind `interactive()`, which has already established a tty, so
-    getpass cannot fall back to its unmasked echoing path.
+    `script` log, and any screen share or pasted transcript. Only ever called behind
+    `interactive()`, which has already established a tty, so getpass cannot fall back to
+    its unmasked echoing path.
 
     Whitespace is stripped rather than rejected because nothing is echoed to proofread: a
     key pasted with a trailing newline or a stray space looks identical to a clean one.
@@ -156,14 +156,26 @@ def ensure_langsmith_key() -> None:
     than the personal key doing the tracing. Editing `LANGSMITH_GATEWAY_API_KEY` in .env by
     hand is how that is done, and it is only ever filled in when empty, so a hand-edited
     one survives every later `setup.py`.
+
+    An exported `LC_GATEWAY_KEY` is adopted rather than prompted for. A deployment that
+    issues a per-machine gateway *service* key — so model spend stays capped and
+    attributable — already holds the value in the environment, and copying the tracing key
+    into the gateway slot instead 403s at the first model call, which reads like a broken
+    install rather than a wrong key.
     """
     ask_key(
         "LANGSMITH_API_KEY",
-        "LangSmith API key, for models, tracing and sandboxes (lsv2_...)",
+        "LangSmith API key, for tracing and sandboxes (lsv2_...)",
         "lsv2_",
     )
-    if not env_value("LANGSMITH_GATEWAY_API_KEY"):
-        set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
+    if env_value("LANGSMITH_GATEWAY_API_KEY"):
+        return
+    if gateway := os.environ.get("LC_GATEWAY_KEY", "").strip():
+        set_env("LANGSMITH_GATEWAY_API_KEY", gateway)
+        say(TAG, "using LC_GATEWAY_KEY from the environment for model calls "
+                 "(tracing keeps LANGSMITH_API_KEY)")
+        return
+    set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
 
 
 def ensure_env() -> None:
@@ -305,9 +317,8 @@ HOME_HEADING_NEW = '<div className="flex flex-col items-center gap-3">'
 
 # The logo, cropped to the LangChain mark. Upstream's asset is one viewBox carrying both the
 # mark (x 0-488) and the `LangChain` wordmark (x 591-2999), and all three places it is drawn
-# set the product name directly beside or under it — two wordmarks at the same size and
-# weight, neither of which then reads as the name of the thing. Cropped to the square it is a
-# brand mark next to a product name, which is a lockup. It also un-squashes the header, where
+# set the product name directly beside or under it. Cropped to the square it is a brand mark
+# next to a product name, which is a lockup. It also un-squashes the header, where
 # `width={32} height={32}` on a 5.4:1 viewBox drew the whole logo into a 32px smudge.
 LOGO_VIEWBOX_OLD = 'viewBox="0 0 3000 554"'
 LOGO_VIEWBOX_NEW = 'viewBox="0 0 488 488"'
@@ -489,10 +500,10 @@ def patch_dev_indicator() -> None:
 
 # The patches below are cosmetic rather than load-bearing, unlike the rewrite above.
 # They are applied anyway because setup's job is a working app, and an app that logs a
-# console error, opens on a screenful of whitespace, wears two wordmarks, or offers an
-# upload it then refuses is not one. Each is anchored on an exact upstream string and prints
-# the change instead of guessing if that string ever moves, so an upstream fix is never
-# clobbered and a stale patch never lands silently.
+# console error, opens on a screenful of whitespace, draws the logo's wordmark next to its
+# own name, or offers an upload it then refuses is not one. Each is anchored on an exact
+# upstream string and prints the change instead of guessing if that string ever moves, so an
+# upstream fix is never clobbered and a stale patch never lands silently.
 
 
 def patch_svg_props() -> None:
@@ -514,8 +525,8 @@ def patch_logo_mark() -> None:
     """Crop upstream's logo to the LangChain mark, leaving the wordmark outside the viewBox.
 
     Cosmetic like the rest, and see `LOGO_VIEWBOX_OLD` for what it buys: every place the logo
-    is drawn sets the product name beside or under it, and until this the brand's wordmark and
-    the product's name were two wordmarks competing at the same weight.
+    is drawn sets the product name beside or under it, so the mark on its own is the half that
+    belongs there.
     """
     icon = chat_ui_dir() / "src" / "components" / "icons" / "langgraph.tsx"
     if not icon.is_file():
@@ -524,8 +535,9 @@ def patch_logo_mark() -> None:
         return
     text = icon.read_text(encoding="utf-8")
     if text.count(LOGO_VIEWBOX_OLD) != 1:
-        say(TAG, f"warning: {icon} is not the shape expected; left the LangChain wordmark in "
-                 "the logo, competing with the product name. Missing anchor:")
+        say(TAG, f"warning: {icon} is not the shape expected; left the logo uncropped, so "
+                 "it draws the wordmark as well as the mark. Narrow the viewBox by hand to "
+                 "crop it. Missing anchor:")
         print(LOGO_VIEWBOX_OLD)
         return
     icon.write_text(text.replace(LOGO_VIEWBOX_OLD, LOGO_VIEWBOX_NEW), encoding="utf-8")
@@ -599,8 +611,8 @@ GITHUB_LINK_EDITS = [
 
 
 def patch_github_link() -> None:
-    """Drop the link to upstream's own repo from the header. It points at the chat client
-    rather than at this agent, so to a user here it is a link to someone else's project.
+    """Drop the header link to the agent-chat-ui repo, which points at the chat client
+    rather than at this agent.
     """
     thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
     if not thread.is_file():
@@ -1364,12 +1376,11 @@ def patch_thread_search() -> None:
     say(TAG, "narrowed the chat UI's thread search to the fields the sidebar renders")
 
 
-# `stream.stop()` aborts the client's fetch and nothing else — `StreamManager.stop`
-# (ui/manager.js) calls `abortRef.abort()` and fires `onStop`, with no call to the runs
-# cancel endpoint. The server's own default for a dropped stream is `on_disconnect:
+# `stream.stop()` aborts the client's own fetch and nothing else: it does not call the
+# runs cancel endpoint. The server's default for a dropped stream is `on_disconnect:
 # "continue"`, so pressing stop leaves the run executing, the thread `busy`, and every
-# later turn on that thread queued behind a run the user believes they killed. That is
-# what hid the missing ROOT_TIMEOUT: a hung model call read as "the UI is stuck".
+# later turn on that thread queued behind a run the user believes they killed — which
+# also makes any server-side stall look like a stuck UI.
 #
 # `onDisconnect` is a per-submit option, not a hook-level one, so it goes on each
 # `stream.submit` call rather than on `useTypedStream`.
@@ -1587,12 +1598,12 @@ def install_node() -> None:
     """Offer the install, or die naming one. Only ever called with node missing or too old.
 
     Installing is offered only through a package manager the machine already has, and only
-    with a yes. That is the line rather than squeamishness about runtimes: `brew install
-    node` puts node on the PATH of *future* processes, which is what `dev.py` and the
-    user's next shell need, while a tarball this script downloaded and unpacked itself
-    would be visible to this process alone — the UI would install and then vanish. Windows
-    has no equivalent one-liner: the nodejs.org .msi wants administrator rights, which is
-    exactly what a managed laptop withholds, and fnm needs a shell hook after installing.
+    with a yes. That is where the line falls for a practical reason: `brew install node`
+    puts node on the PATH of *future* processes, which is what `dev.py` and the user's next
+    shell need, while a tarball this script downloaded and unpacked itself would be visible
+    to this process alone — the UI would install and then vanish. Windows has no equivalent
+    one-liner: the nodejs.org .msi wants administrator rights, which a managed machine may
+    not grant, and fnm needs a shell hook after installing.
     So the per-user managers below are named rather than run, which is the difference
     between "add the UI later" and "cannot".
     """

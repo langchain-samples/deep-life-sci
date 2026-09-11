@@ -1,37 +1,16 @@
 """LLM-as-judge against the per-example rubric.
 
-The programmatic evaluators cover what can be checked mechanically: citations resolve,
-artifacts exist, the trajectory was code-orchestrated, context stayed inside budget. What
-none of them can see is whether the answer is *good* — and for this agent "good" has a
-specific, repeated shape that the rubrics encode:
+The programmatic evaluators check what is mechanical: citations resolve, artifacts exist,
+context stayed in budget. This one checks whether the answer is *good*, against the
+one-line `rubric` each seed row carries.
 
-    - report the denominator, not just the statistic
-    - say how many papers didn't address the question at all
-    - flag retractions rather than quietly dropping the paper
-    - distinguish what a study did from what it cites others as having done
+The verdict is boolean because a graded 0-1 score invited the judge to split the
+difference — a four-clause rubric came back 0.75 with no way to tell which clause failed.
+Forcing the choice puts that in `comment` and makes the aggregate a pass rate.
 
-Those are the failure modes that produce a confident, fluent, wrong answer. Each seed row
-carries a one-line `rubric` naming the one that matters for it.
-
-The verdict is a boolean, matching how the rubrics are already written ("Pass if every
-year 2015-2025 is reported... Fail if activation is called converged"). A graded 0-1 score
-invited the judge to split the difference — a rubric with four clauses came back as 0.75
-with no way to tell which clause was the one that failed, and a fluent answer that missed
-the single thing the rubric asked for still cleared 0.6. Forcing the choice puts that
-information in `comment`, where it names the failing clause, and makes the aggregate a
-pass rate rather than an average of soft judgements.
-
-It grades the answer text plus the names of the artifacts the run published — not the
-artifacts themselves, which stay out of the payload for the same reason the root never
-reads them back. The names are enough for the one thing the text cannot settle: whether a
-deliverable the rubric asked for exists. See `rubric_judge` for what went wrong without
-them.
-
-The judge has its own model (`models.py:judge_model`), configured independently of the
-profile under test. It is a single-turn call over a short payload, so a cheap model at low
-effort keeps a full sweep affordable enough to run on every prompt change — but the reason
-it is pinned rather than following the profile is that a sweep compares profiles, and a
-grader that changed with them would move the yardstick along with what it measures.
+The judge has its own model (`models.py:judge_model`), pinned rather than following the
+profile under test: a sweep compares profiles, and a grader that moved with them would
+move the yardstick along with what it measures.
 """
 
 from __future__ import annotations
@@ -76,12 +55,10 @@ Reply with JSON only: {{"pass": true|false, "reason": "<one sentence>"}}
 
 
 def _as_bool(value) -> bool:
-    """Coerce the judge's verdict, rejecting anything that isn't unambiguously a verdict.
+    """Coerce the judge's verdict; only a bool or the two string spellings of one.
 
-    Only a real bool or the two string spellings of one are accepted. A number is not:
-    `0.75` from a judge still reaching for partial credit must land in the unparseable
-    branch below, because silently reading it as `True` would restore exactly the
-    split-the-difference grading this evaluator is boolean to avoid.
+    A number is not: `0.75` must land in the unparseable branch below, since reading it as
+    `True` would restore the split-the-difference grading this evaluator exists to avoid.
     """
     if isinstance(value, bool):
         return value
@@ -96,13 +73,8 @@ async def rubric_judge(run, example) -> dict:
     rubric = (example.outputs or {}).get("rubric") or ""
     answer = (run.outputs or {}).get("answer") or ""
     question = (example.inputs or {}).get("question") or ""
-    # The judge is told what reached `/workspace/out` because a rubric that asks for a
-    # deliverable is otherwise unverifiable from where it sits, and it does not abstain —
-    # it infers. On 2026-09-01 `hpa-ras-isoform-tissue-heatmap` published a `chart`,
-    # scored 1.0 on `produced_expected_artifacts`, named all three tissues correctly, and
-    # was still failed by this evaluator "because it does not actually provide a heatmap
-    # image as required". Two evaluators contradicting each other on one run is the
-    # signature of a grader reasoning about a field it was never shown.
+    # Names only, not the artifacts themselves. Without them the judge does not abstain —
+    # it infers, and has failed runs that published exactly the chart the rubric asked for.
     artifacts = [n for n in ((run.outputs or {}).get("artifact_names") or []) if n]
 
     if not rubric:
@@ -128,8 +100,7 @@ async def rubric_judge(run, example) -> dict:
             "comment": str(verdict.get("reason", "")),
         }
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        # A judge that fails to parse must not silently score False — that is
-        # indistinguishable from a genuinely bad answer and would corrupt the aggregate.
+        # Never score False on a parse failure: indistinguishable from a bad answer.
         return {
             "key": "rubric",
             "score": None,

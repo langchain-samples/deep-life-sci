@@ -13,9 +13,10 @@ with the feature simply absent and nothing saying so.
 
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere.
 
-Setup also runs `npm ci` in `ui/`, whose components the *graph server* bundles. Without those
-deps the bundler logs `Could not resolve "xlsx"`, answers `/ui/<graph>/entrypoint.js` with a
-200 anyway, and the component is silently absent.
+Setup also runs `npm ci` in `ui/`, whose components the *graph server* bundles. Check the
+bundler output when a component does not render: a missing dep there shows up as `Could not
+resolve "xlsx"` while `/ui/<graph>/entrypoint.js` still answers 200, so the component is
+simply absent with nothing else saying so.
 
 `.dockerignore` must keep excluding `.chat-ui` — `langgraph build`'s context is the repo root,
 so an unignored clone ships a dev-only Next app in the deploy image. Its comments list what
