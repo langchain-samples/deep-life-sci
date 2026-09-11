@@ -9,10 +9,10 @@ side carrying the `/ui/*` rewrite that lets artifact components load at all (see
 same-origin invariant in CLAUDE.md). Running only one gets you an API with no window, or a
 window pointed at nothing.
 
-A server already serving on its port is left alone and reused, so this is safe to run
-alongside a `langgraph dev` you started yourself. Only what this script starts is what it
-stops — including the wedged case: a server that holds its port without answering is
-reported, never killed, because it is not ours to kill.
+A server already serving on its port is reused unless you say to stop it: what is holding
+the port is named, with the directory it is running from, and killing it is offered. With
+no tty to answer the prompt, reuse is what happens — so a CI job or a backgrounded launch
+still gets the old behaviour of never stopping what this script did not start.
 
 Python rather than bash because this is the one command Windows users cannot avoid, and
 the three things it needs — a port check, a browser, and killing a process tree on Ctrl-C —
@@ -155,6 +155,91 @@ def _raise_interrupt(signum: int, frame: object) -> None:
     raise KeyboardInterrupt
 
 
+def _ask(question: str, *, default: bool = False) -> bool:
+    """A yes/no prompt that answers itself when nobody is there.
+
+    `False` without a tty, whatever the default: killing a server nobody was asked about
+    is the one outcome this must never produce on its own.
+    """
+    if not sys.stdin.isatty():
+        return False
+    hint = "[Y/n]" if default else "[y/N]"
+    answer = input(f"[dev] {question} {hint} ").strip().lower()
+    return default if not answer else answer.startswith("y")
+
+
+def _port_holder(port: int) -> tuple[int, str] | None:
+    """The pid and working directory of whatever is listening on `port`.
+
+    The directory is what a port number cannot tell you: which checkout this server came
+    from. `lsof` is absent on Windows, so the answer is `None` there and the caller reuses,
+    which is what every platform did before.
+    """
+    if WINDOWS or not tool("lsof"):
+        return None
+    listeners = subprocess.run(
+        ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+        capture_output=True, text=True, check=False,
+    ).stdout.split()
+    if not listeners:
+        return None
+    pid = int(listeners[0])
+    # -Fn is the parseable form: one `n`-prefixed line carrying the path.
+    fields = subprocess.run(
+        ["lsof", "-a", "-d", "cwd", "-p", str(pid), "-Fn"],
+        capture_output=True, text=True, check=False,
+    ).stdout
+    cwd = next((line[1:] for line in fields.splitlines() if line.startswith("n")), "")
+    return pid, cwd
+
+
+def _kill_holder(port: int, pid: int) -> bool:
+    """Stop the process holding `port`. True once the port is free.
+
+    The process *group*, for the reason `stop_all` gives: a `pnpm` reaped on its own leaves
+    `next dev` behind it still holding :3000, and an orphan is exactly what the next launch
+    adopts. Falls back to the bare pid when the group cannot be read.
+    """
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(pid), sig)
+        except (OSError, ProcessLookupError):
+            with contextlib.suppress(OSError, ProcessLookupError):
+                os.kill(pid, sig)
+        for _ in range(40):
+            if not listening(port):
+                say("dev", f"stopped pid {pid}; :{port} is free")
+                return True
+            time.sleep(0.25)
+    say("dev", f"warning: :{port} is still held after SIGKILL — reusing it")
+    return False
+
+
+def _take_over(port: int, label: str, healthy: bool, kill_hint: str) -> bool:
+    """Whether to start our own `label` on `port`. False means reuse what is there."""
+    holder = _port_holder(port)
+    if holder:
+        say("dev", f":{port} is held by pid {holder[0]}"
+                   + (f" in {holder[1]}" if holder[1] else ""))
+
+    if not healthy:
+        # A wedged server cannot be reused at all, so the only question is who stops it.
+        say("dev", f":{port} is held by a server that is not responding.")
+        if (
+            holder
+            and _ask(f"kill pid {holder[0]} and start a fresh {label}?", default=True)
+            and _kill_holder(port, holder[0])
+        ):
+            return True
+        die("dev", f"stop it and run this again:  {kill_hint}")
+
+    if not holder:
+        return False
+    if not _ask(f"kill it and start {label} from this checkout?"):
+        return False
+    return _kill_holder(port, holder[0])
+
+
 def main() -> int:
     require_setup("dev")
     ui_dir = chat_ui_dir()
@@ -188,16 +273,16 @@ def main() -> int:
             say("dev", f"warning: still unpatched ({', '.join(still_missing)}); "
                        "starting anyway — see the messages above.")
 
-    if listening(2024):
-        # Reused only if it *answers*. `langgraph dev` can wedge — bound to the port, alive
-        # in the process table, serving nothing — and a port check adopts that as a working
-        # server: every request from the chat UI then hangs, so the window shows its
-        # thinking indicator forever with no error to explain it. Not killed, because this
-        # script stops only what it started and :2024 may be a server of yours.
-        if not answering(2024):
-            say("dev", ":2024 is held by a server that is not responding.")
-            die("dev", 'stop it and run this again:  pkill -f "langgraph dev"   '
-                       '(add -9 if it survives; Windows: taskkill /F /IM langgraph.exe)')
+    # Reused only if it *answers*. `langgraph dev` can wedge — bound to the port, alive in
+    # the process table, serving nothing — and a port check adopts that as a working
+    # server: every request from the chat UI then hangs, so the window shows its thinking
+    # indicator forever with no error to explain it. `_take_over` asks before stopping
+    # anything, so a :2024 of your own still survives a run of this.
+    if listening(2024) and not _take_over(
+        2024, "the agent server", answering(2024),
+        'pkill -f "langgraph dev"   '
+        '(add -9 if it survives; Windows: taskkill /F /IM langgraph.exe)',
+    ):
         say("dev", ":2024 already serving — reusing it")
     else:
         # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies
@@ -216,17 +301,17 @@ def main() -> int:
              "--no-browser", "--n-jobs-per-worker", "5"],
         )
 
-    if listening(3000):
-        # Same wedge, same rule as :2024 above — `next dev` can end up bound to the port
-        # and answering nothing, and adopting that paints a window that never fills in. No
-        # /ok here, so the root document is the liveness check, and it gets longer than the
-        # default timeout: Next compiles that route on first request, so a healthy but cold
-        # server can take well over 5s, and calling it dead sends the user off to kill a
-        # server that was about to work.
-        if not answering(3000, path="/", timeout=20.0):
-            say("dev", ":3000 is held by a server that is not responding.")
-            die("dev", "stop it and run this again:  lsof -ti tcp:3000 | xargs kill   "
-                       "(add -9 if it survives; Windows: npx kill-port 3000)")
+    # Same wedge, same rule as :2024 above — `next dev` can end up bound to the port and
+    # answering nothing, and adopting that paints a window that never fills in. No /ok
+    # here, so the root document is the liveness check, and it gets longer than the default
+    # timeout: Next compiles that route on first request, so a healthy but cold server can
+    # take well over 5s, and calling it dead sends the user off to kill a server that was
+    # about to work.
+    if listening(3000) and not _take_over(
+        3000, "the chat UI", answering(3000, path="/", timeout=20.0),
+        "lsof -ti tcp:3000 | xargs kill   "
+        "(add -9 if it survives; Windows: npx kill-port 3000)",
+    ):
         say("dev", ":3000 already serving — reusing it")
         if not os.environ.get("NO_BROWSER"):
             webbrowser.open(UI_URL)
