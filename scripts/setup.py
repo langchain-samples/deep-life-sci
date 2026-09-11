@@ -312,6 +312,14 @@ HOME_HEADING_NEW = '<div className="flex flex-col items-center gap-3">'
 LOGO_VIEWBOX_OLD = 'viewBox="0 0 3000 554"'
 LOGO_VIEWBOX_NEW = 'viewBox="0 0 488 488"'
 
+# The composer's attach label. Defined up here because `PATCH_MARKS` marks on it; the patch
+# itself is `patch_attach_label`, which is separate from `patch_uploads` because that one only
+# runs from the upstream baseline and early-outs on a clone already carrying its mark — a
+# rename folded into it would never reach one. Both prior wordings are accepted so every clone
+# converges on the same label.
+ATTACH_LABEL_BASELINES = ("Attach a file", "Upload PDF or Image")
+ATTACH_LABEL = "Attach files"
+
 # The header logo, sized to the icons it sits between. Cropping the viewBox turned what was a
 # 32px-wide smudge into a 32px *square* mark, which then towered over the 20px panel toggle on
 # one side and the name on the other. Its own patch rather than part of `patch_logo_mark`:
@@ -362,6 +370,7 @@ PATCH_MARKS = {
     "flask": ("src/components/thread/index.tsx", "FlaskSVG", True),
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
     "uploads": ("src/hooks/use-file-upload.tsx", "isSupportedUpload", True),
+    "attach-label": ("src/components/thread/index.tsx", ATTACH_LABEL, True),
     "upload-kinds": ("src/lib/multimodal-utils.ts", "isSandboxUpload", True),
     "progress-events": ("src/providers/Stream.tsx", "isProgressEvent", True),
     "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
@@ -402,6 +411,7 @@ def apply_patches() -> None:
     patch_flask()
     patch_empty_ai_turns()
     patch_uploads()
+    patch_attach_label()
     patch_upload_kinds()
     patch_progress_events()
     patch_progress_row()
@@ -1075,6 +1085,24 @@ UPLOAD_KIND_EDITS = [
         "  // any accepted upload — transport for the graph rather than model context\n",
     ),
 ]
+
+
+def patch_attach_label() -> None:
+    """Say `Attach files`, plural: the input is `multiple` and the agent reads a whole set."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("attach-label"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    baseline = next((b for b in ATTACH_LABEL_BASELINES if text.count(b) == 1), None)
+    if baseline is None:
+        say(TAG, f"warning: {thread} is not the shape expected; left the composer's attach "
+                 "label alone. Missing anchor:")
+        print(ATTACH_LABEL_BASELINES[0])
+        return
+    thread.write_text(text.replace(baseline, ATTACH_LABEL), encoding="utf-8")
+    say(TAG, f"renamed the composer's attach label to {ATTACH_LABEL!r}")
 
 
 def patch_upload_kinds() -> None:
