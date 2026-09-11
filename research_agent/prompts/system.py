@@ -668,8 +668,12 @@ sidecar holds a figure's caption but not the figure, so a question about what a 
 gel or blot actually shows is a `figure-analyst` job, exactly as `[image]` below. When
 the listing says the PDF is scanned, those images are the only readable form of it.
 
-**`[chem]`** — a compound set. The sidecar has name, canonical SMILES, formula and weight
-per molecule; rdkit is installed for anything more (descriptors, fingerprints, depiction).
+**`[chem]`** — a compound set. The listing describes what the file states: how many
+records, their titles, and an SDF's property columns. Structure is not parsed for you —
+rdkit is installed, so read the file with it when you need formulas, weights, SMILES,
+descriptors, fingerprints or depiction, and print what you need rather than dumping a
+table. A `.smi` is the exception: its SMILES are in the sidecar already.
+
 The literature and registry hook is the compound *name*: search PubMed and
 ClinicalTrials.gov per compound, and fan out exactly as you would over papers.
 

@@ -46,6 +46,7 @@ from research_agent.sandbox import (
     boot,
     find_snapshot,
     provision,
+    warm,
 )
 from research_agent.sources import cache_io
 
@@ -66,7 +67,12 @@ def _sandbox_name(thread_id: str) -> str:
 
 
 def _acquire(thread_id: str):
-    """Return this thread's sandbox, rebooting it if the TTL already reaped it."""
+    """Return this thread's sandbox, rebooting it if the TTL already reaped it.
+
+    Warms a container that is cold before handing it back — the imports run inside it
+    while this process is still assembling the graph, so the run's first real command
+    finds the libraries already faulted in. See `sandbox.warm` for the measurements.
+    """
     name = _sandbox_names.get(thread_id) or _sandbox_name(thread_id)
 
     try:
@@ -74,6 +80,7 @@ def _acquire(thread_id: str):
     except Exception:  # noqa: BLE001 - absent, expired, or never created
         sandbox = None
 
+    cold = True
     if sandbox is None:
         snapshot = find_snapshot(_client)
         sandbox = boot(_client, snapshot, name)
@@ -84,6 +91,17 @@ def _acquire(thread_id: str):
                 "runtime. Run `uv run scripts/build_snapshot.py` once to skip this."
             )
             provision(sandbox)
+            # The install just wrote those files, so they are already in the page cache.
+            cold = False
+    else:
+        # `idle_ttl_seconds` stops a quiet container rather than deleting it, and a stop
+        # takes its RAM with it: a restarted container re-faults what it had. Measured at
+        # 3.7s against 1.0s for the same import in a container that stayed up, so a
+        # returning thread is worth warming too.
+        cold = getattr(sandbox, "status", "") == "stopped"
+
+    if cold:
+        warm(sandbox)
 
     _sandbox_names[thread_id] = name
     return sandbox

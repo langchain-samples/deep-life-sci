@@ -5,12 +5,27 @@ over a heredoc. That is why it imports nothing from `research_agent` and takes i
 configuration from the environment: there is no package here, only an interpreter and the
 libraries `scripts/build_snapshot.py` baked in.
 
-It exists because **the reader has to live where the library lives**. pandas, pypdf, rdkit
-and biopython are in the sandbox image and deliberately not in the host's dependency set —
-this repo's host half talks to NCBI and nothing else. Probing where the file already sits
-also means a file this script parses is a file the agent's own code can open, which is the
-property worth having: a shape in the manifest that pandas cannot reproduce would be worse
-than no shape at all.
+It runs there because that is where the file is: the bytes live in the container, the
+host's dependency set deliberately holds no readers (this repo's host half talks to NCBI
+and nothing else), and a shape in the manifest is worth having only if the agent's own
+code can reproduce it.
+
+**It reads with the standard library wherever the standard library can.** Not for
+elegance — for latency. This runs before the first model call of a turn, so every
+millisecond of it is dead air in front of the user's first token, and in a fresh
+container an `import` is not a few milliseconds. A snapshot's rootfs is restored lazily,
+so the first import of a library pays for fetching it: rdkit 7.4-10.9s, pandas
+2.3-11.5s, against 0.99s for a stdlib-only interpreter and ~1s for either of them once
+faulted in (see `sandbox.WARMUP`, which starts that faulting in the background so the
+*agent's* first `execute` does not pay it either). pandas, rdkit and biopython are
+therefore not imported here at all, and what they were doing — dtypes, canonical SMILES,
+descriptors — is left to the agent, which has the whole sandbox and a visible progress
+line by the time it wants them.
+
+Two libraries stay, because a stdlib substitute would be a worse parser rather than a
+cheaper one, and both are cheap: pypdf (1.93s cold) for a PDF's text layer, and PIL
+(2.03s) for an image a header parse does not recognise and for a PDF's embedded figures.
+Both are reached only by the upload kind that needs them.
 
 Output is one JSON object per line on stdout, one per file, and **nothing else** —
 `uploads.py:_parse_lines` keeps the lines that start with `{` and drops the rest, so a
@@ -34,12 +49,16 @@ rather than write code against a shape that does not exist.
 
 from __future__ import annotations
 
+import csv
 import gzip
 import io
 import json
 import os
 import re
+import struct
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = os.environ.get("UPLOADS_ROOT", "/workspace/uploads")
 DERIVED = os.environ.get("UPLOADS_DERIVED", ROOT + "/derived")
@@ -120,54 +139,178 @@ def cap_ids(values: list[str], record: dict, key: str) -> None:
 # -- tabular -------------------------------------------------------------------------
 
 
-def probe_tabular(path: str, suffix: str, record: dict) -> None:
-    """Rows, columns and sheet names, read with the same pandas the agent will use."""
-    import pandas as pd
-
-    frame = None
-    if suffix in (".xlsx", ".xlsm"):
-        sheets = pd.read_excel(path, sheet_name=None)
-        record["sheets"] = [str(s) for s in sheets]
-        frame = next(iter(sheets.values())) if sheets else None
-    else:
-        # `sep=None` asks pandas to sniff, which needs the Python engine. Worth it for
-        # `.txt`, where the separator is whatever the tool that wrote it happened to use.
-        sep = {".tsv": "\t", ".csv": ","}.get(suffix)
-        if sep is None:
-            frame = pd.read_csv(path, sep=None, engine="python")
-        else:
-            frame = pd.read_csv(path, sep=sep)
-    if frame is None:
-        return
-    record["rows"] = int(frame.shape[0])
-    columns = [str(c) for c in frame.columns]
+def set_columns(record: dict, columns: list[str]) -> None:
+    """Put a bounded column list in the record and say how many were left out."""
     record["columns"] = columns[:MAX_COLS]
     if len(columns) > MAX_COLS:
         record["more_columns"] = len(columns) - MAX_COLS
 
 
+def delimiter_for(sample: str, suffix: str) -> str:
+    """The separator, named by the suffix where the suffix means it.
+
+    Only `.txt` genuinely needs sniffing — a tool wrote it with whatever it liked — and
+    `csv.Sniffer` is what pandas' `sep=None` used to do here. Its failure mode is an
+    exception on a file with no consistent delimiter, which a one-column file is, so the
+    fallback counts the two candidates instead of guessing.
+    """
+    known = {".csv": ",", ".tsv": "\t"}.get(suffix)
+    if known:
+        return known
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",\t;|").delimiter
+    except csv.Error:
+        return "\t" if sample.count("\t") > sample.count(",") else ","
+
+
+def probe_delimited(path: str, suffix: str, record: dict) -> None:
+    """Rows and column names out of a CSV/TSV, counted with `csv` rather than pandas.
+
+    `csv.reader` rather than counting newlines because a quoted field may contain one,
+    and a row count that disagrees with what the agent's own `read_csv` reports is worse
+    than no row count. The header row is excluded from the count, as `DataFrame.shape`
+    did.
+    """
+    with open_text(path) as handle:
+        sample = handle.read(64 * 1024)
+    if not sample.strip():
+        record["rows"] = 0
+        record["note"] = "the file is empty"
+        return
+
+    delimiter = delimiter_for(sample, suffix)
+    with open_text(path) as handle:
+        reader = csv.reader(handle, delimiter=delimiter)
+        header = next(reader, [])
+        record["rows"] = sum(1 for _ in reader)
+    set_columns(record, [str(column).strip() for column in header])
+
+
+_SPREADSHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_PACKAGE_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def sheet_text(cell, shared: list[str]) -> str:
+    """One cell's displayed text. Shared, inline or literal — the three a header uses."""
+    if cell.get("t") == "s":
+        value = cell.findtext(_SPREADSHEET_NS + "v") or ""
+        index = int(value) if value.isdigit() else -1
+        return shared[index] if 0 <= index < len(shared) else ""
+    if cell.get("t") == "inlineStr":
+        inline = cell.find(_SPREADSHEET_NS + "is")
+        return "".join(inline.itertext()).strip() if inline is not None else ""
+    return (cell.findtext(_SPREADSHEET_NS + "v") or "").strip()
+
+
+def probe_workbook(path: str, record: dict) -> None:
+    """Sheet names, and the first sheet's shape and header, read out of the zip.
+
+    An `.xlsx` is a zip of XML, so this needs no reader beyond `zipfile` — which matters
+    because the alternative was pandas, and pandas is 2-11s of cold import for a row
+    count. Only the first sheet is described, as before: `sheet_name=None` loaded every
+    sheet in the workbook to report the shape of one.
+    """
+    with zipfile.ZipFile(path) as book:
+        workbook = ET.fromstring(book.read("xl/workbook.xml"))
+        sheets = list(workbook.iter(_SPREADSHEET_NS + "sheet"))
+        record["sheets"] = [sheet.get("name") or "" for sheet in sheets]
+        if not sheets:
+            record["note"] = "the workbook has no sheets"
+            return
+
+        # The sheet element names its part by relationship id, not by path. sheet1.xml is
+        # the conventional name but nothing requires it, and a workbook whose first sheet
+        # was deleted and re-added has them out of order.
+        relationships = ET.fromstring(book.read("xl/_rels/workbook.xml.rels"))
+        targets = {node.get("Id"): node.get("Target") or "" for node in relationships}
+        target = targets.get(sheets[0].get(_PACKAGE_NS + "id") or "", "worksheets/sheet1.xml")
+        part = "xl/" + target.lstrip("/").removeprefix("xl/")
+
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in book.namelist():
+            table = ET.fromstring(book.read("xl/sharedStrings.xml"))
+            shared = ["".join(item.itertext()) for item in table.iter(_SPREADSHEET_NS + "si")]
+
+        header: list[str] = []
+        rows = 0
+        with book.open(part) as sheet:
+            # Streamed: a sheet is the one part of a workbook that can be tens of MB, and
+            # all this needs from it is the first row and how many there are.
+            for _, element in ET.iterparse(sheet, events=("end",)):
+                if element.tag == _SPREADSHEET_NS + "row":
+                    rows += 1
+                    if rows == 1:
+                        header = [
+                            sheet_text(cell, shared)
+                            for cell in element.iter(_SPREADSHEET_NS + "c")
+                        ]
+                    element.clear()
+
+    record["rows"] = max(0, rows - 1)
+    set_columns(record, [column.strip() for column in header])
+
+
+def probe_tabular(path: str, suffix: str, record: dict) -> None:
+    """Rows, columns and sheet names. Dispatch only — the two formats share nothing."""
+    if suffix in (".xlsx", ".xlsm"):
+        probe_workbook(path, record)
+    else:
+        probe_delimited(path, suffix, record)
+
+
 # -- citations -----------------------------------------------------------------------
+
+
+_MEDLINE_TAG = re.compile(r"^([A-Z][A-Z0-9]{1,3})\s*- ?(.*)$")
+
+
+def medline_entries(text: str) -> list[dict[str, list[str]]]:
+    """Split Medline text into tag -> values. Every tag repeats, so every value is a list.
+
+    Hand-parsed rather than with `Bio.Medline`, which costs 2.4s of cold import in a
+    fresh container for a grammar that is one tag per line: `TAG- value`, continuation
+    lines indented, a blank line between records.
+    """
+    entries: list[dict[str, list[str]]] = []
+    current: dict[str, list[str]] = {}
+    last: str | None = None
+
+    for line in text.splitlines():
+        if not line.strip():
+            if current:
+                entries.append(current)
+                current, last = {}, None
+            continue
+        if found := _MEDLINE_TAG.match(line):
+            last = found.group(1)
+            current.setdefault(last, []).append(found.group(2).strip())
+        elif last and current.get(last):
+            # A wrapped title or abstract. Joined with a space, which is what the line
+            # break stood for.
+            current[last][-1] = f"{current[last][-1]} {line.strip()}".strip()
+
+    if current:
+        entries.append(current)
+    return entries
 
 
 def parse_medline(text: str) -> list[dict]:
     """`.nbib` — PubMed's own export, which is Medline with a different extension."""
-    from Bio import Medline
-
     references = []
-    for entry in Medline.parse(io.StringIO(text)):
+    for entry in medline_entries(text):
         doi = ""
-        for candidate in [*(entry.get("AID") or []), entry.get("LID", "")]:
+        for candidate in [*entry.get("AID", []), *entry.get("LID", [])]:
             if "[doi]" in candidate.lower() and (found := DOI.search(candidate)):
                 doi = found.group(0)
                 break
         references.append(
             {
-                "pmid": str(entry.get("PMID") or ""),
+                "pmid": next(iter(entry.get("PMID", [])), ""),
                 "doi": doi,
-                "title": str(entry.get("TI") or ""),
-                "journal": str(entry.get("TA") or entry.get("JT") or ""),
-                "year": (str(entry.get("DP") or "")[:4]),
-                "authors": list(entry.get("AU") or [])[:3],
+                "title": next(iter(entry.get("TI", [])), ""),
+                "journal": next(iter(entry.get("TA", []) or entry.get("JT", [])), ""),
+                "year": next(iter(entry.get("DP", [])), "")[:4],
+                "authors": entry.get("AU", [])[:3],
             }
         )
     return references
@@ -335,8 +478,8 @@ def parse_id_list(text: str) -> list[dict]:
 def looks_like_id_list(text: str) -> bool:
     """Whether a `.txt` is a citation list rather than a delimited table.
 
-    Checked before the tabular reader, because pandas will happily read a column of
-    PMIDs as a one-column frame and the manifest would then describe a spreadsheet.
+    Checked before the tabular reader, which will happily read a column of PMIDs as a
+    one-column table and leave the manifest describing a spreadsheet.
     """
     lines = [line.strip() for line in text.splitlines()[:200] if line.strip()]
     if not lines:
@@ -498,74 +641,110 @@ def probe_pdf(path: str, record: dict, name: str) -> None:
 # -- chemistry -----------------------------------------------------------------------
 
 
+_SDF_PROPERTY = re.compile(r"^>\s*<(.+?)>")
+
+
+def molfile_atoms(lines: list[str]) -> int | None:
+    """Atom count off a molfile's counts line, which is line 4 of every record.
+
+    V2000 fixed-width (`aaabbb`), or the `M  V30 COUNTS` line a V3000 record uses
+    instead. `None` when the file is not a molfile at all, which is what the caller
+    reports rather than guessing at.
+    """
+    if len(lines) < 4:
+        return None
+    counts = lines[3]
+    if "V3000" in counts.upper():
+        for line in lines[4:16]:
+            if "COUNTS" in line.upper():
+                fields = line.split()
+                if len(fields) >= 4 and fields[3].isdigit():
+                    return int(fields[3])
+        return None
+    try:
+        return int(counts[0:3])
+    except ValueError:
+        return None
+
+
+def sdf_records(path: str):
+    """Yield each record of an SDF (or the single record of a `.mol`) as its lines."""
+    block: list[str] = []
+    with open_text(path) as handle:
+        for line in handle:
+            if line.startswith("$$$$"):
+                yield block
+                block = []
+            else:
+                block.append(line.rstrip("\n"))
+    if any(line.strip() for line in block):
+        yield block
+
+
 def probe_chem(path: str, suffix: str, record: dict, name: str) -> None:
-    """Molecules, canonical SMILES and the two descriptors worth having up front."""
-    from rdkit import Chem, RDLogger
-    from rdkit.Chem import Descriptors
+    """Counts, titles and the SDF property columns. Structure is left to rdkit.
 
-    # rdkit narrates every parse failure to stderr. That is noise here — the counts below
-    # are the report, and `_parse_lines` would drop the lines anyway.
-    RDLogger.DisableLog("rdApp.*")
-
-    molecules = []
-    failed = 0
-    if suffix == ".mol":
-        molecules = [Chem.MolFromMolFile(path)]
-    elif suffix == ".sdf":
-        opener = gzip.open if path.lower().endswith(".gz") else open
-        with opener(path, "rb") as handle:
-            molecules = list(Chem.ForwardSDMolSupplier(handle))
-    else:
-        # `.smi`/`.smiles`: SMILES first, optional name second, whitespace-separated.
-        # Read by hand rather than with SmilesMolSupplier so the name column survives a
-        # file with no header and so a bad line is counted instead of ending the read.
-        with open_text(path) as text_handle:
-            for line in text_handle:
+    What used to be here — canonical SMILES, formula, molecular weight — cost 7-11s of
+    cold rdkit import in front of the user's first token, every time, to describe a file
+    the agent can open itself in a fraction of that once the container is warm. So the
+    manifest now carries what the file *says* (how many records, what they are called,
+    which property columns they have) and the prompt sends the agent to rdkit for what
+    the file only *implies*. A `.smi` is the exception and needs no library at all: its
+    SMILES are the file.
+    """
+    if suffix in (".smi", ".smiles"):
+        rows = []
+        with open_text(path) as handle:
+            for line in handle:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                parts = line.split(None, 1)
-                mol = Chem.MolFromSmiles(parts[0])
-                if mol is None:
-                    failed += 1
-                    continue
-                if len(parts) > 1:
-                    mol.SetProp("_Name", parts[1].strip())
-                molecules.append(mol)
-
-    parsed = [m for m in molecules if m is not None]
-    failed += len(molecules) - len(parsed)
-    record["molecules"] = len(parsed)
-    if failed:
-        record["unparsed"] = failed
-    if not parsed:
-        record["note"] = "no molecules could be parsed out of this file"
+                fields = line.split(None, 1)
+                rows.append(
+                    {
+                        "name": (fields[1].strip() if len(fields) > 1 else "")
+                        or f"mol_{len(rows) + 1}",
+                        "smiles": fields[0],
+                    }
+                )
+        record["molecules"] = len(rows)
+        if not rows:
+            record["note"] = "no SMILES lines could be read out of this file"
+            return
+        record["mols_path"] = write_sidecar(name + ".mols.json", rows)
+        record["samples"] = [
+            {"name": row["name"], "smiles": row["smiles"][:80]} for row in rows[:MAX_ITEMS]
+        ]
         return
 
-    rows = []
-    for index, mol in enumerate(parsed):
-        title = (mol.GetProp("_Name") if mol.HasProp("_Name") else "").strip()
-        rows.append(
-            {
-                "name": title or f"mol_{index + 1}",
-                "smiles": Chem.MolToSmiles(mol),
-                "formula": Chem.rdMolDescriptors.CalcMolFormula(mol),
-                "mw": round(Descriptors.MolWt(mol), 2),
-            }
-        )
-    record["mols_path"] = write_sidecar(name + ".mols.json", rows)
-    # Formula and weight rather than SMILES: a sample line here is prompt text, and one
-    # SMILES for a kinase inhibitor is 80 characters that say nothing the sidecar does not.
-    record["samples"] = [
-        {"name": r["name"], "formula": r["formula"], "mw": r["mw"]} for r in rows[:MAX_ITEMS]
-    ]
+    titles: list[dict] = []
+    properties: set[str] = set()
+    molecules = unparsed = 0
+    for block in sdf_records(path):
+        atoms = molfile_atoms(block)
+        if atoms is None:
+            unparsed += 1
+            continue
+        molecules += 1
+        if len(titles) < MAX_ITEMS:
+            titles.append({"name": block[0].strip() or f"mol_{molecules}", "atoms": atoms})
+        # Capped at the first 50 records, as the rdkit version was: a PubChem download
+        # repeats the same 36 property tags in every one of them.
+        if molecules <= 50:
+            properties.update(
+                found.group(1) for line in block if (found := _SDF_PROPERTY.match(line))
+            )
 
-    # SDF property columns are where an assay result lives, and they are the reason to
-    # look at the file with pandas rather than only through rdkit. Capped hard: a PubChem
-    # download carries 36 of them, all provenance and none of them a measurement.
-    if properties := sorted({key for m in parsed[:50] for key in m.GetPropNames()}):
-        visible = [p for p in properties if not p.startswith("_")]
-        record["properties"] = visible[:MAX_ITEMS * 2]
+    record["molecules"] = molecules
+    if unparsed:
+        record["unparsed"] = unparsed
+    if not molecules:
+        record["note"] = "no molecule records could be read out of this file"
+        return
+
+    record["samples"] = titles
+    if visible := sorted(p for p in properties if not p.startswith("_")):
+        record["properties"] = visible[: MAX_ITEMS * 2]
         if len(visible) > MAX_ITEMS * 2:
             record["more_properties"] = len(visible) - MAX_ITEMS * 2
 
@@ -573,17 +752,44 @@ def probe_chem(path: str, suffix: str, record: dict, name: str) -> None:
 # -- sequences -----------------------------------------------------------------------
 
 
-def probe_sequence(path: str, suffix: str, record: dict, name: str) -> None:
-    """Ids, lengths and molecule type. Never the residues — those are what the file is for."""
+def parse_fasta(path: str) -> list[dict]:
+    """FASTA by hand: a `>` line is a record, everything to the next one is its residues.
+
+    The format is two rules, so this is cheaper than the 2.4s of cold `Bio.SeqIO` import
+    it replaces — and it streams, where `SeqIO.parse` held every residue of every record.
+    """
+    rows: list[dict] = []
+    for line in open_text(path):
+        if line.startswith(">"):
+            identifier, _, description = line[1:].strip().partition(" ")
+            rows.append(
+                {
+                    "id": identifier,
+                    "description": description.strip()[:160],
+                    "length": 0,
+                    "residues": "",
+                }
+            )
+        elif rows:
+            residues = "".join(line.split())
+            rows[-1]["length"] += len(residues)
+            if len(rows[-1]["residues"]) < 60:
+                rows[-1]["residues"] = (rows[-1]["residues"] + residues.upper())[:60]
+    return rows
+
+
+def parse_genbank(path: str) -> list[dict]:
+    """GenBank through biopython, which is the one sequence format worth 2.4s for.
+
+    Its grammar is a flat-file record with continuation rules per key, and a hand-parser
+    good enough for `DEFINITION` wrapping and the `ORIGIN` block would be a worse reader
+    than the library for a format a user attaches far less often than FASTA.
+    """
     from Bio import SeqIO
 
-    fmt = "genbank" if suffix in (".gb", ".gbk", ".genbank") else "fasta"
     rows = []
     with open_text(path) as handle:
-        for entry in SeqIO.parse(handle, fmt):
-            # biopython repeats the id at the head of `description` for FASTA, because
-            # that is literally the same `>` line. Dropping it keeps the sample lines
-            # from saying the accession twice.
+        for entry in SeqIO.parse(handle, "genbank"):
             description = entry.description
             if description.startswith(entry.id):
                 description = description[len(entry.id) :].strip()
@@ -595,6 +801,14 @@ def probe_sequence(path: str, suffix: str, record: dict, name: str) -> None:
                     "residues": str(entry.seq[:60]).upper(),
                 }
             )
+    return rows
+
+
+def probe_sequence(path: str, suffix: str, record: dict, name: str) -> None:
+    """Ids, lengths and molecule type. Never the residues — those are what the file is for."""
+    genbank = suffix in (".gb", ".gbk", ".genbank")
+    fmt = "genbank" if genbank else "fasta"
+    rows = parse_genbank(path) if genbank else parse_fasta(path)
     record["sequences"] = len(rows)
     if not rows:
         record["note"] = f"no {fmt} records could be parsed out of this file"
@@ -618,8 +832,58 @@ def probe_sequence(path: str, suffix: str, record: dict, name: str) -> None:
 # -- images --------------------------------------------------------------------------
 
 
+def header_size(path: str) -> tuple[str, int, int] | None:
+    """Format and dimensions off an image's header bytes, or `None` if unrecognised.
+
+    The four `UPLOAD_KINDS` image suffixes all put their dimensions in the first few
+    dozen bytes, so the common case needs no decoder — which is the point, since the
+    decoder is PIL and PIL is 2s of cold import for two integers.
+    """
+    with open(path, "rb") as handle:
+        head = handle.read(32)
+        if head[:8] == b"\x89PNG\r\n\x1a\n":
+            width, height = struct.unpack(">II", head[16:24])
+            return "png", width, height
+        if head[:6] in (b"GIF87a", b"GIF89a"):
+            width, height = struct.unpack("<HH", head[6:10])
+            return "gif", width, height
+        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            if head[12:16] == b"VP8X":
+                width = int.from_bytes(head[24:27], "little") + 1
+                height = int.from_bytes(head[27:30], "little") + 1
+                return "webp", width, height
+            if head[12:16] == b"VP8 ":
+                width, height = struct.unpack("<HH", head[26:30])
+                return "webp", width & 0x3FFF, height & 0x3FFF
+            return None  # lossless VP8L, whose header is bit-packed; let PIL read it
+        if head[:2] != b"\xff\xd8":
+            return None
+
+        # JPEG: walk the segment chain to the frame header, which is the only place the
+        # dimensions are. Segment lengths are explicit, so this is a seek per marker.
+        handle.seek(2)
+        while chunk := handle.read(2):
+            if len(chunk) < 2 or chunk[0] != 0xFF:
+                return None
+            marker, length = chunk[1], int.from_bytes(handle.read(2), "big")
+            # SOF0-SOF15, excluding the four markers in that range that are not frames.
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC, 0xD8):
+                frame = handle.read(5)
+                height, width = struct.unpack(">HH", frame[1:5])
+                return "jpeg", width, height
+            handle.seek(length - 2, os.SEEK_CUR)
+    return None
+
+
 def probe_image(path: str, record: dict) -> None:
     """Dimensions only. The image is for `figure-analyst`, which reads it from the path."""
+    if found := header_size(path):
+        record["format"], record["width"], record["height"] = found
+        return
+
+    # Something the header parse above does not know: a TIFF a user renamed, a lossless
+    # WebP, a truncated file. PIL opens far more than those four formats and this is the
+    # only path that pays for it.
     from PIL import Image
 
     with Image.open(path) as image:

@@ -56,8 +56,14 @@ into two halves by what the agent does next:
 
 Whatever a probe parses out goes to a sidecar under `paths.UPLOAD_DERIVED_DIR` rather than
 into the manifest whenever it is bigger than a handful of lines. `upload_probe.py` is the
-reader for all of it, and it runs in the sandbox because that is where pandas, rdkit,
-pypdf and biopython are.
+reader for all of it, and it runs in the sandbox because that is where the file is.
+
+**It runs before the first model call, so it is latency the user watches.** That is why
+it reads with the standard library and leaves pandas and rdkit to the agent: the first
+import of either in a fresh container costs 2-11s of block fetching, against ~0.7s for
+the whole stdlib probe. `sandbox.WARMUP` faults them in behind the run instead, so the
+agent's own first `execute` does not pay for them either. See `upload_probe.py`'s
+docstring for the measurements and for the two libraries that were worth keeping.
 
 Only the root agent sees any of this. Subagents get their payload — or, for an upload, a
 path — in their own prompts and do no I/O of their own (see `agent.py`).
@@ -188,6 +194,11 @@ MAX_PREVIEW_ITEMS = 5
 MAX_FILES_PER_THREAD = 20
 
 _NAMESPACE_ROOT = "uploads"
+
+# What a chem sample line may carry, in the order it reads best. `smiles` comes from a
+# `.smi`, `atoms` from an SDF or molfile, and `formula`/`mw` only from a manifest an older
+# revision wrote with rdkit — see `_extra_lines`.
+_CHEM_SAMPLE_KEYS = (("smiles", ""), ("formula", ""), ("mw", "g/mol"), ("atoms", "atoms"))
 
 # Upload names become sandbox paths, so anything that could traverse or quote-break is out.
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -380,11 +391,19 @@ def _extra_lines(record: dict[str, Any]) -> list[str]:
                 line += f", ... (+{record['more_properties']} more)"
             lines.append(line)
         if record.get("mols_path"):
-            lines.append(f"parsed molecules (name, smiles, formula, mw): {record['mols_path']}")
+            lines.append(f"parsed molecules (name, smiles): {record['mols_path']}")
+        # A `.smi` names its molecules with SMILES; an SDF or molfile names them with a
+        # title and an atom count, because reading structure out of those needs rdkit and
+        # `upload_probe.py` deliberately does not import it. Rendered from whichever keys
+        # the sample has rather than a fixed set, which also keeps a manifest written by
+        # an older revision (`formula`, `mw`) readable on a thread that spans a deploy.
         for sample in record.get("samples") or []:
-            lines.append(
-                f"e.g. {sample.get('name')} — {sample.get('formula')}, MW {sample.get('mw')}"
+            described = ", ".join(
+                f"{sample[key]} {unit}".strip()
+                for key, unit in _CHEM_SAMPLE_KEYS
+                if sample.get(key) is not None
             )
+            lines.append(f"e.g. {sample.get('name')}" + (f" — {described}" if described else ""))
     elif kind == "sequence":
         if record.get("seqs_path"):
             lines.append(f"parsed records (id, description, length): {record['seqs_path']}")
@@ -617,11 +636,12 @@ class UploadMiddleware(AgentMiddleware):
         }
 
     async def _probe(self) -> list[dict[str, Any]]:
-        """Describe every staged file, using the readers that live in the sandbox.
+        """Describe every staged file, in the container the files are in.
 
-        The probe runs where the file already is, with the same pandas, rdkit, pypdf and
-        biopython the agent's own code will use — so a shape in the manifest is a shape
-        the agent can reproduce. See `upload_probe.py` for what each kind reports.
+        The one blocking sandbox call on the path to the first model call, which is why
+        `upload_probe.py` keeps itself to the standard library — ~0.7s, against the 12s
+        it cost when it imported pandas and rdkit. See its docstring for what each kind
+        reports and what it deliberately leaves to the agent.
         """
         command = _heredoc(
             _PROBE_SOURCE,

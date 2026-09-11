@@ -47,6 +47,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -91,6 +92,68 @@ PROVISION = (
     "numpy pandas scipy matplotlib openpyxl python-docx python-pptx "
     "statsmodels scikit-survival scikit-learn biopython rdkit"
 )
+
+# Fired at every fresh container, in the background, and never waited on.
+#
+# A snapshot's rootfs is restored lazily: the blocks behind a file are fetched from the
+# backing store the first time something reads them, so the first `import` of a library
+# in a container is dominated by I/O and not by Python. Measured on `pubmed-py-bio-pdf`,
+# first import in a fresh container against the second import in the same one:
+#
+# | rdkit.Chem | 7.4-10.9s | 0.14s |   | pypdf     | 1.93s | 0.82s |
+# | pandas     | 2.3-11.5s | 0.27s |   | Bio.SeqIO | 2.41s | 0.46s |
+#
+# `cat`ing rdkit's 77 MB to /dev/null costs the same as importing it and is no faster
+# (32 MB/s cold, 2574 MB/s once faulted), so there is nothing cleverer to do than read
+# the bytes early. Nor can it be baked in: `capture_snapshot` takes the filesystem, not
+# the page cache — `build_snapshot.py` already imports all of this in its smoke test
+# immediately before capturing, and a container booted from the result still pays in full.
+#
+# So this pays it where nobody is waiting. `setsid` + `&` because the exec channel closes
+# when the command returns and we want the imports to outlive it by the ~10s they take;
+# every import is individually guarded so the base-image fallback (no snapshot, no
+# scientific stack) warms what it has instead of failing.
+#
+# It is not free while it runs: it competes for the same fetch bandwidth as the turn's own
+# first commands, measured at ~0.3s on `upload_probe.py`'s ~1.2s. That is the trade — 0.3s
+# once, against 3-10s off the first `execute` that touches pandas or rdkit.
+WARMUP = """setsid nohup python3 - >/dev/null 2>&1 <<'__WARM_EOF__' &
+import importlib
+
+for module in ("numpy", "pandas", "matplotlib.pyplot", "scipy", "rdkit.Chem", "pypdf",
+               "Bio.SeqIO", "PIL.Image", "openpyxl"):
+    try:
+        importlib.import_module(module)
+    except Exception:
+        pass
+__WARM_EOF__
+"""
+
+
+def warm(sandbox: Any) -> None:
+    """Start faulting the heavy libraries into a fresh container's page cache.
+
+    Returns immediately: the request that hands the container its warm-up command is
+    itself a cold `execute`, which is 1.6-3.5s of the very latency this exists to
+    remove, so it goes to a thread of its own rather than onto the caller's critical
+    path. `sandbox.run` is blocking HTTP, which is also why this cannot simply be a task
+    on the server's event loop.
+
+    Best effort by design: a warm-up that never starts costs the next command the cold
+    import it would have paid anyway, so nothing here is worth failing a run over, and
+    nothing downstream may assume it ran.
+    """
+
+    def send() -> None:
+        try:
+            sandbox.run(WARMUP, timeout=30)
+        except Exception:
+            logger.debug("sandbox warm-up did not start", exc_info=True)
+
+    # Daemon: a warm-up in flight must not hold up interpreter shutdown, and a container
+    # deleted from under it (a one-shot CLI run that finished first) just fails the call.
+    threading.Thread(target=send, name="sandbox-warmup", daemon=True).start()
+
 
 # Four attempts over ~7s of backoff. A dataplane that is recycling comes back inside
 # that window; one that is genuinely gone will not come back in any window worth
@@ -396,7 +459,10 @@ async def sandbox_session(*, quiet: bool = False):
         if not quiet:
             print(f"[sandbox] up in {time.monotonic() - t0:.1f}s ({snapshot or 'base image'})")
         if snapshot is None:
+            # Provisioning writes the packages, so they are in the page cache already.
             provision(sandbox)
+        else:
+            warm(sandbox)
         backend = ResilientSandbox(sandbox=sandbox)
         try:
             yield backend

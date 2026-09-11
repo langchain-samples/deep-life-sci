@@ -216,6 +216,11 @@ before changing the behaviour.
 - **Graph state is downloaded whole by any client listing threads.** The QuickJS snapshot is
   the heavy one, up to 11 MB of base64 per thread: the sidebar asks for `select`/`extract`,
   not `values` (`patch_thread_search`), and reads get an `_UnboundSandbox` (`graph.py`).
+- **The upload probe stays on the standard library** (`middleware/upload_probe.py`). It runs
+  before the first model call, and the first `import pandas` or `import rdkit` in a fresh
+  container is 2-11s of lazy snapshot restore, not milliseconds — that was 13s of dead air
+  in front of the first token. A new probe branch reads with the stdlib and leaves the
+  library work to the agent; `sandbox.WARMUP` faults the libraries in behind the run.
 - **Prompt changes are the main tuning lever.** One line telling the model to print numbers
   instead of reading its plot back cut root context from 115k to 31k chars. Treat `prompts/`
   as production code.
