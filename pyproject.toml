@@ -61,6 +61,20 @@ evals = [
     # read the dataset seeds, so it's declared rather than inherited.
     "pyyaml>=6.0.3",
 ]
+# Unit tests. Same three packages as `evals`, and deliberately a group of its own rather
+# than a reuse of it: the two run at different times for different reasons (`tests/` on
+# every change, `evals/` when the agent's behaviour is in question), and a CI job that
+# wants one should not have to install the other's intent. `tests/` reaches the evaluators
+# and the seed loader, so pyyaml is needed here too.
+#
+# Nothing else is listed on purpose. HTTP is stubbed with `httpx.MockTransport`, which
+# ships with the httpx this package already depends on, so there is no respx/vcr to keep
+# in step with a transport upgrade.
+test = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.4.0",
+    "pyyaml>=6.0.3",
+]
 
 # Explicit rather than inferred. Without this, setuptools' flat-layout auto-discovery
 # decides what a "package" is by scanning the repo root, which now contains `evals/`,
@@ -101,4 +115,6 @@ ignore = ["RUF001", "RUF002"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["evals"]
+# `evals` stays on the list because `evals/run.py` can be driven through pytest; `tests`
+# is the unit suite and is what a bare `uv run pytest` is expected to run.
+testpaths = ["tests", "evals"]

@@ -25,6 +25,7 @@ uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python
                                        # into the sandbox snapshot (~100s, rdkit is most of it)
 uv run langgraph dev                   # just the graph, on :2024
 
+uv run --group test pytest             # the unit suite; no network, no models
 uv run python -m evals.sync            # push evals/datasets/*.yaml to LangSmith
 uv run python -m evals.run --structural --limit 3   # score, no judge model
 uvx ruff check .                       # config lives in pyproject.toml
@@ -35,10 +36,12 @@ uvx ruff check .                       # config lives in pyproject.toml
 *verifies* them instead. **Setup is the only thing that writes `.env`**, so a new required
 setting needs a prompt there plus a line in `.env.example`.
 
-There is no test suite; `evals/` is the closest thing to a regression check (see
-`evals/README.md`) and ruff is configured in `pyproject.toml` (`dev` group). Skipping
-`build_snapshot.py` is slow, not broken: `sandbox.py` falls back to a ~95s runtime install
-per sandbox when no snapshot matches `SANDBOX_SNAPSHOT_NAME`.
+`tests/` is the unit suite and `evals/` measures the agent; separate groups, separate
+questions (`tests/__init__.py`, `evals/README.md`). Nothing in `tests/` calls a model,
+boots a sandbox or touches the network. **Read `tests/test_invariants.py` first** — it
+holds the cross-file rules below, which no module can enforce and which fail silently.
+Skipping `build_snapshot.py` is slow, not broken: `sandbox.py` falls back to a ~95s
+runtime install per sandbox when no snapshot matches `SANDBOX_SNAPSHOT_NAME`.
 
 The chat UI is a gitignored clone of `langchain-ai/agent-chat-ui` at `.chat-ui/`, patched by
 setup on every run, with our own components in `chat-ui-overlay/`. **See

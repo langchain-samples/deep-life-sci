@@ -92,6 +92,12 @@ limit is shared across all of them.
 
 ## What isn't covered
 
+Unit-level behaviour, deliberately — that is `tests/`, which runs in under a second with no
+model, no sandbox and no network (`uv run --group test pytest`). The two suites answer
+different questions and neither substitutes for the other: `tests/` holds the code to its
+docstrings, this holds the agent to its answers. `tests/test_evals.py` covers the scoring
+conventions on this page, including the checked-in seed files.
+
 - **Misattribution.** `citations_exist` proves a PMID was fetched, not that it supports
   the claim it's attached to. The cache is also shared across every run on the machine,
   so a paper fetched by an earlier run passes. That gap is the judge's job.

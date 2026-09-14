@@ -335,7 +335,10 @@ def _provider_for(role: str, model: str, declared: str) -> str:
 def _setting(role: str, axis: str) -> str:
     """One config value for one role: `{ROLE}_{AXIS}` in the environment, else the default.
 
-    An env var set to whitespace reads as unset rather than as an empty model id.
+    An env var set to whitespace reads as unset rather than as an empty model id. That
+    is why `_effort` does **not** go through here: on that axis an explicit empty value
+    is a value, not an omission. Only `model` is left, so this reads narrower than it
+    looks — do not fold the effort axis back into it.
     """
     return os.environ.get(f"{role.upper()}_{axis.upper()}", "").strip() or DEFAULTS[role][axis]
 
@@ -352,8 +355,17 @@ def _effort(role: str) -> str:
     *on* — unset is not "effort=high", it is no thinking at all. That difference is the
     whole point of the axis, but it means summarized thinking lands in the transcript, so
     expect root_context_chars to move with ROOT_EFFORT.
+
+    **Read directly rather than through `_setting`, and that is the entire point of this
+    line.** `_setting` treats empty as unset and falls back to the default, which is right
+    for a model id — an empty one is unusable — and wrong here, because empty is a
+    *value* on this axis: `SUBAGENT_EFFORT=` is the documented way to run a model that has
+    no effort scale at all, and Haiku 4.5 answers the parameter with a 400. Through
+    `_setting`, `SUBAGENT_MODEL=claude-haiku-4-5-20251001 SUBAGENT_EFFORT=` resolved to
+    `low` and 400'd, with nothing anywhere saying the clear had been ignored.
     """
-    effort = _setting(role, "effort").lower()
+    raw = os.environ.get(f"{role.upper()}_EFFORT")
+    effort = (DEFAULTS[role]["effort"] if raw is None else raw).strip().lower()
     if effort and effort not in EFFORT_LEVELS:
         raise SystemExit(
             f"{role.upper()}_EFFORT={effort!r} is not an effort level. "
