@@ -214,6 +214,10 @@ async def _object_bytes(
     """
     if name not in package["objects"]:
         return None
+    # `name` is a bucket key's tail, and it lands in a host path below. NCBI's bucket has
+    # never served a key that would escape it, but nothing here would notice if it did.
+    if "/" in name or name.startswith("."):
+        return None
 
     local = PMC_CACHE / package["prefix"] / name
     # Figures and PDFs run to megabytes; reading one inline would block the loop for

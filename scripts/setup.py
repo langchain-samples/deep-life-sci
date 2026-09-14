@@ -204,7 +204,11 @@ def ensure_deps() -> None:
     """The dev group too, unconditionally: it is only langgraph-cli, and syncing it here is
     what keeps the chat UI from stalling on an install after it has claimed the ports."""
     say(TAG, "syncing dependencies…")
-    run(["uv", "sync", "--group", "dev", "--quiet"], cwd=REPO_ROOT)
+    # `--frozen` installs uv.lock exactly. Every dependency is an unbounded `>=`,
+    # and two of the APIs this repo builds on are beta (see CLAUDE.md), so a
+    # re-lock on a fresh clone is how someone lands on a moved API rather than the
+    # versions this was tested against.
+    run(["uv", "sync", "--frozen", "--group", "dev", "--quiet"], cwd=REPO_ROOT)
 
 
 # --- 3. sandbox snapshot ----------------------------------------------------------

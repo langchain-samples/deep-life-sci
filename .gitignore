@@ -11,6 +11,10 @@ wheels/
 .langgraph_api/
 .DS_Store
 
+# Per-developer Claude Code state (settings.local.json is machine-specific permissions).
+# The tracked CLAUDE.md files are the checked-in half and stay in git.
+.claude/
+
 # Node modules for the artifact components in ui/. The lockfile beside them IS tracked:
 # langgraph.json bundles ui/ui.tsx at build time, so the bundle's dependencies need to
 # resolve to the same versions everywhere.
