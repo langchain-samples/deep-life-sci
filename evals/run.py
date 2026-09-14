@@ -36,9 +36,9 @@ from dotenv import load_dotenv
 # the settings a sweep exists to vary. Without this, the `ROOT_MODEL=...` in this module's
 # own docstring is silently overwritten by the ROOT_MODEL in .env and the sweep scores the
 # default pair twice while reporting two different names.
-from research_agent.models import ENV_VARS
+from deep_life_sci.models import ENV_VARS
 
-_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "RESEARCH_AGENT_CACHE_TTL")
+_ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "DEEP_LIFE_SCI_CACHE_TTL")
                   if (v := os.environ.get(k))}
 load_dotenv(override=True)
 os.environ.update(_ENV_OVERRIDES)
@@ -50,21 +50,21 @@ os.environ.update(_ENV_OVERRIDES)
 # the agent. A sweep is also shared state across a concurrent run, and one example's
 # expiry landing mid-fan-out of another is not a variable worth having.
 #
-# `setdefault`, so an explicit RESEARCH_AGENT_CACHE_TTL on the command line still wins
+# `setdefault`, so an explicit DEEP_LIFE_SCI_CACHE_TTL on the command line still wins
 # (captured above, restored after .env) — the deliberate cold-cache run stays possible.
-# For a fully cold corpus, point RESEARCH_AGENT_DATA_DIR at a fresh directory instead.
-os.environ.setdefault("RESEARCH_AGENT_CACHE_TTL", "off")
+# For a fully cold corpus, point DEEP_LIFE_SCI_DATA_DIR at a fresh directory instead.
+os.environ.setdefault("DEEP_LIFE_SCI_CACHE_TTL", "off")
 
 from langsmith import aevaluate  # noqa: E402
 
-from evals import dataset_name  # noqa: E402
-from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
-from research_agent.models import (  # noqa: E402
+from deep_life_sci.models import (  # noqa: E402
     check_gateway_config,
     describe,
     slug,
 )
-from research_agent.runner import run_once  # noqa: E402
+from deep_life_sci.runner import run_once  # noqa: E402
+from evals import dataset_name  # noqa: E402
+from evals.evaluators import DEFAULT, STRUCTURAL  # noqa: E402
 
 # Resolved after `.env` is loaded above, so `EVALS_DATASET_PREFIX` set either way reaches
 # it. Shared with `sync.py` through `evals/__init__.py` — the writer and the reader of a

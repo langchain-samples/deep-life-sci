@@ -38,7 +38,7 @@ from typing import Any
 import httpx
 from langchain_core.tools import BaseTool
 
-from research_agent.sources._errors import SourceError
+from deep_life_sci.sources._errors import SourceError
 
 
 def with_error_capture(tools: Sequence[BaseTool]) -> list[BaseTool]:

@@ -4,7 +4,7 @@ These were duplicated between the two bash launchers so either could run alone. 
 they are one import away, so the copies are gone and the `.env` placeholder rule — the one
 that had to stay identical in both — is now a single function.
 
-Nothing here imports `research_agent`: these run before `uv sync` has necessarily happened.
+Nothing here imports `deep_life_sci`: these run before `uv sync` has necessarily happened.
 """
 
 from __future__ import annotations

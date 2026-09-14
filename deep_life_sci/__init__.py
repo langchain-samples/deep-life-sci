@@ -11,7 +11,7 @@ result as data, which is what evaluators need.
 
 Nothing is imported eagerly here. `graph.py` is loaded by the LangGraph server and
 `cli.py` boots a sandbox, so a package-level import of either would make
-`import research_agent` a side-effecting operation.
+`import deep_life_sci` a side-effecting operation.
 """
 
 __all__ = ["agent", "cli", "graph", "models", "paths", "runner", "sandbox"]

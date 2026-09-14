@@ -13,6 +13,13 @@ with the feature simply absent and nothing saying so.
 
 `AGENT_CHAT_UI=<path>` points at a checkout elsewhere.
 
+**The clone is pinned to a commit** (`UI_REPO_REF`), because every patch below is anchored on
+an exact upstream string: tracking `main` means an upstream refactor half-patches every new
+clone on the same day, with no diff anywhere to notice it in. Bumping it is a deliberate act —
+change the SHA, `rm -rf .chat-ui`, re-run setup, confirm it warns about nothing. An existing
+clone at another commit is reported, never moved: setup's edits are uncommitted changes in
+that checkout, so re-cloning is the only honest fix.
+
 Setup also runs `npm ci` in `ui/`, whose components the *graph server* bundles. Check the
 bundler output when a component does not render: a missing dep there shows up as `Could not
 resolve "xlsx"` while `/ui/<graph>/entrypoint.js` still answers 200, so the component is
@@ -60,7 +67,7 @@ Every patch function's docstring says what it is for. What is not in any one of 
   picker. **Every accepted upload becomes a `type: "file"` block, images included** — upstream
   sends an image as a `type: "image"` block because upstream wants it in model context, and
   here it is transport to the sandbox. Keep the two halves in step with `UPLOAD_KINDS` in
-  `research_agent/middleware/uploads.py`: a type the UI accepts and the graph has no reader for
+  `deep_life_sci/middleware/uploads.py`: a type the UI accepts and the graph has no reader for
   is model context and nothing else, which is the outcome both lists exist to prevent.
 
 The `/ui/:path*` rewrite is the one patch that is load-bearing rather than cosmetic: without

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import json
 
+from deep_life_sci.models import judge_model
 from evals.evaluators._guard import scores_only_completed_runs
-from research_agent.models import judge_model
 
 _PROMPT = """\
 You are grading one answer from a PubMed research assistant.

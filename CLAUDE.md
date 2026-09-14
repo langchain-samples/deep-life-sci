@@ -58,14 +58,14 @@ Model env var names live in `models.py:ENV_VARS`, imported by `cli.py` and `eval
 new axis is preserved by adding it *there and nowhere else* — a hand-copied list is how a
 `ROOT_MODEL=...` on the command line silently loses to `.env`.
 
-Every host-side path is defined in `research_agent/paths.py`, anchored to the repo root rather
+Every host-side path is defined in `deep_life_sci/paths.py`, anchored to the repo root rather
 than to any module's location. Getting that anchor wrong silently starts a second empty cache
-instead of failing. `RESEARCH_AGENT_DATA_DIR` overrides it.
+instead of failing. `DEEP_LIFE_SCI_DATA_DIR` overrides it.
 
 ## Architecture
 
 ```
-research_agent/
+deep_life_sci/
 ├── agent.py cli.py graph.py runner.py    assembly + the three entry points
 ├── sandbox.py                            sandbox lifecycle + WebSocket retry
 ├── models.py paths.py                    gateway routing, host-side paths
@@ -193,10 +193,10 @@ before changing the behaviour.
 - **Subagents do no I/O.** NCBI allows 3 req/sec (10 with a key); N subagents each fetching
   would collect 429s. Batch-fetch up front is what makes a large fan-out safe.
 - **Rate limits and API guards are per-source and load-bearing.** See
-  `research_agent/sources/CLAUDE.md` before editing anything under `sources/`.
+  `deep_life_sci/sources/CLAUDE.md` before editing anything under `sources/`.
 - **The host cache expires on the same idle window as the sandbox** — `IDLE_TTL_SECONDS` is in
   `paths.py` so `sandbox.py` and `sources/cache_io.py` cannot drift into a warm cache pointing
-  at a dead container. `RESEARCH_AGENT_CACHE_TTL=off` restores the permanent cache, which is
+  at a dead container. `DEEP_LIFE_SCI_CACHE_TTL=off` restores the permanent cache, which is
   what `evals/run.py` sets so refetching doesn't depend on wall clock.
 - **Blocking calls must go through `asyncio.to_thread`** (`sources/cache_io.py`). Under
   `langgraph dev`, blockbuster turns a blocking `read_text()` in a coroutine into a

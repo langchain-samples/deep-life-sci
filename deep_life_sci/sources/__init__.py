@@ -17,10 +17,10 @@ provider*, so that module is a bound tool spec and a digest parser rather than a
 client, and it deliberately keeps neither a cache nor a throttle. Its docstring says why.
 """
 
-from research_agent.sources.ctgov import ctgov_fetch, ctgov_search
-from research_agent.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
-from research_agent.sources.pubmed import fetch_abstracts, pubmed_search
-from research_agent.sources.web import web_search
+from deep_life_sci.sources.ctgov import ctgov_fetch, ctgov_search
+from deep_life_sci.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
+from deep_life_sci.sources.pubmed import fetch_abstracts, pubmed_search
+from deep_life_sci.sources.web import web_search
 
 __all__ = [
     "ctgov_fetch",

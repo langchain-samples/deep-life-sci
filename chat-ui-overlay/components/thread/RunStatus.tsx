@@ -7,7 +7,7 @@ import { AssistantMessageLoading } from "./messages/ai";
  * This agent orchestrates inside a single `eval` call, so from the transcript's point of
  * view a run is one tool call that has not come back yet — and with tool calls hidden, which
  * is how `scripts/dev.py` opens the app, there is nothing on screen at all. The graph
- * narrates its own inner calls instead (`research_agent/middleware/progress.py`), and
+ * narrates its own inner calls instead (`deep_life_sci/middleware/progress.py`), and
  * `providers/Stream.tsx` keeps the latest line.
  *
  * Both halves are deliberate. The dots stay up for the whole run rather than stopping at the

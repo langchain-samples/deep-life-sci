@@ -44,7 +44,7 @@ not stored. It is cheap enough not to think about — a full `stat` walk of 1822
 measured 10.6ms — so the entry points call `sweep_if_due()` at run start and it
 self-gates to once per TTL window.
 
-Set `RESEARCH_AGENT_CACHE_TTL` to override: a number of seconds, or `off` to disable
+Set `DEEP_LIFE_SCI_CACHE_TTL` to override: a number of seconds, or `off` to disable
 expiry entirely and get the old permanent-cache behaviour. `evals/run.py` sets `off`,
 because a sweep whose timing depends on wall clock would add variance to exactly the
 numbers evals exist to hold steady.
@@ -60,14 +60,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from research_agent.paths import CACHE_ROOTS, IDLE_TTL_SECONDS
+from deep_life_sci.paths import CACHE_ROOTS, IDLE_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
 # Sentinel for "no usable cache entry", distinct from a cached JSON `null`.
 MISSING: Any = object()
 
-TTL_ENV = "RESEARCH_AGENT_CACHE_TTL"
+TTL_ENV = "DEEP_LIFE_SCI_CACHE_TTL"
 _DISABLED = frozenset({"off", "never", "none", "0", "-1", ""})
 
 # Last completed sweep, as a monotonic timestamp. Process-local on purpose: the sweep is

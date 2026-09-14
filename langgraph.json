@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "agent": "./research_agent/graph.py:make_graph"
+    "agent": "./deep_life_sci/graph.py:make_graph"
   },
   "ui": {
     "agent": "./ui/ui.tsx"

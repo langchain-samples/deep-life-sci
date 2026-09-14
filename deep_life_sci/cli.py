@@ -27,7 +27,7 @@ from langchain_core.messages import AIMessageChunk
 # The names come from models.py rather than a copy here, so a new axis is preserved by
 # adding it there and nowhere else. Importing that module this early is safe *because* it
 # reads the environment only inside functions — unlike `sandbox.py` below.
-from research_agent.models import ENV_VARS
+from deep_life_sci.models import ENV_VARS
 
 _CLI_OVERRIDES = {k: v for k in ENV_VARS if (v := os.environ.get(k))}
 load_dotenv(override=True)
@@ -35,11 +35,11 @@ os.environ.update(_CLI_OVERRIDES)
 
 # Imported after load_dotenv on purpose: `sandbox.py` reads SANDBOX_SNAPSHOT_NAME at
 # import time, so importing it first would bake in the pre-.env value.
-from research_agent.agent import build_agent  # noqa: E402
-from research_agent.middleware.perf import install_logging  # noqa: E402
-from research_agent.models import check_gateway_config, describe  # noqa: E402
-from research_agent.sandbox import sandbox_session  # noqa: E402
-from research_agent.sources import cache_io  # noqa: E402
+from deep_life_sci.agent import build_agent  # noqa: E402
+from deep_life_sci.middleware.perf import install_logging  # noqa: E402
+from deep_life_sci.models import check_gateway_config, describe  # noqa: E402
+from deep_life_sci.sandbox import sandbox_session  # noqa: E402
+from deep_life_sci.sources import cache_io  # noqa: E402
 
 # Exercises both surfaces on purpose: the fan-out answers the reading-comprehension half,
 # Python answers the quantitative half.

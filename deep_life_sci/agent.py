@@ -14,14 +14,14 @@ from deepagents import (
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_quickjs import CodeInterpreterMiddleware
 
-from research_agent.middleware.artifacts import ArtifactMiddleware
-from research_agent.middleware.cadence import UpdateCadence
-from research_agent.middleware.perf import LoopLagProbe
-from research_agent.middleware.progress import with_progress
-from research_agent.middleware.tool_errors import with_error_capture
-from research_agent.middleware.uploads import UploadMiddleware
-from research_agent.models import root_model, subagent_model
-from research_agent.prompts import (
+from deep_life_sci.middleware.artifacts import ArtifactMiddleware
+from deep_life_sci.middleware.cadence import UpdateCadence
+from deep_life_sci.middleware.perf import LoopLagProbe
+from deep_life_sci.middleware.progress import with_progress
+from deep_life_sci.middleware.tool_errors import with_error_capture
+from deep_life_sci.middleware.uploads import UploadMiddleware
+from deep_life_sci.models import root_model, subagent_model
+from deep_life_sci.prompts import (
     ABSTRACT_ANALYST,
     DOCUMENT_ANALYST,
     FIGURE_ANALYST,
@@ -29,10 +29,10 @@ from research_agent.prompts import (
     TRIAL_ANALYST,
     build_system_prompt,
 )
-from research_agent.sources.ctgov import ctgov_fetch, ctgov_search
-from research_agent.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
-from research_agent.sources.pubmed import fetch_abstracts, pubmed_search
-from research_agent.sources.web import web_search
+from deep_life_sci.sources.ctgov import ctgov_fetch, ctgov_search
+from deep_life_sci.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
+from deep_life_sci.sources.pubmed import fetch_abstracts, pubmed_search
+from deep_life_sci.sources.web import web_search
 
 
 def build_agent(backend):

@@ -28,9 +28,11 @@ import argparse
 import getpass
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -53,6 +55,16 @@ WINDOWS = os.name == "nt"
 # .0 release of 20 is not read as too old; Next's own check catches 20.0-20.8.
 NODE_MIN_MAJOR = 20
 UI_REPO = "https://github.com/langchain-ai/agent-chat-ui.git"
+# Pinned to a commit, never to a branch. Every patch below is anchored on an exact string
+# in upstream's source, so an upstream refactor half-patches every *new* clone at once —
+# and the clone is gitignored, so there is no diff anywhere that would show it. A pin
+# turns that from "breaks for everyone on the day upstream lands a rename" into "breaks
+# when someone deliberately bumps this line".
+#
+# Verified against this commit: from a virgin clone all 17 patches apply and
+# `unapplied_patches()` is empty afterwards. To bump: change the SHA, `rm -rf .chat-ui`,
+# re-run setup, and check it printed no warnings.
+UI_REPO_REF = "d96e46f365f55f3e23ef1036fe05de7c53064897"
 
 _assume_yes = False
 
@@ -178,6 +190,28 @@ def ensure_langsmith_key() -> None:
     set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
 
 
+# The `tool` every E-utilities request carries. NCBI enforces its rate limits against this
+# string as well as the IP, so a value shared by every clone of a public repo is one where
+# any single runaway loop gets *everyone* throttled or blocked — and the person who caused
+# it is the one person NCBI cannot identify. A per-install suffix makes the installs
+# distinguishable. It is a courtesy identifier and not a credential: nothing reads it back,
+# and it is deliberately not derived from the machine or the user.
+NCBI_TOOL_BASE = "deep_life_sci"
+
+
+def ensure_ncbi_tool() -> None:
+    """Give this install its own `tool` identifier, once.
+
+    Replaces the bare shared name as well as an empty value, so a clone made before this
+    existed stops sharing on its next setup. Any *other* value is left alone — an operator
+    who set a meaningful name for their own group has said what they want.
+    """
+    current = env_value("NCBI_TOOL")
+    if current and current != NCBI_TOOL_BASE:
+        return
+    set_env("NCBI_TOOL", f"{NCBI_TOOL_BASE}_{secrets.token_hex(4)}")
+
+
 def ensure_env() -> None:
     fresh = not ENV_FILE.exists()
     if fresh:
@@ -187,6 +221,7 @@ def ensure_env() -> None:
         migrate_gateway_key()
 
     ensure_langsmith_key()
+    ensure_ncbi_tool()
 
     # Only on a first run: these are genuinely optional, so re-asking every time would be
     # nagging someone who already decided to skip them.
@@ -204,7 +239,11 @@ def ensure_deps() -> None:
     """The dev group too, unconditionally: it is only langgraph-cli, and syncing it here is
     what keeps the chat UI from stalling on an install after it has claimed the ports."""
     say(TAG, "syncing dependencies…")
-    run(["uv", "sync", "--group", "dev", "--quiet"], cwd=REPO_ROOT)
+    # `--frozen` installs uv.lock exactly. Every dependency is an unbounded `>=`,
+    # and two of the APIs this repo builds on are beta (see CLAUDE.md), so a
+    # re-lock on a fresh clone is how someone lands on a moved API rather than the
+    # versions this was tested against.
+    run(["uv", "sync", "--frozen", "--group", "dev", "--quiet"], cwd=REPO_ROOT)
 
 
 # --- 3. sandbox snapshot ----------------------------------------------------------
@@ -265,7 +304,7 @@ def ensure_snapshot() -> None:
     try:
         from langsmith.sandbox import SandboxClient
 
-        from research_agent.sandbox import SNAPSHOT_NAME
+        from deep_life_sci.sandbox import SNAPSHOT_NAME
 
         names = {s.name for s in SandboxClient().list_snapshots(name_contains=SNAPSHOT_NAME)}
     except Exception as exc:  # noqa: BLE001 - any failure here is the same user-facing problem
@@ -709,7 +748,7 @@ export const UNSUPPORTED_FILE_BODY =
 
 UPLOAD_HEADER = """\
 // setup: CSV/TSV/xlsx only. Those are the attachments the agent can do something with —
-// they do not stay in model context, `research_agent/middleware/uploads.py` moves them into
+// they do not stay in model context, `deep_life_sci/middleware/uploads.py` moves them into
 // the sandbox at /workspace/uploads and keeps them there across turns. An image or a PDF
 // would be context and nothing else, so both stay refused. See scripts/CLAUDE.md.
 export const SUPPORTED_FILE_TYPES: string[] = [...SPREADSHEET_TYPES];
@@ -736,7 +775,7 @@ export const UNSUPPORTED_FILE_BODY = "Upload types limited to CSV, TSV or .xlsx"
 UPLOAD_HELPERS = """\
 // setup: a spreadsheet is the one attachment worth having here, and it does not reach the
 // model. It rides in as a file block carrying its filename, and the graph takes it back out
-// (see research_agent/middleware/uploads.py).
+// (see deep_life_sci/middleware/uploads.py).
 //
 // Extension first and MIME second, deliberately — see the note in use-file-upload.tsx.
 // `.xls` is in neither list: reading it needs xlrd, which is not in the sandbox snapshot,
@@ -931,7 +970,7 @@ def patch_uploads() -> None:
 
 
 # `patch_uploads` above opened the composer to spreadsheets. This widens it to everything
-# `research_agent/middleware/uploads.py` now has a reader for — bibliographies, PDFs,
+# `deep_life_sci/middleware/uploads.py` now has a reader for — bibliographies, PDFs,
 # compound sets, sequences and images — and is a separate patch rather than an edit inside
 # that one so a clone already carrying the spreadsheet allowlist picks the rest up. Its
 # anchors are therefore `patch_uploads`'s own output, verbatim.
@@ -944,7 +983,7 @@ def patch_uploads() -> None:
 UPLOAD_HELPERS_V2 = """\
 // setup: the attachments this agent can do something with. None of them stay in model
 // context — each rides in as a file block carrying its filename, and the graph takes the
-// payload back out and materialises it in the sandbox (research_agent/middleware/uploads.py,
+// payload back out and materialises it in the sandbox (deep_life_sci/middleware/uploads.py,
 // whose UPLOAD_KINDS is the server-side half of this list).
 //
 // Extension first and MIME second, deliberately — see the note in use-file-upload.tsx.
@@ -1013,7 +1052,7 @@ export function uploadMimeType(file: File): string {
 """
 
 UPLOAD_HEADER_V2 = """\
-// setup: everything research_agent/middleware/uploads.py has a reader for. None of it is
+// setup: everything deep_life_sci/middleware/uploads.py has a reader for. None of it is
 // model context — the graph lifts the payload off the human message before the first model
 // call and materialises it in the sandbox at /workspace/uploads, so a table gets computed
 // over, a bibliography becomes a corpus, and a PDF or an image is read by a cheap subagent
@@ -1161,13 +1200,13 @@ def patch_upload_kinds() -> None:
 # The agent does its work inside one `eval` call, so the transcript shows a single tool call
 # that has not returned yet — and with tool calls hidden, nothing at all. The graph narrates
 # the calls happening inside it over the custom-event channel instead
-# (research_agent/middleware/progress.py); these two patches carry that line to the screen.
+# (deep_life_sci/middleware/progress.py); these two patches carry that line to the screen.
 # Split in two because they fail differently: without the first there is no event to read,
 # without the second the events arrive and nothing renders them.
 PROGRESS_TYPES = """\
 // setup: the agent orchestrates inside one `eval`, so a multi-minute run produces no visible
 // message until it is over. It narrates itself over the same custom-event channel the UI
-// components already use — see research_agent/middleware/progress.py — and the latest line
+// components already use — see deep_life_sci/middleware/progress.py — and the latest line
 // travels to the thread view through the context below.
 export type ProgressEvent = { type: "progress"; text: string };
 
@@ -1651,13 +1690,55 @@ def ensure_node() -> None:
         install_node()
 
 
+def clone_pinned(ui_dir: Path) -> None:
+    """Shallow-fetch exactly `UI_REPO_REF`.
+
+    The long form rather than `git clone --depth 1`, which takes a branch or a tag and
+    never a commit: an empty repo, then a one-commit fetch of the SHA. GitHub serves a
+    bare SHA to `fetch`, and the result is the same ~560K and ~1.5s as the shallow clone
+    of `main` this replaces. Left on a detached FETCH_HEAD, which is what the clone is —
+    a read-only checkout that setup patches in place.
+    """
+    ui_dir.mkdir(parents=True, exist_ok=True)
+    at = ["git", "-C", str(ui_dir)]
+    run(["git", "init", "--quiet", str(ui_dir)])
+    run([*at, "remote", "add", "origin", UI_REPO])
+    run([*at, "fetch", "--quiet", "--depth", "1", "origin", UI_REPO_REF])
+    run([*at, "checkout", "--quiet", "FETCH_HEAD"])
+
+
+def warn_if_off_pin(ui_dir: Path) -> None:
+    """Say so when an existing clone is not at `UI_REPO_REF`, and move on.
+
+    A clone made before the pin sits at whatever `main` was that day, and the patches are
+    only *mostly* version-independent — `unapplied_patches()` catches an anchor that has
+    moved, but not one that still matches in a file whose meaning changed around it.
+    Reported rather than fixed: the checkout carries setup's own edits as uncommitted
+    changes, so moving it would either clobber them or refuse, and re-cloning is both the
+    honest remedy and cheap.
+    """
+    head = subprocess.run(
+        ["git", "-C", str(ui_dir), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    # Not a git checkout at all: AGENT_CHAT_UI can point at a working copy someone
+    # manages themselves, and that is their business.
+    if not head or head == UI_REPO_REF:
+        return
+    say(TAG, f"note: {ui_dir} is at {head[:12]}, not the pinned {UI_REPO_REF[:12]}.")
+    say(TAG, "  patches still apply; to move to the pin:  rm -rf .chat-ui && "
+             "uv run scripts/setup.py")
+
+
 def ensure_chat_ui() -> None:
     if tool("git") is None:
         die(TAG, "the chat UI needs git.")
     ui_dir = chat_ui_dir()
     if not ui_dir.is_dir():
         say(TAG, f"cloning agent-chat-ui into {ui_dir}…")
-        run(["git", "clone", "--depth", "1", "--quiet", UI_REPO, str(ui_dir)])
+        clone_pinned(ui_dir)
+    else:
+        warn_if_off_pin(ui_dir)
 
     copied = ensure_overlay()
     if copied:
