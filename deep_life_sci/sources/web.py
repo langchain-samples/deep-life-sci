@@ -45,7 +45,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from research_agent.models import describe, web_search_model
+from deep_life_sci.models import describe, web_search_model
 
 # Cost and latency, not politeness — see the module docstring. Eight concurrent searches
 # is already a wide question; more usually means the model is enumerating rather than

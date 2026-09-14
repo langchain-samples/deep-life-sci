@@ -86,7 +86,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
-from research_agent.paths import UPLOAD_DERIVED_DIR, UPLOAD_DIR
+from deep_life_sci.paths import UPLOAD_DERIVED_DIR, UPLOAD_DIR
 
 logger = logging.getLogger(__name__)
 

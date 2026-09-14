@@ -35,13 +35,13 @@ dependencies = [
 
 [project.scripts]
 # A named entry point rather than a script path: the CLI now lives inside a package, and
-# `uv run research_agent/cli.py` would execute it as a top-level script with no package
-# context, so every `research_agent.*` import would fail.
+# `uv run deep_life_sci/cli.py` would execute it as a top-level script with no package
+# context, so every `deep_life_sci.*` import would fail.
 #
 # `scripts/build_snapshot.py` deliberately gets no entry point. It imports nothing from
 # this package, so `uv run scripts/build_snapshot.py` works as-is — and giving it one
 # would mean installing a top-level package literally named `scripts` into site-packages.
-agent = "research_agent.cli:run"
+agent = "deep_life_sci.cli:run"
 
 [dependency-groups]
 # `langgraph dev` serves graph.py so a chat UI can connect. The CLI is only needed for
@@ -72,10 +72,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = [
-    "research_agent",
-    "research_agent.middleware",
-    "research_agent.prompts",
-    "research_agent.sources",
+    "deep_life_sci",
+    "deep_life_sci.middleware",
+    "deep_life_sci.prompts",
+    "deep_life_sci.sources",
 ]
 
 [tool.ruff]
@@ -97,7 +97,7 @@ ignore = ["RUF001", "RUF002"]
 # Prompt strings are the one place where whitespace and wrapping are semantic — they are
 # what the model reads, and reflowing them to a line limit or stripping a trailing space
 # that ends a markdown line changes the input. Never let a formatter near this file.
-"research_agent/prompts/*.py" = ["E501", "W291"]
+"deep_life_sci/prompts/*.py" = ["E501", "W291"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

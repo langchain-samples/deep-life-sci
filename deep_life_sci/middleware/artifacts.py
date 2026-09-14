@@ -33,7 +33,7 @@ from langchain.agents.middleware.types import ToolCallRequest
 from langgraph.graph.ui import AnyUIMessage, push_ui_message, ui_message_reducer
 
 # Mirrored in the system prompt and baked into the snapshot by scripts/build_snapshot.py.
-from research_agent.paths import OUT_DIR
+from deep_life_sci.paths import OUT_DIR
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ wrong doesn't fail — it silently starts a second, empty cache and re-fetches a
 that was already on disk. Evals make that worse: they run from whatever cwd the harness
 picked, and a cache miss there costs real NCBI rate limit.
 
-Set `RESEARCH_AGENT_DATA_DIR` to point the cache somewhere else — a scratch disk, or a
+Set `DEEP_LIFE_SCI_DATA_DIR` to point the cache somewhere else — a scratch disk, or a
 per-eval-run directory when you deliberately want cold-cache timings.
 
 `IDLE_TTL_SECONDS` is here rather than in `sandbox.py` because two layers now share it
@@ -32,17 +32,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# research_agent/paths.py -> research_agent/ -> repo root.
+# deep_life_sci/paths.py -> deep_life_sci/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-DATA_DIR = Path(os.environ.get("RESEARCH_AGENT_DATA_DIR") or REPO_ROOT / "data")
+DATA_DIR = Path(os.environ.get("DEEP_LIFE_SCI_DATA_DIR") or REPO_ROOT / "data")
 
 ABSTRACT_CACHE = DATA_DIR / "abstracts"
 PMC_CACHE = DATA_DIR / "pmc"
 CTGOV_CACHE = DATA_DIR / "trials"
 
 # Everything `cache_io.sweep` is allowed to delete from. Named explicitly rather than
-# walking DATA_DIR, because RESEARCH_AGENT_DATA_DIR can point anywhere and a sweep that
+# walking DATA_DIR, because DEEP_LIFE_SCI_DATA_DIR can point anywhere and a sweep that
 # recurses into whatever else lives there would delete files it does not own.
 CACHE_ROOTS = (ABSTRACT_CACHE, PMC_CACHE, CTGOV_CACHE)
 

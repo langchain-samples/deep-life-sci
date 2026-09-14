@@ -29,10 +29,10 @@ from langchain_core.tools import tool
 
 # Anchored to the repo root, not to this file — see the note in paths.py about why
 # getting that wrong starts a second empty cache instead of failing.
-from research_agent.paths import ABSTRACT_CACHE
-from research_agent.sources import cache_io
-from research_agent.sources._errors import SourceError
-from research_agent.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
+from deep_life_sci.paths import ABSTRACT_CACHE
+from deep_life_sci.sources import cache_io
+from deep_life_sci.sources._errors import SourceError
+from deep_life_sci.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 
@@ -141,7 +141,9 @@ class PubMedError(SourceError):
 
 def _common_params() -> dict[str, str]:
     params = {
-        "tool": os.environ.get("NCBI_TOOL", "deep_life_sci"),
+        # `or`, not a get default: setup writes a per-install name here, and a .env
+        # carrying an empty `NCBI_TOOL=` would otherwise drop the identifier entirely.
+        "tool": os.environ.get("NCBI_TOOL") or "deep_life_sci",
         "email": os.environ.get("NCBI_EMAIL", ""),
     }
     if key := os.environ.get("NCBI_API_KEY"):

@@ -38,9 +38,9 @@ import re
 from langchain_core.runnables import RunnableConfig
 from langsmith.sandbox import SandboxClient
 
-from research_agent.agent import build_agent
-from research_agent.middleware.perf import install_logging
-from research_agent.sandbox import (
+from deep_life_sci.agent import build_agent
+from deep_life_sci.middleware.perf import install_logging
+from deep_life_sci.sandbox import (
     SNAPSHOT_NAME,
     ResilientSandbox,
     boot,
@@ -48,7 +48,7 @@ from research_agent.sandbox import (
     provision,
     warm,
 )
-from research_agent.sources import cache_io
+from deep_life_sci.sources import cache_io
 
 install_logging()
 

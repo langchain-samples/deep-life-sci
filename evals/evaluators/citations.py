@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import re
 
+from deep_life_sci.paths import ABSTRACT_CACHE
 from evals.evaluators._guard import scores_only_completed_runs
-from research_agent.paths import ABSTRACT_CACHE
 
 # PubMed ids are 1-8 digits, but a bare 4-digit run in prose is almost always a year and
 # a bare 2-3 digit one is a sample size. Requiring 7+ digits, or an explicit `PMID:`

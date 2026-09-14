@@ -1,7 +1,7 @@
 """Describe the user's uploaded files. Runs **inside the sandbox**, never in this process.
 
 `middleware/uploads.py` reads this file as text and pipes it to the sandbox's `python3`
-over a heredoc. That is why it imports nothing from `research_agent` and takes its
+over a heredoc. That is why it imports nothing from `deep_life_sci` and takes its
 configuration from the environment: there is no package here, only an interpreter and the
 libraries `scripts/build_snapshot.py` baked in.
 

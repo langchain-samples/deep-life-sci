@@ -5,14 +5,14 @@ Run this once (and again whenever you want to change the library set):
     uv run scripts/build_snapshot.py
 
 It boots a plain sandbox, installs the scientific Python stack, and freezes the result
-as a named snapshot. `research_agent/sandbox.py` then boots from that snapshot, which
+as a named snapshot. `deep_life_sci/sandbox.py` then boots from that snapshot, which
 turns a ~95s per-run `pip install` into a ~1s start.
 
 Each slow step prints before it starts, not only after it finishes. Timings alone read as
 a script that has finished — a `~100s` estimate followed instantly by `sandbox up in 0.6s`
 looks like the estimate was wrong, and the wait that follows looks like a hang.
 
-Deliberately standalone — it imports nothing from `research_agent`, so it runs by path
+Deliberately standalone — it imports nothing from `deep_life_sci`, so it runs by path
 without the package being installed.
 
 Put the printed name in `.env` as SANDBOX_SNAPSHOT_NAME.
@@ -40,7 +40,7 @@ PACKAGES = [
     # the end of an otherwise successful analysis, which is the worst possible time.
     "openpyxl==3.1.5",
     # Office deliverables beyond spreadsheets. The agent must never pip install its
-    # own packages mid-run (blocked in research_agent/sandbox.py) — anything it might
+    # own packages mid-run (blocked in deep_life_sci/sandbox.py) — anything it might
     # need to hand back to the user has to already be here.
     "python-docx==1.2.0",
     "python-pptx==1.0.2",

@@ -55,7 +55,7 @@ from deepagents.backends import LangSmithSandbox
 from deepagents.backends.protocol import ExecuteResponse
 from langsmith.sandbox import SandboxClient, SandboxConnectionError
 
-from research_agent.paths import (
+from deep_life_sci.paths import (
     BOOT_TIMEOUT_SECONDS,
     DELETE_AFTER_STOP_SECONDS,
     IDLE_TTL_SECONDS,

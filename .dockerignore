@@ -10,7 +10,7 @@
 # `**/` on anything that can appear at depth: unlike .gitignore, a bare `node_modules/`
 # here matches only the context root, so ui/node_modules would otherwise ship.
 #
-# Do NOT add pyproject.toml, uv.lock, langgraph.json, research_agent/, ui/ or README.md:
+# Do NOT add pyproject.toml, uv.lock, langgraph.json, deep_life_sci/, ui/ or README.md:
 # the first four are the build inputs, ui/ is the artifact components the graph bundles,
 # and pyproject declares `readme = "README.md"`, so excluding it fails the build outright.
 .chat-ui/

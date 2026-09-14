@@ -29,9 +29,9 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from research_agent.agent import build_agent
-from research_agent.sandbox import sandbox_session
-from research_agent.sources import cache_io
+from deep_life_sci.agent import build_agent
+from deep_life_sci.sandbox import sandbox_session
+from deep_life_sci.sources import cache_io
 
 
 @dataclass

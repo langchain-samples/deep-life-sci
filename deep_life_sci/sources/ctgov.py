@@ -44,10 +44,10 @@ from typing import Any
 import httpx
 from langchain_core.tools import tool
 
-from research_agent.paths import CTGOV_CACHE
-from research_agent.sources import cache_io
-from research_agent.sources._errors import SourceError
-from research_agent.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
+from deep_life_sci.paths import CTGOV_CACHE
+from deep_life_sci.sources import cache_io
+from deep_life_sci.sources._errors import SourceError
+from deep_life_sci.sources._http import RETRY_STATUSES, Throttle, backoff_delay, chunks
 
 BASE_URL = "https://clinicaltrials.gov/api/v2"
 

@@ -51,10 +51,10 @@ from langchain_core.tools import tool
 
 # `normalize_pmcid` lives in pubmed.py alongside `validate_pmids`, because that's where
 # the "never coerce an identifier" rule is established and it's what produces PMCIDs.
-from research_agent.paths import PMC_CACHE
-from research_agent.sources import cache_io
-from research_agent.sources._errors import SourceError
-from research_agent.sources.pubmed import normalize_pmcid
+from deep_life_sci.paths import PMC_CACHE
+from deep_life_sci.sources import cache_io
+from deep_life_sci.sources._errors import SourceError
+from deep_life_sci.sources.pubmed import normalize_pmcid
 
 # The current PMC Cloud Service layout. Flat, one prefix per article *version*.
 BUCKET = "https://pmc-oa-opendata.s3.amazonaws.com"
