@@ -1062,6 +1062,14 @@ _LIB_BRANCH_NEW = (
     "  }\n"
 )
 
+# The header block above is also this patch's anchor, so rewording a comment inside it
+# strands every clone patched before the reword: patch_uploads' mark is set, so nothing
+# rewrites theirs. Accept the earlier wording too, the way ATTACH_LABEL_BASELINES does.
+UPLOAD_HEADER_BASELINES = [
+    UPLOAD_HEADER,
+    UPLOAD_HEADER.replace("See scripts/CLAUDE.md.", "See CLAUDE.md."),
+]
+
 UPLOAD_KIND_EDITS = [
     (
         "hook",
@@ -1078,7 +1086,7 @@ UPLOAD_KIND_EDITS = [
         "  UPLOAD_TYPES,\n"
         '} from "@/lib/multimodal-utils";',
     ),
-    ("hook", UPLOAD_HEADER, UPLOAD_HEADER_V2),
+    ("hook", UPLOAD_HEADER_BASELINES, UPLOAD_HEADER_V2),
     (
         "hook",
         "b.mimeType === spreadsheetMimeType(file) &&",
@@ -1132,14 +1140,18 @@ def patch_upload_kinds() -> None:
 
     # All or nothing, for the same reason patch_uploads is: half of this is the UI accepting
     # a file and the other half is the block shape the graph strips. A partial apply is an
-    # upload that silently goes nowhere.
-    for key, old, _ in UPLOAD_KIND_EDITS:
-        if old not in contents[key]:
+    # upload that silently goes nowhere. An `old` may be a list of acceptable baselines.
+    edits = []
+    for key, old, new in UPLOAD_KIND_EDITS:
+        baselines = old if isinstance(old, list) else [old]
+        found = next((b for b in baselines if b in contents[key]), None)
+        if found is None:
             say(TAG, f"warning: {paths[key]} is not the shape expected; left the upload "
                      "allowlist at spreadsheets only. Missing anchor:")
-            print(old)
+            print(baselines[0])
             return
-    for key, old, new in UPLOAD_KIND_EDITS:
+        edits.append((key, found, new))
+    for key, old, new in edits:
         contents[key] = contents[key].replace(old, new)
     for key, text in contents.items():
         paths[key].write_text(text, encoding="utf-8")
