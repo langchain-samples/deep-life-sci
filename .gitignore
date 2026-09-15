@@ -53,3 +53,7 @@ sniff_deprecated.py
 # .dockerignore. Kept on disk, out of the repo: samples/README.md, itself untracked,
 # records where each one came from.
 samples/
+
+# Scratch corpus: READMEs of ~100 comparable open-source vertical agents, pulled for
+# a one-off comparison of our README against theirs. Nothing reads it at run time.
+readme_research/
