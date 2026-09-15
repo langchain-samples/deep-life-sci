@@ -106,15 +106,6 @@ def _semaphore() -> asyncio.Semaphore:
     return _sem
 
 
-# Parsed off the ListObjectsV2 response. Done with a regex rather than ElementTree
-# because the response is namespaced and we want exactly two fields; adding namespace
-# handling for that is more code, not less.
-_CONTENTS_RE = re.compile(
-    r"<Contents>.*?<Key>(?P<key>[^<]+)</Key>.*?<Size>(?P<size>\d+)</Size>.*?</Contents>",
-    re.DOTALL,
-)
-
-
 async def _s3_list(client: httpx.AsyncClient, prefix: str) -> list[tuple[str, int]]:
     """List objects under `prefix`, following continuation tokens."""
     out: list[tuple[str, int]] = []
@@ -127,16 +118,25 @@ async def _s3_list(client: httpx.AsyncClient, prefix: str) -> list[tuple[str, in
             resp = await client.get(BUCKET, params=params)
         if resp.status_code != 200:
             raise PMCError(f"S3 list failed for {prefix!r}: HTTP {resp.status_code}")
-        out.extend(
-            (m.group("key"), int(m.group("size")))
-            for m in _CONTENTS_RE.finditer(resp.text)
-        )
-        if "<IsTruncated>true</IsTruncated>" not in resp.text:
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError as exc:
+            raise PMCError(f"S3 list returned invalid XML for {prefix!r}") from exc
+        # S3 XML is namespaced; parsing also decodes entities in keys and tokens.
+        for entry in root.findall("{*}Contents"):
+            key = entry.findtext("{*}Key")
+            size = entry.findtext("{*}Size")
+            if key is None or size is None or not size.isdigit():
+                raise PMCError(f"S3 list returned an invalid object for {prefix!r}")
+            out.append((key, int(size)))
+        if root.findtext("{*}IsTruncated") != "true":
             return out
-        m = re.search(r"<NextContinuationToken>([^<]+)</NextContinuationToken>", resp.text)
-        if not m:
-            return out
-        token = m.group(1)
+        next_token = root.findtext("{*}NextContinuationToken")
+        if not next_token or next_token == token:
+            raise PMCError(
+                f"S3 list returned a missing or repeated continuation token for {prefix!r}"
+            )
+        token = next_token
 
 
 async def _s3_get(client: httpx.AsyncClient, key: str) -> bytes | None:

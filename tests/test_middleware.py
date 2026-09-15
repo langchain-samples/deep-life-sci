@@ -296,6 +296,10 @@ class _Request:
 
 
 class TestUpdateCadence:
+    @pytest.fixture(autouse=True)
+    def frozen_clock(self, monkeypatch):
+        monkeypatch.setattr(time, "time", lambda: 1000.0)
+
     def test_silence_past_the_threshold_injects_a_reminder(self):
         middleware = UpdateCadence(quiet_seconds=10.0)
         request = _Request({"last_update_at": time.time() - 45}, [HumanMessage("Q")])

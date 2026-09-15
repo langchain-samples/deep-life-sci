@@ -6,6 +6,13 @@ wheels/
 *.egg-info
 .venv
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+credentials.json
+node_modules/
 .ruff_cache/
 .pytest_cache/
 .langgraph_api/

@@ -240,10 +240,20 @@ def probe_workbook(path: str, record: dict) -> None:
                 if element.tag == _SPREADSHEET_NS + "row":
                     rows += 1
                     if rows == 1:
-                        header = [
-                            sheet_text(cell, shared)
-                            for cell in element.iter(_SPREADSHEET_NS + "c")
-                        ]
+                        for cell in element.iter(_SPREADSHEET_NS + "c"):
+                            # OOXML omits empty cells. Preserve their positions so a
+                            # C1 header is not reported as column B to the analyst.
+                            ref = re.fullmatch(r"([A-Z]+)[1-9][0-9]*", cell.get("r", ""))
+                            column = 0
+                            if ref:
+                                for letter in ref.group(1):
+                                    column = column * 26 + ord(letter) - ord("A") + 1
+                            else:
+                                column = len(header) + 1
+                            if not 1 <= column <= 16_384:
+                                raise ValueError("worksheet column exceeds the Excel limit")
+                            header.extend([""] * max(0, column - len(header)))
+                            header[column - 1] = sheet_text(cell, shared)
                     element.clear()
 
     record["rows"] = max(0, rows - 1)
@@ -595,8 +605,11 @@ def probe_pdf(path: str, record: dict, name: str) -> None:
         # An owner-password PDF (print/copy restricted, no user password) opens with an
         # empty password, which is the common case for a publisher download.
         try:
-            reader.decrypt("")
+            decrypted = reader.decrypt("")
         except Exception:  # noqa: BLE001 - genuinely locked
+            decrypted = False
+        # pypdf normally reports a wrong password with NOT_DECRYPTED (0), not an exception.
+        if not decrypted:
             record["note"] = "password-protected; no text could be extracted"
             return
 

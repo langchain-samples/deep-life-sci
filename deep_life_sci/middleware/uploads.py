@@ -657,7 +657,8 @@ class UploadMiddleware(AgentMiddleware):
         return _parse_lines(getattr(result, "output", "") or "")
 
     async def _reconcile(
-        self, durable: dict[str, bytes], prior: list[dict[str, Any]]
+        self, durable: dict[str, bytes], prior: list[dict[str, Any]],
+        *, replaced: set[str] | None = None,
     ) -> list[dict[str, Any]] | None:
         """Make the sandbox match the durable set. Returns a manifest, or `None` if
         nothing changed and `prior` still describes it accurately."""
@@ -669,7 +670,7 @@ class UploadMiddleware(AgentMiddleware):
         pending = [
             (f"{self.upload_dir}/{name}", payload)
             for name, payload in durable.items()
-            if present.get(name) != len(payload)
+            if name in (replaced or ()) or present.get(name) != len(payload)
         ]
 
         if pending:
@@ -749,7 +750,10 @@ class UploadMiddleware(AgentMiddleware):
 
         try:
             durable = await self._durable(runtime.store, _thread_key(), harvested)
-            manifest = await self._reconcile(durable, prior)
+            # New attachments supersede same-name files even when their sizes match.
+            manifest = await self._reconcile(
+                durable, prior, replaced={file["name"] for file in harvested}
+            )
         except Exception:
             # A failure here must not take down the run. The rewrites still apply, so the
             # payload does not leak into the model's context, and the manifest keeps

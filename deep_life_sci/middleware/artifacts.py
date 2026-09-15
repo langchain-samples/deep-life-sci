@@ -251,7 +251,6 @@ class ArtifactMiddleware(AgentMiddleware):
             fingerprint = f"{size}:{info.get('mtime')}"
             if seen.get(path) == fingerprint:
                 continue
-            seen[path] = fingerprint
             fresh.append((path, size, fingerprint))
 
         if not fresh:
@@ -265,6 +264,7 @@ class ArtifactMiddleware(AgentMiddleware):
         for path, size, fingerprint in fresh:
             if size > self.max_inline_bytes:
                 self._push(path, size, None, message, fingerprint)
+                seen[path] = fingerprint
 
         if not inline:
             return
@@ -275,9 +275,6 @@ class ArtifactMiddleware(AgentMiddleware):
         for (path, size, fingerprint), response in zip(inline, downloads, strict=True):
             if response.error or response.content is None:
                 logger.warning("could not download %s: %s", path, response.error)
-                # Nothing was published, so the fingerprint must not stick — otherwise
-                # the retry on the next sweep is suppressed and the file never appears.
-                self._seen.get(self._thread_key(request), {}).pop(path, None)
                 continue
             self._push(
                 path,
@@ -286,6 +283,9 @@ class ArtifactMiddleware(AgentMiddleware):
                 message,
                 fingerprint,
             )
+            # Record success only after publishing. Download/stream exceptions and
+            # incomplete batches must leave unpublished files eligible for retry.
+            seen[path] = fingerprint
 
     def _push(
         self,

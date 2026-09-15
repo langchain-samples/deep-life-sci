@@ -354,15 +354,41 @@ class TestTheCheckedInSeedFiles:
             for kind in row.get("expects_artifact") or []:
                 assert kind in _KINDS, f"{row['id']}: unknown artifact kind {kind!r}"
 
-    def test_rubrics_are_block_scalars_rather_than_folded_into_one_line(
-        self, seed_file: Path
-    ):
-        """Block scalars keep a rubric reviewable in a diff and byte-exact to the judge."""
-        rows = yaml.safe_load(seed_file.read_text(encoding="utf-8"))
-        assert any((row.get("rubric") or "").strip() for row in rows)
+    def test_every_example_has_a_nonempty_text_rubric(self, seed_file: Path):
+        """A missing rubric silently excludes an example from judge scoring."""
+        for row in yaml.safe_load(seed_file.read_text(encoding="utf-8")):
+            assert isinstance(row.get("rubric"), str), row["id"]
+            assert row["rubric"].strip(), row["id"]
 
     def test_no_example_carries_a_key_sync_would_silently_drop(self, seed_file: Path):
         known = {"id", "question", "expects_artifact", "rubric", "domain", "surface",
                  "notes"}
         for row in _load(seed_file):
             assert set(row) <= known, f"{row['id']}: unknown key(s) {set(row) - known}"
+
+
+@pytest.mark.parametrize("reply,expected", [
+    ('{"pass": true, "reason": "supported"}', True),
+    ('```json\n{"pass": false, "reason": "missing chart"}\n```', False),
+    ('{"pass": 0.75}', None), ('[]', None), ('not json', None), ('{}', None),
+])
+async def test_judge_parses_real_message_text_and_includes_artifacts(monkeypatch, reply, expected):
+    from unittest.mock import AsyncMock
+
+    from langchain_core.messages import AIMessage
+
+    from evals.evaluators import judge
+
+    model = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(reply)))
+    monkeypatch.setattr(judge, "judge_model", lambda: model)
+    result = await judge.rubric_judge(
+        _run(answer="Answer evidence", artifact_names=["chart", None]),
+        _example(rubric="Must plot evidence"),
+    )
+    assert result["score"] is expected
+    prompt = model.ainvoke.call_args.args[0]
+    assert "Answer evidence" in prompt
+    assert "Must plot evidence" in prompt
+    assert "Deliverables this run published: chart" in prompt
+    if expected is None:
+        assert "unparseable" in result["comment"]

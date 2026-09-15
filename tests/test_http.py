@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -92,6 +93,23 @@ class TestChunks:
 
 
 class TestThrottle:
+    @pytest.fixture(autouse=True)
+    def clock(self, monkeypatch):
+        from deep_life_sci.sources import _http
+
+        now = [100.0]
+        real_sleep = asyncio.sleep
+
+        async def sleep(delay):
+            # Yield while the throttle holds its lock: concurrent waiters must queue.
+            await real_sleep(0)
+            now[0] += delay
+
+        self.sleep = AsyncMock(side_effect=sleep)
+        self.now = lambda: now[0]
+        monkeypatch.setattr(_http, "time", SimpleNamespace(monotonic=self.now))
+        monkeypatch.setattr(_http, "asyncio", SimpleNamespace(Lock=asyncio.Lock, sleep=self.sleep))
+
     async def test_serialises_concurrent_callers_to_the_interval(self):
         """The pacing is process-wide, so a gather must not let calls overlap."""
         throttle = Throttle(lambda: 0.02)
@@ -99,7 +117,7 @@ class TestThrottle:
 
         async def call() -> None:
             await throttle.wait()
-            stamps.append(time.monotonic())
+            stamps.append(self.now())
 
         await asyncio.gather(*(call() for _ in range(4)))
 
@@ -113,17 +131,18 @@ class TestThrottle:
 
         await throttle.wait()
         interval[0] = 0.02
-        started = time.monotonic()
+        started = self.now()
         await throttle.wait()
 
-        assert time.monotonic() - started >= 0.015
+        assert self.now() - started >= 0.015
 
     async def test_does_not_wait_when_the_interval_has_already_passed(self):
         throttle = Throttle(lambda: 0.0)
-        started = time.monotonic()
+        started = self.now()
         for _ in range(5):
             await throttle.wait()
-        assert time.monotonic() - started < 0.05
+        assert self.now() == started
+        self.sleep.assert_not_awaited()
 
 
 def test_retry_statuses_are_the_rate_limiter_and_the_gateway():

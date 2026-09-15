@@ -749,3 +749,18 @@ class TestFetchAbstracts:
         params = transport.requests[0].url.params
         assert params["retmode"] == "xml"
         assert "retmax" not in params
+
+
+async def test_post_body_preserves_every_id_and_query_parameter(mock_ncbi):
+    from urllib.parse import parse_qs
+
+    ids = ",".join(str(n) for n in range(10_000_000, 10_000_400))
+    transport = mock_ncbi(lambda req: json_response({}))
+    await pubmed._request("efetch", db="pubmed", id=ids, retmode="xml")
+    request = transport.requests[0]
+    assert request.method == "POST"
+    payload = parse_qs(request.content.decode())
+    assert payload["id"] == [ids]
+    assert payload["db"] == ["pubmed"]
+    assert payload["retmode"] == ["xml"]
+    assert "application/x-www-form-urlencoded" in request.headers["content-type"]

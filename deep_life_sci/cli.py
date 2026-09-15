@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessageChunk
 # reads the environment only inside functions — unlike `sandbox.py` below.
 from deep_life_sci.models import ENV_VARS
 
-_CLI_OVERRIDES = {k: v for k in ENV_VARS if (v := os.environ.get(k))}
+_CLI_OVERRIDES = {k: v for k in ENV_VARS if (v := os.environ.get(k)) is not None}
 load_dotenv(override=True)
 os.environ.update(_CLI_OVERRIDES)
 

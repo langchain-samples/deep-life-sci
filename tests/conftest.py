@@ -1,54 +1,37 @@
-"""Shared fixtures. Three concerns, and they are the three ways this suite could lie.
+"""Offline test fixtures.
 
-**Environment.** Nearly every module here reads its configuration from `os.environ` at
-*call* time rather than at import — a deliberate choice the repo documents in `paths.py`
-and `cache_io.py`, because `cli.py` and `evals/run.py` both `load_dotenv(override=True)`
-after the package is importable. That makes the environment shared mutable state between
-tests, and a developer's own `.env` is loaded into the process by anything that imports
-`evals.sync`. `isolated_env` is therefore autouse: every test starts from an environment
-with this project's variables stripped.
+Disable dotenv before test collection, strip project settings before each test, and
+redirect every source cache to temporary directories. Tests that need seeded cache
+entries can override those module attributes with the narrower fixtures below.
 
-**The cache.** `sources/pubmed.py` and `sources/ctgov.py` bind their cache directory from
-`paths` at import, so a test that let them write would put files in the developer's real
-`data/`. The cache fixtures rebind the module attribute to a tmp_path. Rebinding the
-module rather than the env var is the honest thing to do: the env var is only read at
-import, so setting it inside a test would do nothing and the test would pass while writing
-to the wrong place.
-
-**HTTP.** No test in this suite makes a network call. `mock_ncbi`/`mock_ctgov` put an
-`httpx.MockTransport` behind `httpx.AsyncClient`, which is the narrowest seam that still
-exercises the real `_request` — its retry ladder, its POST threshold and its status
-handling are the parts worth testing, and they live inside that function. Those two
-fixtures also stub each module's `backoff_delay` and `Throttle.wait` to zero: the delays
-themselves belong to `_http` and are tested there directly, so leaving them live would only
-add ~30s of real sleeping to a suite that asserts nothing about it.
+Socket connections are blocked per test, including attempts that application code
+catches. HTTP tests inject MockTransport so URL construction, status handling, retries,
+parsing, and caching still execute. Source pacing is disabled there; test_http.py
+checks the throttle itself with a controlled clock.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
-# Tracing, forced off for the whole session rather than per test.
-#
-# This has to happen at import — before any test module is collected — because
-# `evals/sync.py` calls `load_dotenv(override=True)` at *its* import, which pulls the
-# developer's real `.env` into `os.environ` during collection. With tracing left on,
-# every `@tool` invocation in this suite opens a run against LangSmith and ships it: a
-# unit suite making network calls, on someone's real workspace, with test fixtures as the
-# payload. Verified by watching 401s scroll past on a first run of this file.
+# Apply these before entry points can be imported by test collection. Per-test
+# fixtures repeat them because tests can temporarily change process configuration.
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGSMITH_OTEL_ENABLED"] = "false"
+# Prevent entry-point imports from loading a developer's configuration during collection.
+os.environ["PYTHON_DOTENV_DISABLED"] = "true"
 
 
 def pytest_configure(config) -> None:
-    """Re-assert the above after plugins and `.env` loads have had their turn."""
+    """Keep tracing disabled before collection starts."""
     os.environ["LANGSMITH_TRACING"] = "false"
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
     os.environ["LANGSMITH_OTEL_ENABLED"] = "false"
@@ -68,7 +51,7 @@ _PROJECT_ENV = (
     "NCBI_TOOL",
     "EVALS_DATASET_PREFIX",
     "SANDBOX_SNAPSHOT_NAME",
-    "DEEP_LIFE_SCI_PERF",
+    "PERF_PROBE",
 )
 
 
@@ -79,10 +62,48 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for name in (*_PROJECT_ENV, *ENV_VARS):
         monkeypatch.delenv(name, raising=False)
-    # Belt and braces: a test that imports `evals.sync` re-runs `load_dotenv(override=True)`
-    # and can put tracing back on mid-session.
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    monkeypatch.setenv("LANGSMITH_OTEL_ENABLED", "false")
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "true")
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Fail even if production catches the socket exception and returns an error value."""
+    attempts = []
+    original = socket.socket.connect
+
+    def connect(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            attempts.append(True)
+            raise AssertionError("Unit tests must use a mock transport")
+        return original(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect)
+    yield
+    assert not attempts, "A test attempted a real network connection"
+
+
+@pytest.fixture(autouse=True)
+def isolated_caches(tmp_path, monkeypatch):
+    """No test may read, refresh, or sweep the developer's corpus."""
+    from deep_life_sci.sources import cache_io, ctgov, pmc, pubmed
+    from evals.evaluators import citations
+
+    roots = tuple(tmp_path / name for name in ("abstracts", "pmc", "trials"))
+    for module, name, root in (
+        (pubmed, "ABSTRACT_CACHE", roots[0]),
+        (citations, "ABSTRACT_CACHE", roots[0]),
+        (pmc, "PMC_CACHE", roots[1]),
+        (pmc, "RESOLVED_CACHE", roots[1] / "_resolved"),
+        (ctgov, "CTGOV_CACHE", roots[2]),
+    ):
+        monkeypatch.setattr(module, name, root)
+    monkeypatch.setattr(cache_io, "CACHE_ROOTS", roots)
+    monkeypatch.setattr(cache_io, "_last_sweep", None)
+    monkeypatch.setattr(pmc, "_sem", None)
 
 
 @pytest.fixture

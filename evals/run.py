@@ -39,7 +39,7 @@ from dotenv import load_dotenv
 from deep_life_sci.models import ENV_VARS
 
 _ENV_OVERRIDES = {k: v for k in (*ENV_VARS, "DEEP_LIFE_SCI_CACHE_TTL")
-                  if (v := os.environ.get(k))}
+                  if (v := os.environ.get(k)) is not None}
 load_dotenv(override=True)
 os.environ.update(_ENV_OVERRIDES)
 

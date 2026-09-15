@@ -172,7 +172,10 @@ class TestOneAxisOnePlace:
                 assert f'"{role.upper()}_{axis}"' not in source, relative
 
     def test_every_documented_env_var_is_in_the_list(self):
-        assert len(ENV_VARS) == len(DEFAULTS) * 3
+        expected = {f"{role}_{axis}" for role in ("ROOT", "SUBAGENT", "SEARCH", "JUDGE")
+                    for axis in ("MODEL", "PROVIDER", "EFFORT")}
+        assert set(ENV_VARS) == expected
+        assert len(ENV_VARS) == len(expected)
 
 
 class TestPathsAreAnchoredToTheRepoRoot:
@@ -243,24 +246,25 @@ class TestTheSystemPromptIsBuiltPerRun:
     def test_the_date_has_a_days_granularity_so_the_cached_prefix_is_stable(self):
         from datetime import date
 
-        assert build_system_prompt(date(2026, 1, 2)) == build_system_prompt(date(2026, 1, 2))
+        first = build_system_prompt(date(2026, 1, 2))
+        second = build_system_prompt(date(2026, 1, 3))
+        assert first != second
+        assert first.replace("2026-01-02", "DATE") == second.replace("2026-01-03", "DATE")
 
 
 class TestThePromptKeepsThePayloadRulesItEnforces:
     """The prompt is production code — "one line ... cut root context from 115k to 31k"."""
 
     def test_the_triage_step_before_any_full_text_call_is_named(self):
-        assert "pmcLocate" in _TEMPLATE
-        assert "fetchFullText" in _TEMPLATE
+        assert _TEMPLATE.index("### Triage first") < _TEMPLATE.index("tools.fetchFullText")
 
     def test_reading_a_deliverable_back_is_forbidden(self):
         """Reading a PNG back can cost more context than an entire run."""
-        assert paths.OUT_DIR in _TEMPLATE
-        assert "readFile" in _TEMPLATE
+        assert "Never `readFile` anything in `out/`" in _TEMPLATE
 
     def test_subagents_are_told_not_to_fetch_for_themselves(self):
         """NCBI allows 3 req/sec; N subagents each fetching would collect 429s."""
-        assert "subagent" in _TEMPLATE.lower()
+        assert "The subagents do no I/O of their own" in _TEMPLATE
 
 
 class TestThePackageShipsNoTestFramework:

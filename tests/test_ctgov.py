@@ -542,3 +542,31 @@ class TestCtgovFetch:
         transport = mock_ctgov(handler)
         await ctgov_fetch.ainvoke({"nct_ids": ids, "include": []})
         assert len(transport.requests) == 3
+
+
+async def test_fetch_chunking_neither_loses_nor_duplicates_ids(trial_cache, mock_ctgov):
+    ids = [f"NCT{n:08d}" for n in range(1, 402)]
+
+    def serve(request):
+        studies = []
+        for nct_id in request.url.params["filter.ids"].split(","):
+            study = _study()
+            study["protocolSection"]["identificationModule"]["nctId"] = nct_id
+            studies.append(study)
+        return json_response({"studies": studies})
+
+    transport = mock_ctgov(serve)
+    result = await ctgov_fetch.ainvoke({"nct_ids": [*ids, ids[0]], "include": []})
+    requested = [nct_id for req in transport.requests
+                 for nct_id in req.url.params["filter.ids"].split(",")]
+    assert requested == ids
+    assert set(result["records"]) == set(ids)
+    assert result["missing"] == []
+    assert result["invalid"] == []
+
+
+async def test_ctgov_retry_exhaustion_reports_the_last_http_error(mock_ctgov):
+    transport = mock_ctgov(lambda req: httpx.Response(503, text="temporarily unavailable"))
+    with pytest.raises(ClinicalTrialsError, match="temporarily unavailable"):
+        await ctgov._request("/studies", **{"query.cond": "cancer"})
+    assert len(transport.requests) == 4
