@@ -40,6 +40,7 @@ data/
 # of it is input to the agent or the eval harness — the canonical seeds are
 # evals/datasets/*.yaml.
 docs/
+AUDIT.md
 evals/datasets/archive/
 evals/taxonomy/
 evals/ground_truth_reports/

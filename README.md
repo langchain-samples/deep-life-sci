@@ -82,15 +82,6 @@ uv run agent "which papers base-edit PCSK9?" # runs headlessly in CLI
 
 Ctrl-C to stop the running server.
 
-## Layout
-
-```
-scripts/              setup.py (one-time setup), dev.py (chat stack), build_snapshot.py
-deep_life_sci/        the agent: assembly, entry points, tools, prompts, middleware
-evals/                LangSmith datasets + evaluators
-ui/                   artifact components rendered by the chat frontend
-```
-
 ## Disclaimer
 
 This is a demonstration project, intended for research and educational use. Its answers are

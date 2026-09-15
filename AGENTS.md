@@ -1,236 +1,121 @@
-# CLAUDE.md
+# Repository guidance
 
-Guidance for Claude Code in this repository. **Keep this file at or below 200 lines**, and
-keep it to what cannot be read off the code: commands, rules, and traps. Every module here
-carries a docstring explaining itself — point at it rather than restating it.
+Instructions for any coding agent working in this repository. Keep this file under
+200 lines: retain commands, project-specific constraints, and pitfalls; put detailed
+rationale in module docstrings. `CLAUDE.md` is a symlink to this file.
 
-## What this is
+## Project and local guidance
 
-A Deep Agents demo: a PubMed/PMC research assistant for life scientists. It searches PubMed,
-retrieves abstracts and PMC full text, queries ClinicalTrials.gov, searches the web for what
-neither holds, fans out cheap subagents across papers, and computes/plots in a sandbox.
+A life-science research assistant built with Deep Agents: PubMed/PMC literature,
+ClinicalTrials.gov, web search, specialist subagents, and sandboxed analysis.
 
-`README.md` is human setup only — keep it to what a new user needs to run the thing,
-nothing more.
+- Read `tests/test_invariants.py` for contracts that span multiple files.
+- Before changing source clients, read `deep_life_sci/sources/CLAUDE.md`.
+- Before changing setup or the chat stack, read `scripts/CLAUDE.md`; for overlay
+  components, also read `chat-ui-overlay/CLAUDE.md`. These files apply to any coding agent.
+- Keep `README.md` focused on human setup. Module docstrings explain implementation;
+  avoid duplicating them here. See `tests/__init__.py` and `evals/README.md` for test scope.
 
 ## Commands
 
+Run from the repository root:
+
 ```bash
-uv run scripts/setup.py                # once per clone: .env, deps, snapshot, chat UI
-uv run scripts/dev.py                  # the chat stack, both halves, Ctrl-C stops both
-                                       # NO_BROWSER=1 skips opening the browser tab
-uv run agent ["question"]              # bare = DEMO_QUESTION
-ROOT_MODEL=claude-sonnet-5 uv run agent        # swap one role; SUBAGENT_/JUDGE_ too
-uv run scripts/build_snapshot.py       # one-off: bake the scientific/bio Python stack
-                                       # into the sandbox snapshot (~100s, rdkit is most of it)
-uv run langgraph dev                   # just the graph, on :2024
-
-uv run --group test pytest             # the unit suite; no network, no models
-uv run python -m evals.sync            # push evals/datasets/*.yaml to LangSmith
-uv run python -m evals.run --structural --limit 3   # score, no judge model
-uvx ruff check .                       # config lives in pyproject.toml
+uv run scripts/setup.py                # initial setup: environment, deps, snapshot, UI
+uv run scripts/dev.py                  # start API and chat UI; NO_BROWSER=1 skips browser
+uv run agent ["question"]              # one-shot CLI; no question uses the demo
+uv run scripts/build_snapshot.py       # rebuild the scientific Python sandbox image
+uv run langgraph dev                   # API only, port 2024
+uv run --group test pytest             # offline tests
+uv run --group test pytest tests/test_pubmed.py  # example focused check
+uv run ruff check .                    # repository lint configuration in pyproject.toml
+uv run python -m evals.run --structural --limit 3  # live evaluation, no judge model
+uv run python -m evals.sync             # publish dataset seeds to LangSmith
 ```
 
-`setup.py` and `dev.py` are split so starting the agent never triggers an install: setup does
-`.env`, `uv sync`, the snapshot and the frontend, each skipped when already done; dev
-*verifies* them instead. **Setup is the only thing that writes `.env`**, so a new required
-setting needs a prompt there plus a line in `.env.example`.
+- Run tests relevant to the change and lint. Runtime changes should pass the full
+  offline suite; support both Python 3.12 and 3.13. Do not add live calls to `tests/`.
+- `tests/` verifies code; `evals/` measures research quality using external services.
+  Keep evaluation code outside the deployed package and invoke its entry points with `-m`.
+- Follow `pyproject.toml` for style. Do not reflow or strip whitespace from prompt strings:
+  JavaScript examples and Markdown line breaks can be semantically significant.
 
-`tests/` is the unit suite and `evals/` measures the agent; separate groups, separate
-questions (`tests/__init__.py`, `evals/README.md`). Nothing in `tests/` calls a model,
-boots a sandbox or touches the network. **Read `tests/test_invariants.py` first** — it
-holds the cross-file rules below, which no module can enforce and which fail silently.
-Skipping `build_snapshot.py` is slow, not broken: `sandbox.py` falls back to a ~95s
-runtime install per sandbox when no snapshot matches `SANDBOX_SNAPSHOT_NAME`.
+## Configuration and setup
 
-The chat UI is a gitignored clone of `langchain-ai/agent-chat-ui` at `.chat-ui/`, patched by
-setup on every run, with our own components in `chat-ui-overlay/`. **See
-`scripts/CLAUDE.md`** before touching any of that.
+- `scripts/setup.py` owns `.env` writes. Add a setup prompt and an `.env.example` entry
+  for any new required setting. `scripts/dev.py` verifies setup; starting the app must
+  not trigger dependency installation.
+- The gateway authenticates with a LangSmith key. Provider credentials belong in the
+  workspace's provider integrations. See `models.py:gateway_key()` for precedence.
+- Model roles and environment axes live in `models.py:ENV_VARS`. Entry points import
+  that list; do not copy it. Preserve explicitly empty values across dotenv loading:
+  empty effort disables the parameter for models that do not support it.
+- Keep model/provider validation and provider-specific routing in `models.py`. Search
+  models must support the provider's web-search tool. Root streaming and its timeout
+  belong together: the read timeout measures gaps between streamed chunks.
+- Define host paths in `paths.py`, anchored to the repository root. Preserve
+  `DEEP_LIFE_SCI_DATA_DIR` overrides and scope cache sweeps to the named cache roots.
+- `.chat-ui/` is an ignored upstream clone patched by setup. Make persistent UI changes
+  in `chat-ui-overlay/` or the setup patches, not only in the generated clone.
 
-## Environment
+## Agent and tool contracts
 
-`scripts/setup.py` writes `.env`. **One LangSmith key**, prompted for once and written to
-both names that read it: `LANGSMITH_API_KEY` (tracing, sandboxes, fallback for models) and
-`LANGSMITH_GATEWAY_API_KEY` (model calls; `models.py:gateway_key()` is the order). Same value
-unless hand-edited to bill models elsewhere — setup only fills it when empty, so that edit
-survives. The gateway takes a **LangSmith** key, never a provider key: an OpenAI/Anthropic
-key lives workspace-side under Settings → Integrations → Provider Secrets, and one sent from
-a client gets a 403 (verified).
+- All entry points share `agent.py:build_agent(backend)`. Assembly must not acquire a
+  sandbox or perform external I/O; callers own sandbox lifetime.
+- `eval` is QuickJS orchestration, with no filesystem, shell, or network of its own.
+  `execute` runs real Python/shell commands in the LangSmith sandbox.
+- Adding a source tool requires assembly registration, the `ptc` allowlist, its camelCase
+  usage in `prompts/system.py`, and progress/error wrapping. Preserve the interpreter's
+  explicit limits; default timeouts are too short for research fan-outs.
+- Contain expected source/transport failures as `{error}` through `with_error_capture`.
+  Exceptions escaping the PTC bridge can end the entire run. Keep programming errors
+  visible rather than disguising them as empty results.
+- Build figure and supplementary tools per backend with `make_sandbox_tools`: returned
+  paths must refer to bytes actually staged in that sandbox.
+- Batch-fetch before dispatching analyst subagents; leaves must not fetch independently.
+  Set `tools: []` and narrow their filesystem middleware to `read_file`. Empty middleware
+  alone does not disable inherited filesystem tools. Keep the general-purpose leaf disabled.
+- Treat prompts as production code. Keep instructions concise and general; explain
+  pitfalls instead of adding unnecessary procedures or long tutorials.
 
-Model env var names live in `models.py:ENV_VARS`, imported by `cli.py` and `evals/run.py`. A
-new axis is preserved by adding it *there and nowhere else* — a hand-copied list is how a
-`ROOT_MODEL=...` on the command line silently loses to `.env`.
+## Context and file boundaries
 
-Every host-side path is defined in `deep_life_sci/paths.py`, anchored to the repo root rather
-than to any module's location. Getting that anchor wrong silently starts a second empty cache
-instead of failing. `DEEP_LIFE_SCI_DATA_DIR` overrides it.
+- Keep large source payloads in QuickJS or analyst contexts. Use `pmc_locate` to triage
+  before full-text retrieval. Root-visible output should summarize results, not dump them.
+- Web search belongs in the search-role PTC tool. Binding provider search directly to
+  the root model places retrieved pages in root context.
+- Host `data/` is a cache, not a filesystem the research agent can access. Materialize
+  required files in the sandbox explicitly.
+- `/workspace/out/` contains user deliverables, published by `ArtifactMiddleware` through
+  the `ui` state channel. Preserve the prompt's prohibition on reading deliverables back
+  into root context. Record artifact fingerprints only after successful publication.
+- Uploads live under `/workspace/uploads/`, outside deliverables. Strip attachment bytes
+  before the first model call; keep durable copies per thread in the LangGraph store.
+  Manifests carry shapes, identifiers, and sidecar paths, not document bodies.
+- An upload format needs entries in `UPLOAD_KINDS`, the probe dispatcher, the root prompt,
+  and the composer allowlist. New reader libraries also require a snapshot rebuild.
+- Keep common upload probes on the standard library to avoid cold import latency.
+  PDF, GenBank, and fallback image decoding use lazy library imports; keep those local
+  to their format-specific paths. New attachments must overwrite same-name sandbox files
+  even when their byte counts match.
 
-## Architecture
+## Lifecycle and deployment pitfalls
 
-```
-deep_life_sci/
-├── agent.py cli.py graph.py runner.py    assembly + the three entry points
-├── sandbox.py                            sandbox lifecycle + WebSocket retry
-├── models.py paths.py                    gateway routing, host-side paths
-├── prompts/     system.py subagents.py
-├── sources/     pubmed.py pmc.py ctgov.py web.py cache_io.py _http.py
-└── middleware/  artifacts.py uploads.py upload_probe.py perf.py progress.py cadence.py
-                 tool_errors.py
-evals/  scripts/  ui/  chat-ui-overlay/  data/
-```
-
-Three entry points build the **same** agent via `agent.py:build_agent(backend)`, which only
-assembles — it owns no sandbox and no I/O, which is what lets all three share it:
-
-- `cli.py` — one-shot CLI, sandbox for the life of a `with` block.
-- `graph.py` — LangGraph server. Sandbox keyed to `thread_id` and reused across turns, so
-  turn 2 sees turn 1's files. Studio inspection (no `thread_id`) gets `_UnboundSandbox`,
-  which raises on any call — never let it reach a real run path.
-- `runner.py` — `run_once(question) -> RunResult`. Exists for `evals/`: the trajectory,
-  artifact names and `root_context_chars` aren't recoverable from the answer text, and are
-  where regressions show up.
-
-`evals/` is deliberately outside the package — nothing shipped at deploy time should carry a
-test framework. Its entry points must run with `-m` from the repo root.
-
-### The two code surfaces
-
-The root model does **not** call the PubMed tools directly. It writes JavaScript in a QuickJS
-interpreter (`CodeInterpreterMiddleware`) and reaches tools through programmatic tool calling,
-so search → fetch → fan out → compute → collect happens inside one `eval`.
-
-- `eval` (QuickJS) — orchestration only. No network, filesystem, or shell of its own.
-- `execute` (sandbox shell) — real Python 3 in a LangSmith sandbox container, for stats
-  and plots.
-
-Everything in the middleware's `ptc=[...]` allowlist appears in JS camelCased (`pubmed_search`
-→ `tools.pubmedSearch`). **Adding a tool means adding it to that allowlist and writing a
-prompt segment for it in `prompts/system.py`** — the model has no other way to discover it.
-The non-default `timeout=900`, `max_result_chars=40_000` and `max_ptc_calls=512` are all
-load-bearing; the 5s default timeout kills every real fan-out.
-
-`fetch_figures` and `fetch_supplementary` are the exception to module-level tools: `agent.py`
-builds them per run from `make_sandbox_tools(backend)`, because an image has to exist in the
-sandbox as a real file before `figure-analyst` can `read_file` it.
-
-`CodeInterpreterMiddleware` and dynamic subagents are both **beta** — their APIs may move
-between deepagents releases.
-
-**An upload format lives in four places**: `UPLOAD_KINDS` (`middleware/uploads.py`), a probe
-branch (`middleware/upload_probe.py`), a prompt segment (`prompts/system.py`), and the composer's
-allowlist (`scripts/setup.py:patch_upload_kinds`) — plus `build_snapshot.py` and a rebuild if the
-reader needs a library, since `sandbox.py` blocks runtime installs.
-
-### What must never enter root context
-
-PTC tool output is marshalled into the JS heap and never reaches the model's context. That is
-the core economy of the design, and these are its rules:
-
-- **Payloads go into subagent prompts, not the root transcript.** `pmc_locate` is the triage
-  step before any full-text call — sections, captions, supplementary filenames and the body's
-  character cost, *without* the body. `fetch_full_text` returns ~40k chars for a median paper
-  and is meant for a `full-text-analyst`, never the root.
-- **Host-side `data/` is invisible to the agent.** The sandbox starts empty; the agent writes
-  what it needs with `tools.writeFile`. A within-run optimisation, not a corpus.
-- **`/workspace/out/` is the user deliverables contract**, swept by `ArtifactMiddleware` and
-  published through the `ui` state key (`ui/ui.tsx`). The prompt forbids `read_file` on
-  anything in it — reading a PNG back can cost more context than an entire run.
-- **Web search is a PTC tool, never a spec bound to the root model.** Both providers ship it
-  server-side, so binding it lands every retrieved page in root context outside `eval` — 27.9k
-  input tokens for one question, measured. `sources/web.py` spends the search in a throwaway
-  `search`-role call and returns a digest; a raw provider dict can't reach
-  `create_deep_agent(tools=...)` anyway, since the PTC allowlist reads each tool's `.name`.
-- **`/workspace/uploads/` is not under `out/`**, or a file the user gave us would come back as
-  a deliverable of their own question. `UploadMiddleware` strips attachments out of the human
-  message before the first model call and passes a manifest instead; the durable copy lives in
-  the LangGraph store, per thread, because a container is reaped on `IDLE_TTL_SECONDS`.
-  **That manifest is shapes and identifiers, never contents** — `middleware/upload_probe.py`
-  runs in the sandbox and writes anything larger to a sidecar under `uploads/derived/` for a
-  subagent or `execute` to read, because an uploaded PDF's body in root context costs exactly
-  what `pmc_locate` exists to save.
-
-`middleware/progress.py` is the run's only visible output while it works — everything happens
-inside one `eval`, so the transcript shows a single unreturned tool call for minutes.
-
-### Subagents
-
-Five leaves in `prompts/subagents.py`, wired in `agent.py` by `analyst_leaf()`. Two deepagents
-defaults are worth knowing, and every leaf configures around both:
-
-- subagents **inherit the parent's tools** by default, so each leaf sets `tools: []`
-  explicitly. Leaving the full toolset in place lets models invent paths and roughly doubles
-  their latency.
-- `middleware: []` does **not** mean "no middleware" — deepagents prepends its own filesystem,
-  `execute` included. So each leaf also passes a `FilesystemMiddleware` narrowed to
-  `read_file`, the floor it refuses to drop (and what `figure-analyst` needs to see an image).
-
-The auto-added `general-purpose` subagent keeps both defaults: the PubMed tools and the full
-filesystem. Nothing routes work to it, and nothing should — give a leaf the narrowed
-configuration above instead.
-
-### Model gateway
-
-Four roles × three independent env vars, defaulting to twelve constants in `models.py`:
-
-| | `_MODEL` | `_PROVIDER` | `_EFFORT` |
-|---|---|---|---|
-| `ROOT` | `openai/gpt-5.6-terra` | `openai` | `low` |
-| `SUBAGENT` | `openai/gpt-5.6-luna` | `openai` | `low` |
-| `SEARCH` | `openai/gpt-5.6-luna` | `openai` | `low` |
-| `JUDGE` | `openai/gpt-5.6-terra` | `openai` | `low` |
-
-Root runs the larger model, leaves and `SEARCH` the cheaper one; `SEARCH` carries the
-provider's own web search (`WEB_SEARCH_SPECS`), so it must be an id that supports it or the
-call 400s. `models.py`'s docstring has the rest — why three axes rather than named profiles,
-why Anthropic models should go down the native `/anthropic` path — the OpenAI-compatible
-`/v1` path does not carry prompt caching — and what an unset `_EFFORT` means on each path. Two things to know before a swap:
-naming a `_PROVIDER` that the model id's form contradicts makes `_provider_for` raise rather
-than send it down the wrong path, and **Haiku 4.5 has no effort scale**, so
-`SUBAGENT_MODEL=claude-haiku-4-5-20251001` must also clear `SUBAGENT_EFFORT=` or it 400s.
-
-## Invariants worth preserving
-
-Each of these is a rule whose rationale lives in the file named beside it. Read that docstring
-before changing the behaviour.
-
-- **Subagents do no I/O.** NCBI allows 3 req/sec (10 with a key); N subagents each fetching
-  would collect 429s. Batch-fetch up front is what makes a large fan-out safe.
-- **Rate limits and API guards are per-source and load-bearing.** See
-  `deep_life_sci/sources/CLAUDE.md` before editing anything under `sources/`.
-- **The host cache expires on the same idle window as the sandbox** — `IDLE_TTL_SECONDS` is in
-  `paths.py` so `sandbox.py` and `sources/cache_io.py` cannot drift into a warm cache pointing
-  at a dead container. `DEEP_LIFE_SCI_CACHE_TTL=off` restores the permanent cache, which is
-  what `evals/run.py` sets so refetching doesn't depend on wall clock.
-- **Blocking calls must go through `asyncio.to_thread`** (`sources/cache_io.py`). Under
-  `langgraph dev`, blockbuster turns a blocking `read_text()` in a coroutine into a
-  `BlockingError` that kills the run; in production it stalls every other run in the process.
-- **`ResilientSandbox` retries assume idempotence** (`sandbox.py`). It retries transient
-  WebSocket failures below the tool boundary: without that, a single transient 502 mid-run
-  discards a fan-out's completed work. A tool whose sandbox command must run exactly once has
-  to be routed around it.
-- **A PTC tool must not raise** (`middleware/tool_errors.py`). An exception leaves the
-  host-function bridge and ends the *run*, not the call, and JS can only catch it as the
-  string `"Host function failed"`. Source failures are wrapped into `{error}` returns in
-  `agent.py`; anything new in the `ptc=[...]` allowlist needs the same containment.
-- **Artifact components only render same-origin.** `/ui/{graph}` returns a script tag with a
-  *host-relative* `src`, so a cross-origin frontend (hosted Agent Chat, Studio) cannot resolve
-  it and renders nothing in its place. Any frontend needs `/ui/*` proxied. Check the network
-  tab for `/ui/<graph>/entrypoint.js` before suspecting `middleware/artifacts.py` or
-  `ui/ui.tsx`.
-- **Graph state is downloaded whole by any client listing threads.** The QuickJS snapshot is
-  the heavy one, up to 11 MB of base64 per thread: the sidebar asks for `select`/`extract`,
-  not `values` (`patch_thread_search`), and reads get an `_UnboundSandbox` (`graph.py`).
-- **The upload probe stays on the standard library** (`middleware/upload_probe.py`). It runs
-  before the first model call, and the first `import pandas` or `import rdkit` in a fresh
-  container is 2-11s of lazy snapshot restore, not milliseconds — that was 13s of dead air
-  in front of the first token. A new probe branch reads with the stdlib and leaves the
-  library work to the agent; `sandbox.WARMUP` faults the libraries in behind the run.
-- **Prompt changes are the main tuning lever.** One line telling the model to print numbers
-  instead of reading its plot back cut root context from 115k to 31k chars. Treat `prompts/`
-  as production code.
-
-## Writing prompts
-
-Agent prompts should be as concise and general as possible. Avoid unnecessary detail and
-exposition. Unless critical, avoid giving the agent explicit instructions or step-by-step
-procedures; instead, simply document potential pitfalls or things it should know.
+- Graph runs reuse a sandbox by `thread_id`. Graph reads, including reads with a thread
+  ID, use `_UnboundSandbox`; inspecting history must not boot a container.
+- Blocking filesystem and SDK calls in async paths must run through `asyncio.to_thread`.
+  Otherwise they stall concurrent runs and can fail under the development server.
+- Preserve per-source rate limits and API guards; they prevent silent wrong answers.
+  Read their rationale in the source module before changing them.
+- Cache expiry and sandbox idle lifetime share `paths.py:IDLE_TTL_SECONDS`. Evaluation
+  runs can disable cache expiry with `DEEP_LIFE_SCI_CACHE_TTL=off`.
+- `ResilientSandbox` retries assume idempotent commands. Route operations that must run
+  exactly once around the retry wrapper. Keep cleanup on failed boots and session exits.
+- Provision scientific libraries through the snapshot. Without one, startup provisioning
+  is slower; model-issued runtime installs remain blocked.
+- Artifact UI scripts use host-relative URLs. Frontends must proxy `/ui/*` through their
+  own origin. Check `/ui/<graph>/entrypoint.js` when artifact cards fail to render.
+- Thread lists must request metadata projections rather than full state: QuickJS snapshots
+  can make each thread response megabytes. Preserve the `patch_thread_search` behavior.
+- QuickJS middleware and dynamic subagent APIs are beta. Exercise the real compiled-agent
+  integration test when changing their wiring or upgrading those dependencies.
