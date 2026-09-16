@@ -319,3 +319,105 @@
     Fail if the counts are recalled rather than sourced, if CBER products (vaccines, gene
     and cell therapies) are folded into the totals without saying so, if the comparison is
     made without stating the baseline, or if 2025 is characterised as a sharp drop.
+
+# Q16
+- id: step1-posted-nausea-serious-ae
+  question: >-
+    From the posted results for NCT03548935, how many participants in each arm experienced nausea, and how many experienced any serious AE? Distinguish the number of nausea events from the number of people affected.
+  expects_artifact: []
+  domain: D3 clinical medicine and trials
+  surface: ctgov-results
+  notes: >-
+    Verified 2026-09-16 against https://clinicaltrials.gov/api/v2/studies/NCT03548935
+    (last update 2021-11-19). Source fields:
+    resultsSection.adverseEventsModule.otherEvents and seriousEvents, term=Nausea,
+    plus eventGroups.seriousNumAffected. Important correction to the preliminary scan:
+    the registry also lists one serious nausea event in one semaglutide participant.
+  rubric: |-
+    STEP 1, NCT03548935. Arm order below is semaglutide 2.4 mg versus placebo.
+
+    REQUIRED:
+    - Nausea: 576 versus 114 participants affected; 1,067 versus 146 nausea events.
+      Clearly distinguish event counts from the number of people affected.
+    - Any serious adverse event, across all types: 128 semaglutide participants
+      versus 42 placebo participants. These are people, not numbers of SAE episodes.
+    - Ground the answer in the posted registry results, identifying NCT03548935.
+
+    Passing requires answering the question above, not a separate analysis of nausea
+    seriousness categories. Accept the required nausea counts labelled simply as
+    "nausea" or "participants with nausea". Do not fail an otherwise correct answer
+    for omitting the non-serious/other-events label, separate serious-nausea reporting,
+    or a discussion of overlap/deduplication between seriousness categories.
+
+    OPTIONAL: The registry separately lists serious nausea as 1 event in 1 semaglutide
+    participant and 0 events in 0 placebo participants. Accept 1,068 semaglutide nausea
+    events if identified as the sum of 1,067 non-serious plus 1 serious event.
+    Also accept 576-577 as the possible unique semaglutide participant count if the
+    answer explains that overlap between the two categories is unknown. None of
+    these additional distinctions is required to pass.
+
+    OPTIONAL, not required by this question: safety denominators 1,306 versus 655;
+    non-serious nausea percentages approximately 44.1% versus 17.4%; any-SAE
+    percentages approximately 9.8% versus 6.4%; safety analysis includes anyone
+    receiving at least one dose, with a week-0-to-week-75 reporting window.
+    If provided, these details must agree with the registry. Do not require an
+    artifact, a specific tool sequence, or a discussion of the reporting threshold.
+
+    Fail on missing or incorrect required counts, swapped arms, or conflating event
+    counts with people affected. If the answer chooses to calculate additional totals,
+    fail on adding person counts across seriousness categories as if disjoint or
+    summing individual SAE categories to calculate people with any serious AE.
+
+# Q17
+- id: mapp1-mapp2-posted-score-changes
+  question: >-
+    Compare the posted CAPS-5 and disability-score changes in MAPP1 and MAPP2. For each trial and endpoint, report the MDMA-assisted therapy and placebo-with-therapy arm sizes, least-squares mean changes, 95% CIs and assessment time. Calculate the difference between the posted arm estimates within each trial
+  expects_artifact: []
+  domain: D3 clinical medicine and trials
+  surface: ctgov-results+multi-trial
+  notes: >-
+    Verified 2026-09-16 against https://clinicaltrials.gov/api/v2/studies/NCT03537014
+    (MAPP1) and https://clinicaltrials.gov/api/v2/studies/NCT04077437 (MAPP2), both
+    last updated 2025-06-06. Source: resultsSection.outcomeMeasuresModule.
+    Differences checked with decimal
+    subtraction of posted arm estimates, not publication estimates. Results-only
+    fresh-cache requests give a file-backed MAPP1 and inline MAPP2 at the current
+    24,000-byte threshold; grading concerns the answer, not this implementation detail.
+  rubric: |-
+    MAPP1 = NCT03537014; MAPP2 = NCT04077437. Report both trials and both endpoints,
+    using posted least-squares mean changes and arm-level 95% confidence intervals.
+    MDMA-assisted therapy is compared with placebo WITH therapy in both trials.
+
+    REQUIRED VALUES (MDMA first, then placebo; all changes are score points):
+
+      Trial  Endpoint  MDMA n  MDMA change [95% CI]          Placebo n  Placebo change [95% CI]     MDMA minus placebo
+      MAPP1  CAPS-5    46      -24.50 [-28.28, -20.71]       44         -12.64 [-16.61, -8.66]      -11.86
+      MAPP1  SDS       46       -3.15 [ -3.90,  -2.40]       44          -1.79 [ -2.58, -1.00]       -1.36
+      MAPP2  CAPS-5    53      -23.69 [-26.94, -20.44]       50         -14.78 [-18.28, -11.28]       -8.91
+      MAPP2  SDS       53       -3.31 [ -4.03,  -2.60]       50          -2.11 [ -2.89, -1.33]       -1.20
+
+    Assessment time for both endpoints in both trials: baseline to approximately
+    18 weeks after enrollment confirmation. Accept "baseline to week 18". The MAPP2
+    CAPS-5 timeFrame has redundant wording ("post baseline post enrollment
+    confirmation"); reproducing that wording is not required.
+
+    The disability endpoint is the Sheehan Disability Scale (SDS); both records
+    describe adapted scoring using the mean of three items on a 0-10 scale.
+    MAPP2 includes "Adapted" in the outcome title. Accept SDS or adapted SDS for
+    either trial; do not require the scoring-range explanation, but reject a claim
+    that these posted changes use a 0-30 summed score.
+
+    Require all four calculated between-arm differences, with subtraction direction
+    clear. Positive 11.86, 1.36, 8.91 and 1.20 are acceptable if labelled as greater
+    reduction with MDMA or as placebo minus MDMA. They are calculations from the
+    rounded posted arm estimates, not separately reported treatment-effect analyses.
+    Arm sizes and time may be stated once per trial if their application to both
+    endpoints is unambiguous. Accept exact values or consistent rounding to one
+    decimal place (within 0.05 of each listed estimate, CI endpoint and difference).
+
+    Fail if a trial or endpoint, arm size, arm-level CI, assessment time, or calculated
+    difference is missing. Fail on substituting raw/published mean changes for the
+    posted LS means, confusing score changes with remission rates, using completer
+    counts instead of posted outcome denominators, or treating arm-level CIs as CIs
+    for the differences. Do not require a pooled effect, comparison of effect sizes
+    between trials, inferential CI for a difference, artifact, or specific tool sequence.

@@ -242,10 +242,12 @@ class TestDescribe:
 
 class TestSlug:
     def test_is_the_root_model_and_its_effort(self):
-        assert slug() == "gpt-5.6-sol-low"
+        model = DEFAULTS["root"]["model"].split("/")[-1]
+        assert slug() == f"{model}-{DEFAULTS['root']['effort']}"
 
     def test_strips_the_provider_prefix(self, monkeypatch):
         monkeypatch.setenv("ROOT_MODEL", "openai/gpt-5.6-luna")
+        monkeypatch.setenv("ROOT_EFFORT", "low")
         assert slug() == "gpt-5.6-luna-low"
 
     def test_an_effortless_root_slugs_to_the_model_alone(self, monkeypatch):

@@ -6,12 +6,11 @@ where the tool restrictions live; what's here is only what the leaf is told.
 
 Two things these prompts share, both load-bearing:
 
-* **Every one says it has no tools and cannot retrieve anything.** That has to stay true
-  in the wiring, not just in the prose — see the measured cost in `agent.py:analyst_leaf`
-  of a leaf that could reach the filesystem.
-* **The payload arrives in the task description.** This is the whole economy of the
-  design: abstract and full-text bytes land in a cheap leaf's context and never enter
-  the root transcript.
+* **Leaves cannot fetch sources.** They read explicitly staged paths with read_file;
+  the trial analyst also has grep to search the staged sections.
+* **Payloads or file manifests arrive in the task description.** Abstract and full-text
+  bytes land in a cheap leaf's context; large trial records are read selectively from
+  indexed files. Neither needs to enter the root transcript.
 """
 
 ABSTRACT_ANALYST = {
@@ -119,17 +118,34 @@ TRIAL_ANALYST = {
     "name": "trial-analyst",
     "description": (
         "Answers a specific question about a single ClinicalTrials.gov registry record. "
-        "The record must be included in the task description as JSON — this subagent "
-        "has no tools and cannot look anything up."
+        "Include the retrieved record or its storage=file manifest as JSON in the task "
+        "description. It can search and read staged sections but cannot fetch trials."
     ),
     "system_prompt": """\
 You answer one question about one ClinicalTrials.gov registry record.
 
-The record is in your task description as JSON. You have no tools and cannot retrieve
-anything — work only from the fields you were given.
+Your task description contains JSON: either the trial record itself or a manifest with
+`storage: "file"`. You cannot fetch trials. Your tools are `read_file` and `grep`.
 
-A registry record describes what a trial was *registered to do*. It is not a paper and
-usually not a result. Keep that distinction in every answer:
+For a file manifest, read `index_path` first and select the sections relevant to the
+question. The index gives section titles, paths, sizes and line counts. Search for
+relevant keywords with `grep` in the directory containing `index_path`, using
+`glob: "section-*.json"` to avoid duplicate matches in the complete record. `grep`
+matches literal text, not regex, and is case-sensitive; try capitalization variants
+and alternate terms before treating no matches as absence. Investigate every returned
+match, reading enough context to establish its relevance. Do not stop at the first
+match that answers the question; read every relevant match before reporting a finding.
+`read_file` defaults to 100 lines; use `offset` and `limit` to finish the index and selected sections.
+Do not read the complete `path` or every section by default. If a necessary section is
+too large or a read is truncated, report the coverage limit instead of guessing. If a
+file is missing, report it so the parent can refetch and restage the trial.
+For inline records, work directly from the provided fields without file reads.
+
+Before reporting a finding, check all sections that could contain it; if it appears in
+multiple categories, report them separately unless the record supports combining them.
+
+A protocol describes what a trial was *registered to do*. `posted_results` and indexed
+results sections contain measured registry results. Keep that distinction in every answer:
 
 - `enrollment` with `enrollment_type: "ESTIMATED"` is a target, not a number of
   participants. Say "planned" when that is what it is. Only `ACTUAL` is a fact.
@@ -139,6 +155,12 @@ usually not a result. Keep that distinction in every answer:
 - An arm description says what participants receive, not what happened to them.
 - `has_results: false` means no results were posted to the registry. It does not mean the
   trial found nothing, and it does not mean nothing was published — check `references`.
+- For posted results, preserve the outcome's time frame, units, analysis population,
+  group definitions, denominators and statistical caveats. Group IDs are local to a
+  results module or outcome; never join groups across sections by ID alone.
+- Adverse-event counts and participants affected are different quantities. Use the
+  relevant safety population and reporting window, not total protocol enrollment.
+- Missing measurements or sections mean unavailable/not retrieved, never zero.
 
 Rules:
 - Answer from the fields. Name the field you used, and quote free text (eligibility
