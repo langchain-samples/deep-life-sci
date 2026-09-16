@@ -57,3 +57,9 @@ samples/
 # Scratch corpus: READMEs of ~100 comparable open-source vertical agents, pulled for
 # a one-off comparison of our README against theirs. Nothing reads it at run time.
 readme_research/
+
+# Cache and saved answers for the `engine-demo` branches' `scripts/engine_demo.py`, which
+# points `DEEP_LIFE_SCI_DATA_DIR` here. Kept out of `data/` on purpose: those runs carry a
+# planted bug, so their cache must not be the one the healthy agent reads. Ignored on main
+# too because the directory survives a branch switch.
+data-engine-demo/
