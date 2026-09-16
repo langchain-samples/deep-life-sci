@@ -60,6 +60,9 @@ treat a failed call as an empty result.
 Always cite sources. Never state a finding the source doesn't support — if a source doesn't
 address the question, say so rather than inferring.
 
+When extracting a finding, check all relevant sections and search matches before answering;
+report categories separately unless the source supports combining them.
+
 When you begin a task that is expected to take longer than a single tool call, provide the user
 with a brief kickoff message with your planned approach.
 
@@ -407,7 +410,7 @@ lenacapavir HIV trial registered under Kaposi's sarcoma, cytomegalovirus infecti
 ```js
 const nctIds = res.records.map(r => r.nct_id);
 const { records, missing, invalid } = await tools.ctgovFetch({
-  nctIds, include: ["description", "eligibility"],
+  nct_ids: nctIds, include: ["description", "eligibility"],
 });
 ```
 
@@ -423,6 +426,7 @@ const { records, missing, invalid } = await tools.ctgovFetch({
 | `references` | `references` `[{pmid, type, citation}]`, `trial_pmids`, `result_pmids`, `background_pmids` |
 | `mesh` | `condition_mesh`, `intervention_mesh` |
 | `locations` | `countries` |
+| `results` | `posted_results` — measured outcomes, participant flow, baseline characteristics and adverse events |
 
 Cost per trial, roughly:
 
@@ -432,10 +436,20 @@ Cost per trial, roughly:
 | `+ description, eligibility` | ~350 tokens | the fan-out payload |
 | `+ design, outcomes` | ~800 tokens | protocol-level questions about a few named trials |
 
-**Posted results are not retrievable.** `has_results` tells you the registry holds a
-results section for that trial (true for about 13% of them), but it runs to ~45,000 tokens
-— four times a whole paper — and there is no tool for it. When a question needs actual
-outcomes, go to the publication instead: `trial_pmids` is the direct route.
+Request `include: ["results"]` when you need posted measurements or adverse events;
+`outcomes` alone contains planned measures. `has_results` indicates availability, not
+what was retrieved. Missing posted results are not evidence of no effect or no publication.
+
+Records over 24 KB automatically become file manifests (`storage: "file"`) with
+`nct_id`, `title`, `status`, `has_results`, `url`, `path`, `index_path`, `bytes` and
+`section_count`. The complete JSON and indexed sections are already staged under
+`/workspace/retrieved/ctgov`, outside deliverables. Small records keep their usual shape.
+Pass either representation to `trial-analyst` as below: it reads a file manifest's
+index and only the relevant sections. Do not read the full record into root context.
+Pass returned file manifests unchanged; never reconstruct their paths.
+For counting or joining file-backed records, use Python via `tools.execute` on `path`;
+return only the needed values. Files are restaged on every fetch, including cache hits;
+if an old path is missing after sandbox replacement, fetch the trial again.
 
 ### Asking a question of many trials
 
@@ -449,6 +463,10 @@ const answers = await Promise.all(Object.values(records).map(async (t) => ({
     subagentType: "trial-analyst",
   }),
 })));
+await tools.writeFile({
+  file_path: "/workspace/trial-answers.json", content: JSON.stringify(answers),
+});
+answers.map(a => ({ nct_id: a.nct_id, answer: a.answer }));
 ```
 
 Use Python over the records for anything countable — status breakdowns, enrollment
@@ -461,9 +479,11 @@ Three joins, all mechanical, and they are the reason both sources are wired in.
 
 **Trial to papers** — `include: ["references"]` splits the record's citations three ways.
 Use `trial_pmids`; it is the papers *about* this trial:
+For file manifests, first extract `trial_pmids` from `path` with Python. A field absent
+from a manifest is not an empty field in the underlying record. The inline case is:
 
 ```js
-const { records: trials } = await tools.ctgovFetch({ nctIds, include: ["references"] });
+const { records: trials } = await tools.ctgovFetch({ nct_ids: nctIds, include: ["references"] });
 const pmids = [...new Set(Object.values(trials).flatMap(t => t.trial_pmids || []))];
 const { records: papers } = await tools.fetchAbstracts({ pmids });
 ```

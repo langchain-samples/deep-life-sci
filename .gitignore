@@ -45,6 +45,9 @@ evals/datasets/archive/
 evals/taxonomy/
 evals/ground_truth_reports/
 evals/failure_reports/
+evals/proposals/
+evals/references/
+evals/reports/
 scripts/eval_misses.py
 sniff_deprecated.py
 

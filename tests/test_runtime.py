@@ -48,7 +48,8 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
         assert leaf["tools"] == []
         (filesystem,) = leaf["middleware"]
         assert isinstance(filesystem, FilesystemMiddleware)
-        assert [tool.name for tool in filesystem.tools] == ["read_file"]
+        expected = ["read_file", "grep"] if leaf["name"] == "trial-analyst" else ["read_file"]
+        assert [tool.name for tool in filesystem.tools] == expected
     assert isinstance(kwargs["middleware"][0], UploadMiddleware)
     assert any(isinstance(m, ArtifactMiddleware) for m in kwargs["middleware"])
     (interpreter,) = [m for m in kwargs["middleware"] if isinstance(m, CodeInterpreterMiddleware)]
@@ -244,3 +245,79 @@ async def test_real_compiled_agent_runs_quickjs_source_tool_and_returns_answer(
     assert len(transport.requests) == 1
     assert transport.requests[0].url.params["term"] == "cancer"
     backend.aexecute.assert_awaited_once()  # real artifact middleware runs after eval
+
+
+async def test_one_ptc_script_fetches_stages_and_dispatches_file_reading_trial_analyst(
+    monkeypatch, mock_ctgov, tmp_path
+):
+    import json
+
+    from deepagents.backends.filesystem import FilesystemBackend
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+
+    from deep_life_sci.sandbox import ResilientSandbox
+    from deep_life_sci.sources import ctgov, trial_files
+    from tests.conftest import json_response
+    from tests.test_trial_files import study
+
+    class ScriptedModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    payload = study()
+    manifest, uploads = trial_files._prepare(ctgov._study_to_record(payload))
+    index = json.loads(dict(uploads)[manifest["index_path"]])
+    section = next(x for x in index if x["section"].startswith("Outcome"))
+    leaf = ScriptedModel(responses=[
+        AIMessage("", tool_calls=[{"name": "read_file", "id": "index", "args": {
+            "file_path": manifest["index_path"], "limit": 1000}}]),
+        AIMessage("", tool_calls=[{"name": "grep", "id": "search-outcome", "args": {
+            "pattern": "Body weight", "path": manifest["index_path"].rsplit("/", 1)[0],
+            "glob": "section-*.json", "output_mode": "files_with_matches"}}]),
+        AIMessage("", tool_calls=[{"name": "read_file", "id": "outcome", "args": {
+            "file_path": section["path"], "limit": 1000}}]),
+        AIMessage("Registry treatment difference: -12.44 percentage points."),
+    ])
+    root = ScriptedModel(responses=[
+        AIMessage("", tool_calls=[{"name": "eval", "id": "fetch-and-read", "args": {
+            "code": '''
+const fetched = await tools.ctgovFetch({nct_ids: ["NCT00000001"], include: ["results"]});
+const answers = await Promise.all(Object.values(fetched.records).map(async (t) => ({
+  nct_id: t.nct_id,
+  answer: await task({
+    description: "Find the treatment difference. Trial record: " + JSON.stringify(t),
+    subagentType: "trial-analyst"
+  })
+})));
+await tools.writeFile({file_path: "/workspace/trial-answers.json",
+                      content: JSON.stringify(answers)});
+console.log(JSON.stringify(answers));
+'''}}]),
+        AIMessage("The treatment difference was -12.44 percentage points."),
+    ])
+    monkeypatch.setattr(agent, "root_model", lambda: root)
+    monkeypatch.setattr(agent, "subagent_model", lambda: leaf)
+    monkeypatch.setattr(agent, "register_harness_profile", Mock())
+    transport = mock_ctgov(lambda r: json_response({"studies": [payload]}))
+    disk = FilesystemBackend(root_dir=tmp_path, virtual_mode=True)
+    backend = ResilientSandbox(SimpleNamespace())
+    monkeypatch.setattr(backend, "aupload_files", disk.aupload_files)
+    reads = AsyncMock(side_effect=disk.aread)
+    monkeypatch.setattr(backend, "aread", reads)
+    searches = AsyncMock(side_effect=disk.agrep)
+    monkeypatch.setattr(backend, "agrep", searches)
+    monkeypatch.setattr(backend, "awrite", disk.awrite)
+    monkeypatch.setattr(backend, "aexecute", AsyncMock(return_value=SimpleNamespace(output="")))
+    compiled = agent.build_agent(backend)
+    result = await compiled.ainvoke({"messages": [HumanMessage("Find the trial result")]})
+    tools = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(tools) == 1
+    assert "-12.44" in tools[0].text
+    assert "UNREAD" not in tools[0].text
+    assert len(transport.requests) == 1
+    read_paths = [call.args[0] if call.args else call.kwargs.get("file_path")
+                  for call in reads.call_args_list]
+    assert read_paths == [manifest["index_path"], section["path"]]
+    searches.assert_awaited_once()
+    saved = (tmp_path / "workspace/trial-answers.json").read_text()
+    assert "-12.44" in saved
