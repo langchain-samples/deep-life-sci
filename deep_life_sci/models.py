@@ -70,7 +70,7 @@ OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 # belongs to the model beside it: swap the model in the environment without naming a path
 # and the path comes from the new id's form instead (see `_resolve`).
 
-ROOT_MODEL = "openai/gpt-5.6-terra"
+ROOT_MODEL = "openai/gpt-5.6-sol"
 ROOT_PROVIDER = "openai"
 ROOT_EFFORT = "low"
 
@@ -86,7 +86,7 @@ JUDGE_MODEL = "openai/gpt-5.6-terra"
 JUDGE_PROVIDER = "openai"
 JUDGE_EFFORT = "low"
 
-# Why these. terra and Sonnet 5 score the same as the root: over the eval dataset both hit
+# Earlier baseline evaluations, before switching the root to sol: terra and Sonnet 5 hit
 # 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie on
 # quality makes it a cost decision, and every head-to-head so far puts terra far ahead per
 # paper. Swapping back is one variable: `ROOT_MODEL=claude-sonnet-5` is the previous
