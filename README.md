@@ -1,4 +1,11 @@
-# Deep Life Sci
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/deep-helix-banner-dark.svg">
+  <img src="assets/deep-helix-banner-light.svg" alt="Deep Life Sci" width="560">
+</picture>
+
+</div>
 
 A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
 
