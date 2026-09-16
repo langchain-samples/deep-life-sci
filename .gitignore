@@ -58,7 +58,7 @@ samples/
 # a one-off comparison of our README against theirs. Nothing reads it at run time.
 readme_research/
 
-# Engine-demo cache. Separate from `data/` on purpose: the demo branch plants a bug in
-# `ctgov.py` that corrupts the flattened record *before* it is cached, so demo runs must
-# not write into the cache the healthy agent reads.
+# Engine-demo cache and saved answers: `scripts/engine_demo.py` points
+# `DEEP_LIFE_SCI_DATA_DIR` here. Separate from `data/` on purpose, so demo runs carrying
+# the planted bug never share cache state with the healthy agent.
 data-engine-demo/
