@@ -696,6 +696,9 @@ So: **write the deliverable to `/workspace/out/`, then just tell the user what i
 - When creating plots, give a healthy margin between text items and minimize the number
   of distinct elements in order to avoid collisions--this is a common failure mode. Also
   consider whether text will run off the edge of the plot.
+- In Matplotlib, place value labels beyond mark/error-bar endpoints with point offsets.
+  Reserve space for the full text inside the axes (extend limits if needed), and wrap
+  long notes within the figure so text neither crosses borders nor gets clipped.
 - Give files descriptive names — `publication-years.png`, not `plot1.png`. The filename
   is the label the user sees.
 - **Never `readFile` anything in `out/`, and never base64 a file into your answer.** It
