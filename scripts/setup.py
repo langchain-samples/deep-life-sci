@@ -383,8 +383,11 @@ HEADER_LOGO_NEW = HEADER_LOGO_OLD.replace("{32}", "{20}")
 # Keep the upstream component's local name so its dimension patches remain valid.
 # The product mark itself belongs in the persistent overlay.
 DEEP_HELIX_IMPORT_OLD = 'import { LangGraphLogoSVG } from "../icons/langgraph";\n'
-DEEP_HELIX_IMPORT_NEW = (
+DEEP_HELIX_IMPORT_PREVIOUS = (
     'import { DeepHelixSVG as LangGraphLogoSVG } from "../icons/deep-helix";\n'
+)
+BRAND_LOGOS_IMPORT = (
+    'import { BrandLogos as LangGraphLogoSVG } from "../icons/brand-logos";\n'
 )
 
 PATCH_MARKS = {
@@ -396,7 +399,7 @@ PATCH_MARKS = {
     "github-link": ("src/components/thread/index.tsx", "OpenGitHubRepo", False),
     "app-name": ("src/components/thread/index.tsx", APP_NAME, True),
     "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
-    "deep-helix": ("src/components/thread/index.tsx", DEEP_HELIX_IMPORT_NEW, True),
+    "brand-logos": ("src/components/thread/index.tsx", BRAND_LOGOS_IMPORT, True),
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
     "uploads": ("src/hooks/use-file-upload.tsx", "isSupportedUpload", True),
     "attach-label": ("src/components/thread/index.tsx", ATTACH_LABEL, True),
@@ -437,7 +440,7 @@ def apply_patches() -> None:
     patch_github_link()
     patch_app_name()
     patch_home_heading()
-    patch_deep_helix()
+    patch_brand_logos()
     patch_empty_ai_turns()
     patch_uploads()
     patch_attach_label()
@@ -1529,23 +1532,25 @@ def patch_home_heading() -> None:
     say(TAG, "stacked the home screen heading under the logo")
 
 
-def patch_deep_helix() -> None:
-    """Use Deep helix in the header and empty state, removing the old extra flask.
+def patch_brand_logos() -> None:
+    """Show LangChain and Deep Life Sci together in the header and empty state.
 
-    Accept both a fresh upstream clone and the previous flask-decorated headings.
-    Keeping the local LangGraphLogoSVG alias preserves the independent size patch.
-    The component uses a transparent cutout and theme colors on every surface.
+    Accept fresh clones, flask-decorated headings, and the Deep-helix-only patch.
+    Keeping the local LangGraphLogoSVG alias preserves the independent size patch;
+    the overlay interprets that size per mark, preserving both square proportions.
     """
     thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
-    if not thread.is_file() or _marked("deep-helix"):
+    if not thread.is_file() or _marked("brand-logos"):
         return
     text = thread.read_text(encoding="utf-8")
-    if text.count(DEEP_HELIX_IMPORT_OLD) != 1:
+    baselines = (DEEP_HELIX_IMPORT_OLD, DEEP_HELIX_IMPORT_PREVIOUS)
+    matched = [old for old in baselines if text.count(old) == 1]
+    if len(matched) != 1:
         say(TAG, f"warning: {thread} is not the shape expected; left the logo unchanged. "
                  "Missing anchor:")
         print(DEEP_HELIX_IMPORT_OLD)
         return
-    text = text.replace(DEEP_HELIX_IMPORT_OLD, DEEP_HELIX_IMPORT_NEW)
+    text = text.replace(matched[0], BRAND_LOGOS_IMPORT)
     text = text.replace('import { FlaskSVG } from "../icons/flask";\n', "")
     text = re.sub(
         r'^ *<FlaskSVG className="h-\[1\.1em\] w-\[1\.1em\] shrink-0" />\n',
@@ -1553,7 +1558,7 @@ def patch_deep_helix() -> None:
     )
     text = text.replace("\N{TEST TUBE} " + APP_NAME, APP_NAME)
     thread.write_text(text, encoding="utf-8")
-    say(TAG, "set the header and home screen logo to Deep helix")
+    say(TAG, "set the header and home screen logos to LangChain and Deep Life Sci")
 
 
 # Components this repo owns, copied into the clone rather than patched into it.

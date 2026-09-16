@@ -5,7 +5,7 @@
   <img src="assets/deep-helix-banner-light.svg" alt="Deep Life Sci" width="560">
 </picture>
 
-A [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
+An open-source [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
 
 [![License](https://img.shields.io/github/license/langchain-samples/deep-life-sci?color=4f46e5)](LICENSE) [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-4f46e5)](pyproject.toml) [![Built with deepagents](https://img.shields.io/badge/built%20with-deepagents-0d9488)](https://docs.langchain.com/oss/python/deepagents/overview) [![Traced with LangSmith](https://img.shields.io/badge/traced%20with-LangSmith-0d9488)](https://smith.langchain.com)
 
@@ -92,6 +92,11 @@ uv run agent "which papers base-edit PCSK9?" # runs headlessly in CLI
 ```
 
 Ctrl-C to stop the running server.
+
+## Coming soon
+
+* [LangSmith cloud deployments](https://www.langchain.com/langsmith/deployment) with user authentication
+* Additional scientific data sources
 
 ## Disclaimer
 
