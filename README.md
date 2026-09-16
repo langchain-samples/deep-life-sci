@@ -5,21 +5,25 @@
   <img src="assets/deep-helix-banner-light.svg" alt="Deep Life Sci" width="560">
 </picture>
 
-</div>
+A [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
 
-A LangChain [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
+[![License](https://img.shields.io/github/license/langchain-samples/deep-life-sci?color=4f46e5)](LICENSE) [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-4f46e5)](pyproject.toml) [![Built with deepagents](https://img.shields.io/badge/built%20with-deepagents-0d9488)](https://docs.langchain.com/oss/python/deepagents/overview) [![Traced with LangSmith](https://img.shields.io/badge/traced%20with-LangSmith-0d9488)](https://smith.langchain.com)
+
+[Quickstart](#quickstart) · [Capabilities](#capabilities) · [Data sources](#data-sources)
+
+</div>
 
 ## Capabilities
 
 * **Literature question-answering** - scan hundreds of papers and trial records at once to perform deep literature searches
 
-* **Data analysis via code execution** - generate and execute code in a safely contained sandbox to perform almost any data analysis
+* **Data analysis via code execution** - generate and execute code in a safely contained [LangSmith Sandbox](https://docs.langchain.com/langsmith/sandboxes) to perform almost any data analysis
 
 * **File and figure generation** - create CSV and Excel files of data, Word docs such as clinical or lab protocols, and data visualizations and plots
 
 ## Data sources
 
-* **PubMed** - over 40 million scientific abstracts
+* **PubMed** - over 29 million scientific abstracts
 
 * **PMC full texts** - full text of over 8 million open-access papers
 
