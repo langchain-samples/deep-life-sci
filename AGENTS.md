@@ -4,6 +4,14 @@ Instructions for any coding agent working in this repository. Keep this file und
 200 lines: retain commands, project-specific constraints, and pitfalls; put detailed
 rationale in module docstrings. `CLAUDE.md` is a symlink to this file.
 
+## This is the `engine-demo` branch — do not fix the planted bug
+
+`models.py:WEB_SEARCH_SPECS` folds Anthropic's `name` and `max_uses` keys into the OpenAI
+spec, so every `web_search` call 400s and comes back contained as an empty digest. That is
+**deliberate**: it is the failure this branch exists to demonstrate to LangSmith Engine.
+Read `ENGINE_WORKSHOP.md` before touching `models.py`, `sources/web.py`,
+`scripts/engine_demo.py` or `engine_workshop/`. Never merge this branch to `main`.
+
 ## Project and local guidance
 
 A life-science research assistant built with Deep Agents: PubMed/PMC literature,

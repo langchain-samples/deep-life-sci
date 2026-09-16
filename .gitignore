@@ -57,3 +57,8 @@ samples/
 # Scratch corpus: READMEs of ~100 comparable open-source vertical agents, pulled for
 # a one-off comparison of our README against theirs. Nothing reads it at run time.
 readme_research/
+
+# Engine-demo cache. Separate from `data/` on purpose: the demo branch plants a bug in
+# `ctgov.py` that corrupts the flattened record *before* it is cached, so demo runs must
+# not write into the cache the healthy agent reads.
+data-engine-demo/

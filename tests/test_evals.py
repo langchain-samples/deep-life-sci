@@ -354,15 +354,29 @@ class TestTheCheckedInSeedFiles:
             for kind in row.get("expects_artifact") or []:
                 assert kind in _KINDS, f"{row['id']}: unknown artifact kind {kind!r}"
 
-    def test_every_example_has_a_nonempty_text_rubric(self, seed_file: Path):
-        """A missing rubric silently excludes an example from judge scoring."""
+    def test_every_example_carries_a_grading_criterion(self, seed_file: Path):
+        """An example with neither a rubric nor assertions is silently never scored.
+
+        Two shapes, one rule. `rubric` is prose for `evals/evaluators.py`'s judge;
+        `assertions` is a list of behavioural claims for the Assertions evaluator template
+        in LangSmith, which is what the workshop seeds use. Either satisfies the guard, and
+        an example with neither passes every experiment by scoring nothing.
+        """
         for row in yaml.safe_load(seed_file.read_text(encoding="utf-8")):
-            assert isinstance(row.get("rubric"), str), row["id"]
-            assert row["rubric"].strip(), row["id"]
+            rubric = row.get("rubric")
+            assertions = row.get("assertions")
+            if assertions is not None:
+                assert isinstance(assertions, list) and assertions, row["id"]
+                assert all(
+                    isinstance(a, str) and a.strip() for a in assertions
+                ), row["id"]
+                continue
+            assert isinstance(rubric, str), row["id"]
+            assert rubric.strip(), row["id"]
 
     def test_no_example_carries_a_key_sync_would_silently_drop(self, seed_file: Path):
-        known = {"id", "question", "expects_artifact", "rubric", "domain", "surface",
-                 "notes"}
+        known = {"id", "question", "expects_artifact", "rubric", "assertions", "domain",
+                 "surface", "notes"}
         for row in _load(seed_file):
             assert set(row) <= known, f"{row['id']}: unknown key(s) {set(row) - known}"
 

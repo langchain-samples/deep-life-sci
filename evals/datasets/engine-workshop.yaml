@@ -1,0 +1,93 @@
+# Seeds for the LangSmith dataset `deep-life-sci-engine-workshop`, pushed by
+# `evals/sync.py`, which matches on `id` — keep ids stable when rewording a question.
+#
+# This file exists so the workshop's Test stage has a dataset on disk to fall back to.
+# The intended path is to build the dataset from the examples **Engine suggests** on the
+# issue it raised; these are the same shape, so the two mix in one dataset.
+#
+# Reference outputs here are `assertions`, not a `rubric`: one behavioural claim per line,
+# graded by the **Assertions** evaluator template in LangSmith (an LLM judge that writes
+# `assertions_passed`). Assertions rather than expected text because model wording moves
+# run to run and the claim is about behaviour, not phrasing.
+#
+# The first four fail while the web search bug is in place and pass once it is fixed. The
+# last two are controls that pass either way — a dataset of only-failing examples cannot
+# tell a real fix from one that breaks everything else.
+
+# --- reaches the bug -------------------------------------------------------------
+
+- id: ew-glp1-regulatory-actions
+  domain: regulatory
+  surface: web_search
+  question: >-
+    What regulatory actions have the FDA and EMA taken on GLP-1 receptor agonists during
+    2026? Cover new approvals, label changes and safety communications, and date each one.
+  assertions:
+    - The answer cites at least one URL on fda.gov or ema.europa.eu.
+    - Every specific regulatory action named is attributed to a retrieved source, not
+      asserted without one.
+    - The answer does not claim a web search was unavailable or that it could not look
+      the information up.
+
+- id: ew-sglt2-ckd-guidelines
+  domain: guidelines
+  surface: web_search
+  question: >-
+    What do the current KDIGO and ADA guidelines recommend for SGLT2 inhibitors in chronic
+    kidney disease, and when was each guideline last revised? Give the recommendation grades.
+  assertions:
+    - The answer cites at least one URL for a guideline document or its publisher.
+    - A revision date is given for each guideline and is attributed to a source.
+    - The answer does not claim a web search was unavailable.
+
+- id: ew-gene-therapy-clinical-holds
+  domain: industry
+  surface: web_search
+  question: >-
+    Which gene therapy programs were placed on clinical hold or discontinued during 2026?
+    Give the company, the program, the stated reason and the date for each.
+  assertions:
+    - The answer cites at least one URL for a company announcement, regulatory notice or
+      news report.
+    - Each hold or discontinuation named carries a source.
+    - The answer does not claim a web search was unavailable.
+
+- id: ew-scrnaseq-qc-tooling
+  domain: methods
+  surface: web_search
+  question: >-
+    What is the currently recommended quality-control pipeline for single-cell RNA-seq, and
+    what changed in the most recent Scanpy and Seurat releases? Cite the release notes and
+    give version numbers.
+  assertions:
+    - The answer cites at least one URL for Scanpy or Seurat release notes, documentation
+      or repository.
+    - Any version number given is attributed to a retrieved page rather than stated
+      unsourced.
+    - The answer does not claim a web search was unavailable.
+
+# --- controls: unaffected by the bug, must keep passing --------------------------
+
+- id: ew-semaglutide-phase3-registry
+  domain: trials
+  surface: ctgov
+  question: >-
+    Summarize the phase 3 semaglutide trials in obesity registered on ClinicalTrials.gov:
+    sponsor, enrollment, status and primary completion date for each, and tell me how many
+    have posted results.
+  assertions:
+    - The answer identifies trials by NCT identifier.
+    - Sponsor, enrollment and status are given for the trials listed.
+    - A count of trials with posted results is stated.
+
+- id: ew-car-t-solid-tumor-literature
+  domain: literature
+  surface: pubmed
+  question: >-
+    Find recent PubMed papers on CAR-T therapy in solid tumors and tell me which ones report
+    objective response rates. Plot the distribution of publication years.
+  expects_artifact: [image]
+  assertions:
+    - The answer cites papers by PMID.
+    - The answer states which of the cited papers report an objective response rate.
+    - A plot of publication years was produced as a deliverable.

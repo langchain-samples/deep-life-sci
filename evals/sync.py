@@ -78,6 +78,12 @@ def _split(row: dict) -> tuple[dict, dict, dict]:
         "expects_artifact": row.get("expects_artifact", []),
         "rubric": row.get("rubric", ""),
     }
+    # Workshop seeds carry `assertions` — one behavioural claim per line, graded by the
+    # Assertions evaluator template in LangSmith rather than by `evals/evaluators.py`.
+    # Added only when present, so a seed file without them keeps exactly the outputs it
+    # had and the default dataset is untouched by this key existing.
+    if assertions := row.get("assertions"):
+        outputs["assertions"] = assertions
     metadata = {
         "seed_id": row["id"],
         "domain": row.get("domain", ""),
