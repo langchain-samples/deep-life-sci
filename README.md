@@ -107,6 +107,8 @@ decision-making, diagnosis, or treatment.**
 
 ## Notes
 
+*Model:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default, but you can swap in any OpenAI or Anthropic model, or modify it to use models by other providers.
+
 The UI is a modified clone of [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui) in
 `.chat-ui/`.
 
