@@ -380,32 +380,14 @@ HEADER_LOGO_OLD = """<LangGraphLogoSVG
                   />"""
 HEADER_LOGO_NEW = HEADER_LOGO_OLD.replace("{32}", "{20}")
 
-# The product mark beside the name, in the header and on the home screen alike — not the
-# browser tab or the setup form, where it would read as decoration in a sentence. An inline
-# SVG (`chat-ui-overlay/components/icons/flask.tsx`) rather than the U+1F9EA TEST TUBE it
-# replaced: an emoji renders full-colour and platform-shaded next to a flat monochrome mark,
-# and no size of it ever matched the heading it sat in. `currentColor` at `1em` does.
-FLASK_IMPORT_ANCHOR = 'import { LangGraphLogoSVG } from "../icons/langgraph";\n'
-FLASK_IMPORT = 'import { FlaskSVG } from "../icons/flask";\n'
-FLASK_TAG = '<FlaskSVG className="h-[1.1em] w-[1.1em] shrink-0" />'
-
-# Each heading, against both baselines a clone can be sitting at: upstream's bare name, and
-# the beaker this patch replaces. Accepting the older one is what upgrades a clone in place —
-# it is gitignored, so nothing else would ever take the emoji back out.
-FLASK_EDITS = tuple(
-    (
-        tuple(
-            f'{cls}">\n{indent}{prefix}{APP_NAME}\n'
-            for prefix in ("", "\N{TEST TUBE} ")
-        ),
-        f'{cls} inline-flex items-center gap-1.5">\n'
-        f"{indent}{FLASK_TAG}\n"
-        f"{indent}{APP_NAME}\n",
-    )
-    for cls, indent in (
-        ('className="text-xl font-semibold tracking-tight', " " * 20),
-        ('className="text-2xl font-semibold tracking-tight', " " * 24),
-    )
+# Keep the upstream component's local name so its dimension patches remain valid.
+# The product mark itself belongs in the persistent overlay.
+DEEP_HELIX_IMPORT_OLD = 'import { LangGraphLogoSVG } from "../icons/langgraph";\n'
+DEEP_HELIX_IMPORT_PREVIOUS = (
+    'import { DeepHelixSVG as LangGraphLogoSVG } from "../icons/deep-helix";\n'
+)
+BRAND_LOGOS_IMPORT = (
+    'import { BrandLogos as LangGraphLogoSVG } from "../icons/brand-logos";\n'
 )
 
 PATCH_MARKS = {
@@ -417,7 +399,7 @@ PATCH_MARKS = {
     "github-link": ("src/components/thread/index.tsx", "OpenGitHubRepo", False),
     "app-name": ("src/components/thread/index.tsx", APP_NAME, True),
     "home-heading": ("src/components/thread/index.tsx", HOME_HEADING_NEW, True),
-    "flask": ("src/components/thread/index.tsx", "FlaskSVG", True),
+    "brand-logos": ("src/components/thread/index.tsx", BRAND_LOGOS_IMPORT, True),
     "empty-turns": ("src/components/thread/messages/ai.tsx", "hasCustomComponents", True),
     "uploads": ("src/hooks/use-file-upload.tsx", "isSupportedUpload", True),
     "attach-label": ("src/components/thread/index.tsx", ATTACH_LABEL, True),
@@ -458,7 +440,7 @@ def apply_patches() -> None:
     patch_github_link()
     patch_app_name()
     patch_home_heading()
-    patch_flask()
+    patch_brand_logos()
     patch_empty_ai_turns()
     patch_uploads()
     patch_attach_label()
@@ -1550,42 +1532,33 @@ def patch_home_heading() -> None:
     say(TAG, "stacked the home screen heading under the logo")
 
 
-def patch_flask() -> None:
-    """Put the flask mark beside the name, in the header and on the home screen alike.
+def patch_brand_logos() -> None:
+    """Show LangChain and Deep Life Sci together in the header and empty state.
 
-    Mounts `FlaskSVG` from the overlay, which `ensure_overlay` has already copied in — both
-    entry points run it before this. Each heading is matched against every baseline in
-    `FLASK_EDITS`, so a clone still carrying the beaker upgrades rather than reporting a
-    moved anchor.
+    Accept fresh clones, flask-decorated headings, and the Deep-helix-only patch.
+    Keeping the local LangGraphLogoSVG alias preserves the independent size patch;
+    the overlay interprets that size per mark, preserving both square proportions.
     """
     thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
-    if not thread.is_file():
-        return
-    if _marked("flask"):
+    if not thread.is_file() or _marked("brand-logos"):
         return
     text = thread.read_text(encoding="utf-8")
-
-    def missing(anchor: str) -> None:
-        say(TAG, f"warning: {thread} is not the shape expected; left the flask off the "
-                 "name. Missing anchor:")
-        print(anchor)
-
-    edits = []
-    for baselines, new in FLASK_EDITS:
-        matched = [old for old in baselines if text.count(old) == 1]
-        if len(matched) != 1:
-            missing(baselines[0])
-            return
-        edits.append((matched[0], new))
-    if text.count(FLASK_IMPORT_ANCHOR) != 1:
-        missing(FLASK_IMPORT_ANCHOR)
+    baselines = (DEEP_HELIX_IMPORT_OLD, DEEP_HELIX_IMPORT_PREVIOUS)
+    matched = [old for old in baselines if text.count(old) == 1]
+    if len(matched) != 1:
+        say(TAG, f"warning: {thread} is not the shape expected; left the logo unchanged. "
+                 "Missing anchor:")
+        print(DEEP_HELIX_IMPORT_OLD)
         return
-
-    text = text.replace(FLASK_IMPORT_ANCHOR, FLASK_IMPORT_ANCHOR + FLASK_IMPORT)
-    for old, new in edits:
-        text = text.replace(old, new)
+    text = text.replace(matched[0], BRAND_LOGOS_IMPORT)
+    text = text.replace('import { FlaskSVG } from "../icons/flask";\n', "")
+    text = re.sub(
+        r'^ *<FlaskSVG className="h-\[1\.1em\] w-\[1\.1em\] shrink-0" />\n',
+        "", text, flags=re.M,
+    )
+    text = text.replace("\N{TEST TUBE} " + APP_NAME, APP_NAME)
     thread.write_text(text, encoding="utf-8")
-    say(TAG, "put the flask mark beside the chat UI name")
+    say(TAG, "set the header and home screen logos to LangChain and Deep Life Sci")
 
 
 # Components this repo owns, copied into the clone rather than patched into it.

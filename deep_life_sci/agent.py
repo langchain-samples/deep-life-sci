@@ -29,9 +29,10 @@ from deep_life_sci.prompts import (
     TRIAL_ANALYST,
     build_system_prompt,
 )
-from deep_life_sci.sources.ctgov import ctgov_fetch, ctgov_search
+from deep_life_sci.sources.ctgov import ctgov_search
 from deep_life_sci.sources.pmc import fetch_full_text, make_sandbox_tools, pmc_locate
 from deep_life_sci.sources.pubmed import fetch_abstracts, pubmed_search
+from deep_life_sci.sources.trial_files import make_trial_fetch
 from deep_life_sci.sources.web import web_search
 
 
@@ -40,20 +41,24 @@ def build_agent(backend):
     # Built per-run: these upload bytes into the sandbox, so an image exists as a real
     # file on a real path before a subagent can read_file it.
     fetch_figures, fetch_supplementary = make_sandbox_tools(backend)
+    ctgov_fetch = make_trial_fetch(backend)
 
     def analyst_leaf(spec: dict) -> dict:
-        """A leaf on the cheap model, narrowed to `read_file` and nothing else.
+        """Read-only leaves; the trial analyst can also search staged sections.
 
         `tools: []` drops the parent's tools. It does not drop deepagents' own prepended
         FilesystemMiddleware, which includes `execute` — a shell into the shared sandbox.
         Passing a configured instance substitutes for the default rather than stacking,
         and `read_file` is the floor it refuses to drop.
         """
+        filesystem_tools = ["read_file"]
+        if spec["name"] == "trial-analyst":
+            filesystem_tools.append("grep")
         return {
             **spec,
             "model": subagent_model(),
             "tools": [],
-            "middleware": [FilesystemMiddleware(backend=backend, tools=["read_file"])],
+            "middleware": [FilesystemMiddleware(backend=backend, tools=filesystem_tools)],
         }
 
     # Disable deepagents auto-added `general-purpose` subagent

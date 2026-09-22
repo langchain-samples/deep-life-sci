@@ -45,6 +45,9 @@ evals/datasets/archive/
 evals/taxonomy/
 evals/ground_truth_reports/
 evals/failure_reports/
+evals/proposals/
+evals/references/
+evals/reports/
 scripts/eval_misses.py
 sniff_deprecated.py
 
@@ -58,7 +61,11 @@ samples/
 # a one-off comparison of our README against theirs. Nothing reads it at run time.
 readme_research/
 
-# Engine-demo cache and saved answers: `scripts/engine_demo.py` points
-# `DEEP_LIFE_SCI_DATA_DIR` here. Separate from `data/` on purpose, so demo runs carrying
-# the planted bug never share cache state with the healthy agent.
+# Local logo explorations and preview exports.
+/logo-concepts/
+
+# Cache and saved answers for the `engine-demo` branches' `scripts/engine_demo.py`, which
+# points `DEEP_LIFE_SCI_DATA_DIR` here. Kept out of `data/` on purpose: those runs carry a
+# planted bug, so their cache must not be the one the healthy agent reads. Ignored on main
+# too because the directory survives a branch switch.
 data-engine-demo/

@@ -91,6 +91,9 @@ WORKSPACE = "/workspace"
 # and publishes what it finds, so anything landing here reaches the user.
 OUT_DIR = f"{WORKSPACE}/out"
 
+# Retrieved trial payloads, restaged from the host cache on every fetch.
+TRIAL_FILES_DIR = f"{WORKSPACE}/retrieved/ctgov"
+
 # Where files the user attached are materialised, by `middleware/uploads.py`. Deliberately
 # not under `OUT_DIR`: that directory is swept and published, so a file the user gave us
 # would be handed straight back to them as a deliverable of their own question.
@@ -118,6 +121,7 @@ __all__ = [
     "OUT_DIR",
     "PMC_CACHE",
     "REPO_ROOT",
+    "TRIAL_FILES_DIR",
     "UPLOAD_DERIVED_DIR",
     "UPLOAD_DIR",
     "WORKSPACE",

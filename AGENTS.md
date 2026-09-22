@@ -81,7 +81,8 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 - Build figure and supplementary tools per backend with `make_sandbox_tools`: returned
   paths must refer to bytes actually staged in that sandbox.
 - Batch-fetch before dispatching analyst subagents; leaves must not fetch independently.
-  Set `tools: []` and narrow their filesystem middleware to `read_file`. Empty middleware
+  Set `tools: []` and narrow filesystem middleware to `read_file` (plus `grep` for the
+  trial analyst's staged files). Empty middleware
   alone does not disable inherited filesystem tools. Keep the general-purpose leaf disabled.
 - Treat prompts as production code. Keep instructions concise and general; explain
   pitfalls instead of adding unnecessary procedures or long tutorials.

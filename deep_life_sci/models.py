@@ -70,9 +70,9 @@ OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
 # belongs to the model beside it: swap the model in the environment without naming a path
 # and the path comes from the new id's form instead (see `_resolve`).
 
-ROOT_MODEL = "openai/gpt-5.6-sol"
+ROOT_MODEL = "openai/gpt-5.6-terra"
 ROOT_PROVIDER = "openai"
-ROOT_EFFORT = "low"
+ROOT_EFFORT = "high"
 
 SUBAGENT_MODEL = "openai/gpt-5.6-luna"
 SUBAGENT_PROVIDER = "openai"
@@ -86,14 +86,22 @@ JUDGE_MODEL = "openai/gpt-5.6-terra"
 JUDGE_PROVIDER = "openai"
 JUDGE_EFFORT = "low"
 
-# Earlier baseline evaluations, before switching the root to sol: terra and Sonnet 5 hit
-# 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie on
-# quality makes it a cost decision, and every head-to-head so far puts terra far ahead per
-# paper. Swapping back is one variable: `ROOT_MODEL=claude-sonnet-5` is the previous
-# default, `claude-sonnet-4-6` the one before it, and both share these leaves,
-# so either isolates the root — but watch root context when you do, because Sonnet 5 costs
-# 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s
-# -> 76s on semaglutide-weightloss-boxplot).
+# 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves
+# held fixed: identical 10/15 rubric, same failure set (base-editing-t-cells-convergence,
+# fmt-cdiff-placebo-trials, mrna-vaccines-lung-cancer-trials,
+# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot). terra-high found
+# citations sol-low missed on 3 of 10 citation-checked seeds (egan-ulk1-ampk-sites,
+# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot), going 10/10 vs 7/10 —
+# a citation-completeness win at equal rubric score, hence the default.
+#
+# Earlier baseline evaluations, before switching the root off Sonnet: terra and Sonnet 5
+# hit 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie
+# on quality makes it a cost decision, and every head-to-head so far puts terra far ahead
+# per paper. `ROOT_MODEL=claude-sonnet-5` is the previous default's model,
+# `claude-sonnet-4-6` the one before it, and both share these leaves, so either isolates
+# the root — but watch root context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6
+# there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s -> 76s on
+# semaglutide-weightloss-boxplot).
 #
 # The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
 # dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
@@ -101,15 +109,9 @@ JUDGE_EFFORT = "low"
 # tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
 # rather than a constant: it is one run of 11 examples with no repeats.
 #
-# `ROOT_EFFORT` is `low` for the same kind of reason. terra-medium/haiku-4.5 scored 7/11
-# again, failing the same four seeds and losing a citation on
-# psilocybin-depression-unpublished, for 53% more latency per run; it fixed exactly one
-# cell (the tpd-publication-volume deliverable), which is not a trade worth defaulting to.
-#
-# What did *not* move is the more useful finding: the same four rubric seeds fail in all
-# three configurations. Root effort did not touch them and neither did swapping the leaf
-# model across providers, so they are a prompt, tool or criteria problem rather than a
-# model-selection one.
+# What did *not* move across sol-low, terra-low and terra-high: the same core rubric seeds
+# fail regardless of root model or effort. That points at a prompt, tool or criteria
+# problem rather than a model-selection one.
 #
 # The older latency measurements above were taken against Haiku leaves.
 # `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also

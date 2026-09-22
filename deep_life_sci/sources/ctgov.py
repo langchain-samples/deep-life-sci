@@ -192,6 +192,7 @@ INCLUDE_FIELDS: dict[str, tuple[str, ...]] = {
         "InterventionMeshId", "InterventionMeshTerm",
     ),
     "locations": ("LocationCountry",),
+    "results": ("ResultsSection",),
 }
 
 DEFAULT_INCLUDE = ("description", "eligibility")
@@ -252,7 +253,7 @@ def _study_to_record(study: dict) -> dict | None:
             i.get("name") for i in _dig(proto, "armsInterventionsModule", "interventions") or []
             if i.get("name")
         ],
-        # Whether the 45,000-token results tier exists at all. True for 13.3% of studies.
+        # Availability only; measured values require the opt-in results group.
         "has_results": study.get("hasResults"),
         "url": STUDY_URL.format(nct_id),
     }
@@ -326,6 +327,11 @@ def _study_to_record(study: dict) -> dict | None:
     if locs := _dig(proto, "contactsLocationsModule", "locations"):
         rec["countries"] = sorted({loc["country"] for loc in locs if loc.get("country")})
 
+    if "resultsSection" in study:
+        # Preserve the API's groups, denominators, analyses and reporting caveats.
+        # The backend-bound tool stages large records before returning them to PTC.
+        rec["posted_results"] = study["resultsSection"]
+
     return rec
 
 
@@ -344,9 +350,9 @@ def _scan_cache(
     A trial record is mutable in a way a PMID is not — status changes, results get
     posted, enrollment is revised — so the entry stores the field groups it was fetched
     with alongside `last_updated`. A hit requires the cached groups to *cover* what is
-    being asked for; a request for more refetches and overwrites. Extra keys on a
-    covering entry are returned as-is rather than projected away: they land in the JS
-    heap, never the model's context, so trimming them would cost work and save nothing.
+    being asked for; a request for more refetches and overwrites. Posted results are
+    removed for narrower requests so a previous results fetch cannot inflate a later
+    protocol-only call. Other covering fields are retained.
 
     Returns `(records, from_cache, to_fetch)`.
     """
@@ -363,7 +369,10 @@ def _scan_cache(
             try:
                 cached = json.loads(path.read_text())
                 if groups.issubset(set(cached.get("groups") or [])):
-                    records[nct_id] = cached["record"]
+                    record = cached["record"]
+                    if "results" not in groups:
+                        record = {k: v for k, v in record.items() if k != "posted_results"}
+                    records[nct_id] = record
                     from_cache.append(nct_id)
                     cache_io.touch(path)
                     continue
@@ -549,6 +558,8 @@ async def ctgov_fetch(nct_ids: list[str], include: list[str] | None = None) -> d
               literature the sponsor cited, NOT this trial's own output)
             - mesh: condition_mesh, intervention_mesh — NLM MeSH descriptors
             - locations: countries
+            - results: posted_results, the registry's measured outcomes, participant
+              flow, baseline characteristics and adverse events (not publications)
 
     Returns:
         records: {nct_id: {...core fields plus the groups requested}}. `enrollment_type`
