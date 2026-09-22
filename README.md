@@ -81,6 +81,9 @@ irm https://astral.sh/uv/install.ps1 | iex
 uv run scripts/setup.py
 ```
 
+The chat UI needs Node.js 20.9 or newer. If yours is missing or older, setup installs a
+private copy inside the repo; nothing else on your machine changes.
+
 ### 5. Run the agent
 
 ```bash
