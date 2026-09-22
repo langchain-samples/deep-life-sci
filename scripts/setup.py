@@ -379,6 +379,10 @@ def ensure_demo_dataset() -> None:
         # Read here rather than when setup started, so EVALS_DATASET_PREFIX set in .env
         # names the same dataset `evals.sync` just wrote.
         load_dotenv(ENV_FILE, override=True)
+        # `evals` is not an installed package the way `deep_life_sci` is, and running this
+        # file puts only scripts/ on sys.path, so the repo root has to be added to import it.
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
         from evals import dataset_name
 
         set_env("DATASET_NAME", dataset_name(DEMO_SEED))
