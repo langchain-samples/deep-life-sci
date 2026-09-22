@@ -17,6 +17,9 @@
 # Frontend sources for that same dev-only app; setup copies them into .chat-ui/src.
 chat-ui-overlay/
 .venv/
+# A host Node setup unpacked for the chat UI; the image never runs the UI.
+.node/
+.node.partial/
 data/
 .git/
 .github/
