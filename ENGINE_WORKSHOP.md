@@ -39,6 +39,10 @@ Setup is below; the loop itself starts at
 
 ## If you forked and cloned this repo — what to change
 
+Everything below assumes **your own LangSmith workspace**. The names are fixed defaults
+(the `deep-life-sci-engine-demo` project, the `deep-life-sci-engine-workshop` dataset), so
+attendees sharing one workspace would share, and overwrite, each other's traces and dataset.
+
 ### 1. Local environment (`.env`)
 
 `scripts/setup.py` owns `.env` and will prompt for most of this. Copy `.env.example` and
