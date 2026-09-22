@@ -48,14 +48,15 @@ fill in your own values.
 |---|---|---|
 | `LANGSMITH_API_KEY` | Yes | **Your** key. Does tracing, datasets and sandboxes. |
 | `LANGSMITH_PROJECT` | Yes | **Your** base project. The workshop appends `-engine-demo`. |
-| `LANGSMITH_GATEWAY_API_KEY` | To run the agent | Gateway service key. Not needed if you only replay traces. |
+| `LANGSMITH_GATEWAY_API_KEY` | To run the agent | Setup copies `LANGSMITH_API_KEY` here. Change it only to bill model calls to another key. |
 | `LANGSMITH_WORKSPACE_ID` | If your key spans workspaces | Otherwise dataset calls 403. |
 | `DATASET_NAME` | For `eval.py` | Filled in by setup with the fallback dataset. Change it to use Engine's. |
 | `NCBI_*` | To run the agent | `NCBI_TOOL` is generated per install; NCBI meters against it. |
 
-**On the model key:** the recommended way to generate traces is `upload_traces`, which
-never calls a model, so you need no gateway key to get through setup and Engine's scan.
-You only need one to run the live agent or `eval.py`.
+**On the model key:** the gateway takes a LangSmith key, so setup fills
+`LANGSMITH_GATEWAY_API_KEY` from `LANGSMITH_API_KEY` and there is nothing extra to set.
+Model calls then resolve provider credentials from the workspace's model providers (see
+Test, step 1). Setup and the trace replay call no model at all.
 
 ### 2. Project names
 
