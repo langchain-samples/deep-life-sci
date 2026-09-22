@@ -316,6 +316,8 @@ def main() -> None:
                 client.create_feedback(
                     run_id=run["id"],
                     trace_id=run["trace_id"],
+                    # The tracing project; feedback without it is deprecated.
+                    session_id=project_id,
                     key=item["key"],
                     score=item.get("score"),
                     value=item.get("value"),

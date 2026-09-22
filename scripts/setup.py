@@ -355,9 +355,23 @@ def ensure_snapshot() -> None:
 #
 # Both halves are non-fatal. A failure leaves the agent itself fully set up, and the chat UI
 # still to come is worth having either way; the fix is re-running the one command named.
+#
+# Both are silent unless they fail, so a demo install prints exactly what an install of
+# main does: attendees follow along with the same output as everyone else.
 
 # The seed file `engine_workshop/eval.py` falls back to (see ENGINE_WORKSHOP.md, Test).
 DEMO_SEED = "engine-workshop"
+
+
+def run_quietly(argv: list[str]) -> bool:
+    """Run a demo step with its output held back, printing it only if the step fails."""
+    exe = tool(argv[0])
+    if exe is None:
+        raise FileNotFoundError(argv[0])
+    done = subprocess.run([exe, *argv[1:]], cwd=REPO_ROOT, capture_output=True, text=True)
+    if done.returncode != 0:
+        sys.stderr.write(done.stdout + done.stderr)
+    return done.returncode == 0
 
 
 def ensure_demo_dataset() -> None:
@@ -368,9 +382,8 @@ def ensure_demo_dataset() -> None:
     way everything else here catches up. `DATASET_NAME` is only filled when empty — someone
     who pointed it at the dataset built from Engine's suggestions has said what they want.
     """
-    say(TAG, "syncing the Engine demo dataset…")
     argv = ["uv", "run", "python", "-m", "evals.sync", DEMO_SEED]
-    if run(argv, cwd=REPO_ROOT, check=False) != 0:
+    if not run_quietly(argv):
         say(TAG, f"warning: the demo dataset did not sync. Retry with:  {' '.join(argv[1:])}")
         return
     if not env_value("DATASET_NAME"):
@@ -397,9 +410,8 @@ def ensure_demo_traces() -> None:
     module is a CLI that loads `.env` and parses argv at import time; `evals.sync` above is
     run the same way for the same reason.
     """
-    say(TAG, "replaying the Engine demo traces (skipped if already there)…")
     argv = ["uv", "run", "python", "-m", "engine_workshop.upload_traces", "--if-missing"]
-    if run(argv, cwd=REPO_ROOT, check=False) != 0:
+    if not run_quietly(argv):
         say(TAG, "warning: the demo traces did not upload. Retry with:  "
             "uv run python -m engine_workshop.upload_traces --if-missing")
 
