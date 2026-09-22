@@ -26,18 +26,24 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import os
+import platform
 import re
 import secrets
 import shutil
 import subprocess
 import sys
+import tarfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _common import (
     ENV_FILE,
+    LOCAL_NODE_DIR,
     REPO_ROOT,
     chat_ui_dir,
     die,
@@ -47,6 +53,7 @@ from _common import (
     say,
     set_env,
     tool,
+    use_local_node,
 )
 
 TAG = "setup"
@@ -54,6 +61,26 @@ WINDOWS = os.name == "nt"
 # agent-chat-ui is on Next 16, which refuses to build below 20.9. Checked as a major so a
 # .0 release of 20 is not read as too old; Next's own check catches 20.0-20.8.
 NODE_MIN_MAJOR = 20
+# The Node setup installs into the repo when the machine has none it can use: the current
+# LTS, pinned for the same reason as the chat UI below, and checked against nodejs.org's
+# published SHA-256 before anything is unpacked. To bump: change the version, paste the
+# matching lines from https://nodejs.org/dist/v<version>/SHASUMS256.txt, `rm -rf .node`,
+# re-run setup. An existing `.node` is never replaced, so the bump reaches a clone only then.
+NODE_VERSION = "24.21.0"
+NODE_SHA256 = {
+    "node-v24.21.0-darwin-arm64.tar.gz":
+        "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
+    "node-v24.21.0-darwin-x64.tar.gz":
+        "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
+    "node-v24.21.0-linux-arm64.tar.gz":
+        "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
+    "node-v24.21.0-linux-x64.tar.gz":
+        "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+    "node-v24.21.0-win-arm64.zip":
+        "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
+    "node-v24.21.0-win-x64.zip":
+        "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+}
 UI_REPO = "https://github.com/langchain-ai/agent-chat-ui.git"
 # Pinned to a commit, never to a branch. Every patch below is anchored on an exact string
 # in upstream's source, so an upstream refactor half-patches every *new* clone at once —
@@ -1618,39 +1645,76 @@ def node_major() -> int | None:
     return int(found.group(1)) if found else None
 
 
-def install_node() -> None:
-    """Offer the install, or die naming one. Only ever called with node missing or too old.
+def node_archive() -> str | None:
+    """The nodejs.org archive for this machine, or None where there is no official build."""
+    system = {"darwin": "darwin", "linux": "linux", "win32": "win"}.get(sys.platform)
+    arch = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(
+        platform.machine().lower()
+    )
+    ext = "zip" if system == "win" else "tar.gz"
+    name = f"node-v{NODE_VERSION}-{system}-{arch}.{ext}"
+    return name if name in NODE_SHA256 else None
 
-    Installing is offered only through a package manager the machine already has, and only
-    with a yes. That is where the line falls for a practical reason: `brew install node`
-    puts node on the PATH of *future* processes, which is what `dev.py` and the user's next
-    shell need, while a tarball this script downloaded and unpacked itself would be visible
-    to this process alone — the UI would install and then vanish. Windows has no equivalent
-    one-liner: the nodejs.org .msi wants administrator rights, which a managed machine may
-    not grant, and fnm needs a shell hook after installing.
-    So the per-user managers below are named rather than run, which is the difference
-    between "add the UI later" and "cannot".
+
+def install_node() -> None:
+    """Unpack the pinned Node into `.node/`, or die naming how to get one. Only ever called
+    with node missing or too old.
+
+    Repo-local rather than through a package manager, because it is the one route that needs
+    nothing of the machine: no admin rights (Homebrew and the nodejs.org installers both
+    want them, and a managed laptop may not grant them), no Homebrew, no shell-profile edit.
+    A Node unpacked by a script is normally visible to that process alone, so the UI would
+    install and then vanish; this one is not, because `_common.use_local_node` puts it on
+    PATH for `setup.py`, `dev.py` and everything they spawn.
+
+    Unpacked beside its destination and renamed into place, so an interrupted download never
+    leaves a `.node` that looks installed.
     """
-    brew = None if WINDOWS else tool("brew")
-    if brew and confirm("install Node with `brew install node` ?"):
-        run(["brew", "install", "node"])
-        if (node_major() or 0) >= NODE_MIN_MAJOR:
-            return
-        die(TAG, "node installed but not on PATH — open a new terminal and re-run this script.")
-    if WINDOWS:
-        say(TAG, "  with admin rights:  winget install OpenJS.NodeJS.LTS")
-        say(TAG, "  without:            winget install Schniz.fnm  &&  fnm install 22")
-        say(TAG, "  or unzip the Windows binary from https://nodejs.org onto your PATH")
+    name = node_archive()
+    if name is None:
+        say(TAG, f"no official Node build for this machine; install Node {NODE_MIN_MAJOR}+ "
+                 "from https://nodejs.org")
+        die(TAG, "then re-run this script to add the UI.")
+    url = f"https://nodejs.org/dist/v{NODE_VERSION}/{name}"
+    partial = LOCAL_NODE_DIR.with_name(".node.partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir()
+    archive = partial / name
+
+    say(TAG, f"installing Node {NODE_VERSION} into {LOCAL_NODE_DIR.name}/ (~50 MB, once)…")
+    try:
+        urllib.request.urlretrieve(url, archive)
+    except OSError as exc:
+        shutil.rmtree(partial, ignore_errors=True)
+        die(TAG, f"could not download {url}: {exc}")
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != NODE_SHA256[name]:
+        shutil.rmtree(partial, ignore_errors=True)
+        die(TAG, f"{name} does not match its published checksum; nothing was installed.")
+
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(partial)
     else:
-        say(TAG, "  https://nodejs.org, or `brew install node` on a Mac")
-    die(TAG, "install it and re-run this script to add the UI.")
+        # "data" keeps the tree inside `partial` and drops setuid bits; npm's own symlinks
+        # (bin/npm -> ../lib/...) are relative and pass it.
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(partial, filter="data")
+    unpacked = partial / name.removesuffix(".zip").removesuffix(".tar.gz")
+    shutil.rmtree(LOCAL_NODE_DIR, ignore_errors=True)
+    unpacked.rename(LOCAL_NODE_DIR)
+    shutil.rmtree(partial, ignore_errors=True)
+
+    use_local_node()
+    if (node_major() or 0) < NODE_MIN_MAJOR:
+        die(TAG, f"Node unpacked into {LOCAL_NODE_DIR.name}/ but will not run here. Install "
+                 f"Node {NODE_MIN_MAJOR}+ from https://nodejs.org and re-run this script.")
 
 
 def ensure_node() -> None:
     """Node is a real prerequisite, not a nicety: it builds the frontend and installs the
-    artifact components. Offered, but only through `install_node`'s narrower path. Reached
-    only after the steps above, so the message can truthfully say the headless path already
-    works.
+    artifact components. A machine's own Node is used when it is new enough; otherwise
+    `install_node` puts a private one in the repo. Reached only after the steps above, so
+    the message can truthfully say the headless path already works.
 
     Says nothing about pnpm. That used to live here and could not: the pin it has to match
     is inside the clone, which `ensure_chat_ui` has not made yet.

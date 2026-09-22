@@ -43,6 +43,35 @@ def tool(name: str) -> str | None:
     return shutil.which(name)
 
 
+# A Node that setup unpacked into the repo, for a machine with none it can use (see
+# `install_node` in setup.py). Ignored by git and docker.
+LOCAL_NODE_DIR = REPO_ROOT / ".node"
+
+
+def local_node_bin() -> Path:
+    """Where that Node's executables live: `bin/` in the POSIX tarballs, the root on Windows."""
+    return LOCAL_NODE_DIR if os.name == "nt" else LOCAL_NODE_DIR / "bin"
+
+
+def use_local_node() -> None:
+    """Put the repo-local Node first on PATH, if setup installed one.
+
+    PATH rather than a path threaded through the callers, because everything that needs
+    node finds it there: `tool()`, npm and corepack resolving their own `node`, pnpm's
+    scripts, and every child `dev.py` spawns. That is also why a Node unpacked here is not
+    the "visible to this process alone" install `install_node` warns about: the UI only
+    ever runs through `setup.py` and `dev.py`, and both import this module, which calls
+    this at import so neither can forget to.
+    """
+    bin_dir = local_node_bin()
+    path = os.environ.get("PATH", "")
+    if bin_dir.is_dir() and str(bin_dir) not in path.split(os.pathsep):
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + path
+
+
+use_local_node()
+
+
 def run(argv: list[str], *, cwd: Path | None = None, check: bool = True) -> int:
     """Run a command, letting its output through to the terminal."""
     exe = tool(argv[0])

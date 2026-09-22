@@ -27,6 +27,11 @@ node_modules/
 # resolve to the same versions everywhere.
 ui/node_modules/
 
+# The Node setup installs when the machine has none it can use (`install_node`), and the
+# staging directory it unpacks into first.
+/.node/
+/.node.partial/
+
 # The chat frontend `scripts/setup.py` clones. A checkout of someone else's repo,
 # vendored here only so the UI needs no directory outside this one — also in
 # .dockerignore, or a dev-only Next app ships inside the deploy image.
