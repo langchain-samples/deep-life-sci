@@ -2,6 +2,7 @@
 
     uv run python -m engine_workshop.upload_traces
     uv run python -m engine_workshop.upload_traces --project my-project --days 0.5 --seed 42
+    uv run python -m engine_workshop.upload_traces --if-missing   # what setup.py runs
 
 **This is the way to generate traces for the workshop.** It calls no model, needs no
 provider key, and takes about a minute, so everyone in the room gets the same batch and
@@ -27,7 +28,7 @@ load_dotenv(override=True)
 from langsmith import Client, uuid7  # noqa: E402
 from langsmith.utils import LangSmithNotFoundError  # noqa: E402
 
-from engine_workshop import demo_project  # noqa: E402
+from engine_workshop import demo_project, query_runs  # noqa: E402
 
 DEFAULT_INPUT = Path(__file__).resolve().parent / "traces.json"
 
@@ -108,6 +109,22 @@ def bootstrap_project(client: Client, name: str):
         return client.create_project(project_name=name).id
 
 
+def batch_present(client: Client, project: str, n_traces: int) -> bool:
+    """Whether `project` already holds at least one batch's worth of traces.
+
+    What makes `--if-missing` idempotent, so `scripts/setup.py` can run this on every
+    re-run. Counted on root runs rather than matched on ids, because every upload mints
+    fresh ones: there is nothing stable to match on, and a whole batch's worth is the
+    signal that one landed. A partial upload fails its own landing check below, so a
+    short count means re-upload rather than accept.
+    """
+    try:
+        project_id = client.read_project(project_name=project).id
+    except LangSmithNotFoundError:
+        return False
+    return len(query_runs(client, project_id, is_root=True, selects=["ID"])) >= n_traces
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -122,6 +139,11 @@ def main() -> None:
              f"{MAX_BACKDATE_DAYS}; ingest rejects anything older than 24h)",
     )
     parser.add_argument("--seed", type=int, help="Seed for a reproducible upload")
+    parser.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="Skip the upload when the project already holds a full batch (for setup)",
+    )
     args = parser.parse_args()
 
     if args.days > MAX_BACKDATE_DAYS:
@@ -138,6 +160,12 @@ def main() -> None:
     print(f"Loaded {len(runs)} runs from {args.input}")
     if not runs:
         print("Nothing to upload.")
+        return
+
+    client = Client()
+    n_traces = sum(1 for run in runs if run.get("parent_run_id") is None)
+    if args.if_missing and batch_present(client, project, n_traces):
+        print(f"'{project}' already holds the {n_traces}-trace batch; skipping the upload.")
         return
 
     # Fresh uuid7s (time-ordered). A root run's trace_id must equal its id, so map both to
@@ -198,7 +226,6 @@ def main() -> None:
         f"{min(starts):%Y-%m-%d %H:%M} to {max(starts):%Y-%m-%d %H:%M}"
     )
 
-    client = Client()
     project_id = bootstrap_project(client, project)
     print(f"Uploading {len(traces)} traces to '{project}'...")
 
@@ -251,16 +278,10 @@ def main() -> None:
     expected = {run["id"] for trace_runs in traces.values() for run in trace_runs}
     landed: set[str] = set()
     for _ in range(WAIT_ATTEMPTS):
-        landed = {
-            str(r.id)
-            for r in client.list_runs(
-                # project_id, not project_name: the name -> id index lags create_project by
-                # seconds, so a name would 404 inside list_runs on a fresh project.
-                project_id=project_id,
-                run_ids=list(expected),
-                select=["id", "name", "start_time", "run_type", "trace_id"],
-            )
-        }
+        # By project_id, never by name: the name -> id index lags create_project by
+        # seconds, so a name lookup would 404 on a fresh project.
+        landed = {r.id for r in query_runs(client, project_id, ids=list(expected),
+                                           selects=["ID"])}
         if len(landed) == len(expected):
             break
         time.sleep(WAIT_SECONDS)

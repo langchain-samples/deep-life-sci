@@ -50,7 +50,7 @@ fill in your own values.
 | `LANGSMITH_PROJECT` | Yes | **Your** base project. The workshop appends `-engine-demo`. |
 | `LANGSMITH_GATEWAY_API_KEY` | To run the agent | Gateway service key. Not needed if you only replay traces. |
 | `LANGSMITH_WORKSPACE_ID` | If your key spans workspaces | Otherwise dataset calls 403. |
-| `DATASET_NAME` | For `eval.py` | **Your** dataset. Hard-fails without it. |
+| `DATASET_NAME` | For `eval.py` | Filled in by setup with the fallback dataset. Change it to use Engine's. |
 | `NCBI_*` | To run the agent | `NCBI_TOOL` is generated per install; NCBI meters against it. |
 
 **On the model key:** the recommended way to generate traces is `upload_traces`, which
@@ -69,14 +69,15 @@ The host cache is redirected too, to `data-engine-demo/`. Both redirections happ
 
 ### 3. Dataset
 
-`eval.py` reads `DATASET_NAME` and hard-fails without it. Build the dataset from the
-examples Engine suggests on its issue, or seed the fallback:
+`eval.py` reads `DATASET_NAME` and hard-fails without it. Setup seeds the fallback,
+`deep-life-sci-engine-workshop` (prefix from `EVALS_DATASET_PREFIX`), and sets
+`DATASET_NAME` to it if it is empty. To use a dataset built from the examples Engine
+suggests on its issue instead, point `DATASET_NAME` at that one; setup will not overwrite it.
+To re-sync the seed by hand:
 
 ```bash
-uv run python -m evals.sync      # pushes evals/datasets/*.yaml
+uv run python -m evals.sync engine-workshop
 ```
-
-That creates `deep-life-sci-engine-workshop` (prefix from `EVALS_DATASET_PREFIX`).
 
 ## Setup
 
@@ -84,11 +85,19 @@ That creates `deep-life-sci-engine-workshop` (prefix from `EVALS_DATASET_PREFIX`
 uv run scripts/setup.py
 ```
 
+That is the whole setup, dataset and traces included. After the snapshot step it seeds the
+fallback dataset and sets `DATASET_NAME` (see [Dataset](#3-dataset)), then replays the
+reference batch below into your `-engine-demo` project. Both are safe to repeat: the sync
+updates examples in place, and the replay skips itself when the project already holds a
+full batch.
+
 ---
 
 ## Generate traces
 
 ### Recommended: replay the saved batch
+
+Setup has already done this once. To replay it again (for example into a fresh project):
 
 ```bash
 uv run python -m engine_workshop.upload_traces
@@ -178,8 +187,8 @@ apologise. Note the PR number.
 LangSmith, not on your machine. Workspace settings → Model providers. Do this before
 attaching the evaluator, or every example comes back unscored.
 
-**2. Assemble the dataset.** Add Engine's suggested examples, or sync the fallback seed, then
-set `DATASET_NAME`. Reference outputs are **assertions** — *"the answer cites at least one
+**2. Assemble the dataset.** Setup already seeded the fallback and set `DATASET_NAME`. Add
+Engine's suggested examples to it, or to a dataset of their own and repoint `DATASET_NAME`. Reference outputs are **assertions** — *"the answer cites at least one
 URL on fda.gov or ema.europa.eu"* — not expected strings, because wording moves run to run.
 Attach the **Assertions** evaluator template; it writes `assertions_passed`.
 

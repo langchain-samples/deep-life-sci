@@ -42,10 +42,16 @@ load_dotenv(override=True)
 
 from langsmith import Client  # noqa: E402
 
-from engine_workshop import demo_project  # noqa: E402
+from engine_workshop import demo_project, query_runs  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPO_ROOT / "engine_workshop" / "traces.json"
+
+# What `runs.query` returns for each listing. It sends only the fields asked for, and the
+# roots need just enough to filter, order and label the batch.
+ROOT_FIELDS = ["ID", "TRACE_ID", "NAME", "START_TIME", "TAGS", "METADATA"]
+RUN_FIELDS = ["ID", "TRACE_ID", "PARENT_RUN_IDS", "NAME", "RUN_TYPE", "INPUTS", "OUTPUTS",
+              "ERROR", "EXTRA", "TAGS", "START_TIME", "END_TIME"]
 
 # Per-field ceiling. 16 KB keeps a full answer, a tool result and a model turn legible
 # while cutting the heap snapshots and fetched corpora that dominate the raw size.
@@ -146,21 +152,34 @@ def keep_run(run) -> bool:
     answer. Anything that errored is kept whatever its type, since an error is the one thing
     a failure cluster must not lose.
     """
-    return run.parent_run_id is None or run.run_type in ("llm", "tool") or bool(run.error)
+    return parent_of(run) is None or run.run_type in ("llm", "tool") or bool(run.error)
+
+
+def parent_of(run) -> str | None:
+    """The run's direct parent. `runs.query` lists every ancestor, root first."""
+    return run.parent_run_ids[-1] if run.parent_run_ids else None
+
+
+def error_of(run) -> str | None:
+    """The run's error as `list_runs` gave it. `runs.query` JSON-encodes the string a second
+    time, so a captured traceback would otherwise replay wrapped in literal quotes."""
+    if isinstance(run.error, str) and run.error.startswith('"'):
+        return json.loads(run.error)
+    return run.error
 
 
 def reparent(runs: list, kept_ids: set[str]) -> dict[str, str | None]:
     """Map each kept run to its nearest kept ancestor, so the tree stays connected."""
-    by_id = {str(r.id): r for r in runs}
+    by_id = {r.id: r for r in runs}
     new_parent: dict[str, str | None] = {}
     for run in runs:
-        if str(run.id) not in kept_ids:
+        if run.id not in kept_ids:
             continue
-        parent = str(run.parent_run_id) if run.parent_run_id else None
+        parent = parent_of(run)
         while parent is not None and parent not in kept_ids:
             ancestor = by_id.get(parent)
-            parent = str(ancestor.parent_run_id) if ancestor and ancestor.parent_run_id else None
-        new_parent[str(run.id)] = parent
+            parent = parent_of(ancestor) if ancestor else None
+        new_parent[run.id] = parent
     return new_parent
 
 
@@ -213,7 +232,7 @@ def main() -> None:
     print(f"Fetching traces from '{project}'...")
 
     roots = [
-        r for r in client.list_runs(project_id=project_id, is_root=True)
+        r for r in query_runs(client, project_id, is_root=True, selects=ROOT_FIELDS)
         if not args.tag or args.tag in (r.tags or [])
     ]
     # Newest first to apply --limit, then back to chronological order so the saved file
@@ -226,26 +245,26 @@ def main() -> None:
 
     out: list[dict] = []
     for i, root in enumerate(roots, 1):
-        # The generator pages internally; do NOT wrap it in a manual offset loop, which
-        # restarts the listing every call and silently multiplies the run count.
-        runs = list(client.list_runs(project_id=project_id, trace_id=str(root.trace_id)))
-        kept_ids = {str(r.id) for r in runs if keep_run(r)}
+        runs = query_runs(client, project_id, trace_id=root.trace_id, selects=RUN_FIELDS)
+        kept_ids = {r.id for r in runs if keep_run(r)}
         parents = reparent(runs, kept_ids)
 
         for run in runs:
-            rid = str(run.id)
+            rid = run.id
             if rid not in kept_ids:
                 continue
             out.append(
                 {
                     "id": rid,
-                    "trace_id": str(run.trace_id),
+                    "trace_id": run.trace_id,
                     "parent_run_id": parents[rid],
                     "name": run.name,
                     "run_type": run.run_type,
                     "inputs": cap(run.inputs, args.cap) or {},
-                    "outputs": cap(run.outputs, args.cap),
-                    "error": run.error,
+                    # `runs.query` reports a run with no outputs as `{}` rather than
+                    # None; keep None, so an unfinished run does not replay as finished.
+                    "outputs": cap(run.outputs or None, args.cap),
+                    "error": error_of(run),
                     "extra": scrub_metadata(run.extra),
                     "tags": run.tags,
                     "start_time": run.start_time.isoformat() if run.start_time else None,

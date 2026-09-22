@@ -3,15 +3,16 @@
     uv run scripts/setup.py          # prompt for the API key, install everything
     uv run scripts/setup.py --yes    # never prompt; for CI and containers
 
-Four steps, in the order they depend on each other:
+Five steps, in the order they depend on each other:
 
     1. .env        — the LangSmith API key, prompted for and written here
     2. uv sync     — the virtualenv
     3. a snapshot  — sandbox image with the scientific Python stack baked in
-    4. the chat UI — the frontend, and the deps for the components it renders
+    4. Engine demo — the workshop's dataset and reference traces (this branch only)
+    5. the chat UI — the frontend, and the deps for the components it renders
 
-Step 3 needs step 2 (it imports langsmith) and step 1 (it calls LangSmith), which is why
-this is a script rather than a list in the README. Every step is skipped when already done,
+Steps 3 and 4 need step 2 (they import langsmith) and step 1 (they call LangSmith), which
+is why this is a script rather than a list in the README. Every step is skipped when already done,
 so re-running after a `git pull` is the cheap way to catch up.
 
 uv itself is not a step: you are already running under it. Installing it is the one-liner
@@ -323,7 +324,56 @@ def ensure_snapshot() -> None:
     run(["uv", "run", "scripts/build_snapshot.py"], cwd=REPO_ROOT)
 
 
-# --- 4. chat UI -------------------------------------------------------------------
+# --- 4. Engine demo ---------------------------------------------------------------
+#
+# Both halves are non-fatal. A failure leaves the agent itself fully set up, and the chat UI
+# still to come is worth having either way; the fix is re-running the one command named.
+
+# The seed file `engine_workshop/eval.py` falls back to (see ENGINE_WORKSHOP.md, Test).
+DEMO_SEED = "engine-workshop"
+
+
+def ensure_demo_dataset() -> None:
+    """Seed the workshop's fallback dataset and point `DATASET_NAME` at it.
+
+    Synced on every run rather than once: `evals.sync` matches examples by seed id, so a
+    re-run updates in place, and a `git pull` that edits the seed reaches LangSmith the same
+    way everything else here catches up. `DATASET_NAME` is only filled when empty — someone
+    who pointed it at the dataset built from Engine's suggestions has said what they want.
+    """
+    say(TAG, "syncing the Engine demo dataset…")
+    argv = ["uv", "run", "python", "-m", "evals.sync", DEMO_SEED]
+    if run(argv, cwd=REPO_ROOT, check=False) != 0:
+        say(TAG, f"warning: the demo dataset did not sync. Retry with:  {' '.join(argv[1:])}")
+        return
+    if not env_value("DATASET_NAME"):
+        from dotenv import load_dotenv
+
+        # Read here rather than when setup started, so EVALS_DATASET_PREFIX set in .env
+        # names the same dataset `evals.sync` just wrote.
+        load_dotenv(ENV_FILE, override=True)
+        from evals import dataset_name
+
+        set_env("DATASET_NAME", dataset_name(DEMO_SEED))
+
+
+def ensure_demo_traces() -> None:
+    """Replay the workshop's reference batch into the `-engine-demo` project, so an
+    attendee's one command leaves Engine something to scan (see ENGINE_WORKSHOP.md).
+
+    `--if-missing` is what keeps a re-run from doubling the batch: the upload skips itself
+    when the project already holds one. A subprocess rather than an import because the
+    module is a CLI that loads `.env` and parses argv at import time; `evals.sync` above is
+    run the same way for the same reason.
+    """
+    say(TAG, "replaying the Engine demo traces (skipped if already there)…")
+    argv = ["uv", "run", "python", "-m", "engine_workshop.upload_traces", "--if-missing"]
+    if run(argv, cwd=REPO_ROOT, check=False) != 0:
+        say(TAG, "warning: the demo traces did not upload. Retry with:  "
+            "uv run python -m engine_workshop.upload_traces --if-missing")
+
+
+# --- 5. chat UI -------------------------------------------------------------------
 #
 # Vendored *inside* the repo, at .chat-ui, rather than beside it: a sibling directory is
 # outside what the user cloned and is not necessarily writable. The cost is that
@@ -1769,6 +1819,8 @@ def main() -> int:
     ensure_env()
     ensure_deps()
     ensure_snapshot()
+    ensure_demo_dataset()
+    ensure_demo_traces()
     ensure_node()
     ensure_chat_ui()
     ensure_artifact_deps()
