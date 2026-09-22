@@ -207,7 +207,7 @@ before.
 **4. Experiment B — the fix.**
 
 ```bash
-gh pr checkout <PR-number>
+git fetch origin pull/<PR-number>/head:engine-fix && git checkout engine-fix
 uv sync
 uv run python -m engine_workshop.eval
 git checkout engine-demo
