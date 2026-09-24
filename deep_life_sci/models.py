@@ -60,6 +60,7 @@ from pathlib import Path
 
 import httpx
 import yaml
+from langchain_core.exceptions import ContextOverflowError
 
 from deep_life_sci import paths
 
@@ -413,9 +414,13 @@ def rejection_message(role: str, exc: BaseException) -> str | None:
     (a content filter, an oversized request), so the provider's own message stays first and
     the settings are offered as the likely suspect rather than the certain one. Both SDKs'
     `APIStatusError` carry `status_code`, so no provider import is needed.
+
+    A context overflow is also a 400, and is left alone: deepagents' summarization
+    middleware catches `ContextOverflowError` to compact the history and retry, and a
+    rewrapped one would end the run instead.
     """
     status = getattr(exc, "status_code", None)
-    if status not in _REJECTED:
+    if status not in _REJECTED or isinstance(exc, ContextOverflowError):
         return None
     model, _, effort = _resolve(role)
     return (

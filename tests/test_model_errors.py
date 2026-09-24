@@ -50,3 +50,15 @@ def test_anything_else_passes_through_unchanged(exc: Exception):
 
 def test_a_successful_call_is_returned_as_is():
     assert ModelSettingErrors("root").wrap_model_call(None, lambda _r: "ok") == "ok"
+
+
+def test_a_context_overflow_reaches_summarization_unchanged():
+    from langchain_core.exceptions import ContextOverflowError
+
+    class Overflow(_Refused, ContextOverflowError):
+        pass
+
+    original = Overflow(400)
+    with pytest.raises(ContextOverflowError) as info:
+        ModelSettingErrors("root").wrap_model_call(None, _raising(original))
+    assert info.value is original

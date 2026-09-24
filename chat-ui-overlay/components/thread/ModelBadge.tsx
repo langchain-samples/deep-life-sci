@@ -69,11 +69,31 @@ function useModelRoles(): Role[] | null {
     const apiKey = getApiKey();
     if (apiKey) headers.set("X-Api-Key", apiKey);
     if (scheme) headers.set("X-Auth-Scheme", scheme);
-    fetch(`${url}/models`, { headers, signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body) => setRoles(Array.isArray(body?.roles) ? body.roles : null))
-      .catch(() => setRoles(null));
-    return () => controller.abort();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // `scripts/dev.py` opens the page once the UI answers, which can be well before the
+    // agent server has loaded the graph: until then the connection is refused, and while
+    // it starts the server answers 503. Both are retried, with backoff, for about two
+    // minutes. Any other answer is final: a server without this route says so with a 404,
+    // and asking again will not change that.
+    const retry = (attempt: number) => {
+      if (controller.signal.aborted || attempt >= 12) return;
+      timer = setTimeout(() => load(attempt + 1), Math.min(1000 * 2 ** attempt, 15000));
+    };
+    const load = (attempt: number) => {
+      fetch(`${url}/models`, { headers, signal: controller.signal })
+        .then(async (res) => {
+          if (res.status >= 500) return retry(attempt);
+          const body = res.ok ? await res.json() : null;
+          setRoles(Array.isArray(body?.roles) ? body.roles : null);
+        })
+        .catch(() => retry(attempt));
+    };
+    load(0);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, [url, scheme]);
 
   return roles;

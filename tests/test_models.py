@@ -385,3 +385,12 @@ class TestRejectionMessage:
     @pytest.mark.parametrize("exc", [_Refused(500), _Refused(429), TimeoutError("slow")])
     def test_anything_but_a_refusal_is_left_alone(self, exc: Exception):
         assert rejection_message("root", exc) is None
+
+    def test_a_context_overflow_is_left_for_summarization_to_catch(self):
+        """deepagents compacts and retries on `ContextOverflowError`; rewrapping it ends the run."""
+        from langchain_core.exceptions import ContextOverflowError
+
+        class _Overflow(_Refused, ContextOverflowError):
+            pass
+
+        assert rejection_message("root", _Overflow(400, "context_length_exceeded")) is None
