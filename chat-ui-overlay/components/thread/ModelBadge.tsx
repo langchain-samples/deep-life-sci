@@ -106,12 +106,9 @@ export function ModelBadge() {
   return (
     <div
       ref={ref}
-      className="relative flex items-center gap-2 px-3.5 pb-2.5 text-xs text-gray-500"
+      className="relative flex items-center gap-1.5 px-2.5 pb-2.5 text-xs text-gray-500"
     >
-      <span className="font-medium text-gray-600" title={root.model}>
-        {root.label}
-      </span>
-      {root.effort && <span className="ml-6">{effortName(root.effort)}</span>}
+      {/* First, so it reads as configuring the whole line rather than the effort beside it. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -121,6 +118,10 @@ export function ModelBadge() {
       >
         <Wrench className="size-3.5" />
       </button>
+      <span className="font-medium text-gray-600" title={root.model}>
+        {root.label}
+      </span>
+      {root.effort && <span className="ml-2">{effortName(root.effort)}</span>}
 
       {open && (
         <div
