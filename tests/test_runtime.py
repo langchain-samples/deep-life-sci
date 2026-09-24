@@ -35,7 +35,7 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain_quickjs import CodeInterpreterMiddleware
 
-    from deep_life_sci.middleware.model_errors import ModelSettingErrors
+    from deep_life_sci.middleware.model_errors import SurfaceModelErrors
 
     kwargs, backend = assembled
     assert kwargs["backend"] is backend
@@ -50,11 +50,11 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
         assert leaf["tools"] == []
         filesystem, errors = leaf["middleware"]
         assert isinstance(filesystem, FilesystemMiddleware)
-        assert isinstance(errors, ModelSettingErrors) and errors.role == "subagent"
+        assert isinstance(errors, SurfaceModelErrors) and errors.role == "subagent"
         expected = ["read_file", "grep"] if leaf["name"] == "trial-analyst" else ["read_file"]
         assert [tool.name for tool in filesystem.tools] == expected
     assert isinstance(kwargs["middleware"][0], UploadMiddleware)
-    assert [m.role for m in kwargs["middleware"] if isinstance(m, ModelSettingErrors)] == ["root"]
+    assert [m.role for m in kwargs["middleware"] if isinstance(m, SurfaceModelErrors)] == ["root"]
     assert any(isinstance(m, ArtifactMiddleware) for m in kwargs["middleware"])
     (interpreter,) = [m for m in kwargs["middleware"] if isinstance(m, CodeInterpreterMiddleware)]
     assert interpreter._timeout == 900.0
@@ -131,6 +131,19 @@ async def test_graph_run_acquires_off_loop_and_retains_recovery_callback(graph_m
     backend = await graph.make_graph({"configurable": {"thread_id": 42}})
     assert backend._sandbox is raw
     assert await backend._arebind(0) is True
+
+
+async def test_a_setting_that_cannot_work_fails_the_run_before_any_sandbox_boots(
+    graph_module, monkeypatch
+):
+    """As a RuntimeError the UI shows: a SystemExit in a request stops the dev server."""
+    graph = graph_module
+    acquire = Mock(side_effect=AssertionError("must not acquire"))
+    monkeypatch.setattr(graph, "_acquire", acquire)
+    monkeypatch.setenv("SEARCH_MODEL", "gpt-5.6-luna")  # no gateway path
+    with pytest.raises(RuntimeError, match=r"SEARCH_MODEL='gpt-5\.6-luna'"):
+        await graph.make_graph({"configurable": {"thread_id": "t"}})
+    acquire.assert_not_called()
 
 
 @pytest.mark.parametrize("status", ["running", "stopped"])

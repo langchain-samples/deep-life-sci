@@ -1,6 +1,9 @@
-# Model and effort per role. Add providers in LangSmith -> LLM Gateway. Restart after editing.
-# Model and effort must be valid together: check which effort levels your model supports.
-# Leave effort empty to omit it (required for models with no effort setting).
+# Model and effort per role. Edits apply to the next message; no restart needed.
+# Model ids: Anthropic models are bare (claude-sonnet-5); any other model needs its provider
+# prefix (openai/gpt-5.6-terra). An id without one is refused with a message saying so.
+# Effort must be a level your model supports; leave it empty to omit it (required for
+# models with no effort setting). Provider API keys go in LangSmith under
+# Settings -> Integrations -> Provider Secrets.
 
 # Main agent
 root:

@@ -6,13 +6,14 @@ import { getApiKey } from "@/lib/api-key";
 /**
  * The main agent's model and effort, under the composer, with a wrench that lists every role.
  *
- * Read-only on purpose: models are chosen in `models.yaml` (or by env override) and take
- * effect when the server restarts, so this reports what the server resolved rather than
- * offering a choice it could not apply. The server's `GET /models` (`deep_life_sci/webapp.py`)
- * is the source, because only the running process knows which overrides won.
+ * Read-only on purpose: models are chosen in `models.yaml` (or by env override), so this
+ * reports what the server resolved rather than offering a choice here. The server's
+ * `GET /models` (`deep_life_sci/webapp.py`) is the source, because only the running process
+ * knows which overrides won. It re-reads models.yaml on each request, as each run does, and
+ * the wrench asks again every time it opens, so an edit shows without reloading the page.
  *
- * A server without that route, or one that is not up yet, renders nothing. The badge is
- * information, and an error here would sit under every message the user types.
+ * A server without that route renders nothing. A models.yaml the server cannot use renders
+ * as an error, with the server's message in the wrench, since the next message would fail.
  */
 
 type Role = {
@@ -53,14 +54,16 @@ function effortName(effort: string): string {
   return EFFORT_NAMES[effort] ?? effort;
 }
 
-function useModelRoles(): Role[] | null {
+type Models = { roles: Role[] } | { error: string };
+
+function useModels(asked: number): Models | null {
   // Resolved the same way `providers/Stream.tsx` resolves them, so this asks the server the
   // chat is talking to.
   const [apiUrl] = useQueryState("apiUrl");
   const [authScheme] = useQueryState("authScheme");
   const url = apiUrl || process.env.NEXT_PUBLIC_API_URL;
   const scheme = authScheme || process.env.NEXT_PUBLIC_AUTH_SCHEME;
-  const [roles, setRoles] = useState<Role[] | null>(null);
+  const [models, setModels] = useState<Models | null>(null);
 
   useEffect(() => {
     if (!url) return;
@@ -73,19 +76,25 @@ function useModelRoles(): Role[] | null {
 
     // `scripts/dev.py` opens the page once the UI answers, which can be well before the
     // agent server has loaded the graph: until then the connection is refused, and while
-    // it starts the server answers 503. Both are retried, with backoff, for about two
-    // minutes. Any other answer is final: a server without this route says so with a 404,
-    // and asking again will not change that.
+    // it starts a proxy in front of it may answer 502-504. Those are retried, with backoff,
+    // for about two minutes. Any other answer is final: a 500 carries a models.yaml error
+    // that asking again will not fix, and a server without this route says so with a 404.
     const retry = (attempt: number) => {
       if (controller.signal.aborted || attempt >= 12) return;
-      timer = setTimeout(() => load(attempt + 1), Math.min(1000 * 2 ** attempt, 15000));
+      timer = setTimeout(
+        () => load(attempt + 1),
+        Math.min(1000 * 2 ** attempt, 15000),
+      );
     };
     const load = (attempt: number) => {
       fetch(`${url}/models`, { headers, signal: controller.signal })
         .then(async (res) => {
-          if (res.status >= 500) return retry(attempt);
-          const body = res.ok ? await res.json() : null;
-          setRoles(Array.isArray(body?.roles) ? body.roles : null);
+          if ([502, 503, 504].includes(res.status)) return retry(attempt);
+          const body = await res.json().catch(() => null);
+          if (Array.isArray(body?.roles)) setModels({ roles: body.roles });
+          else if (typeof body?.error === "string")
+            setModels({ error: body.error });
+          else setModels(null);
         })
         .catch(() => retry(attempt));
     };
@@ -94,14 +103,15 @@ function useModelRoles(): Role[] | null {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [url, scheme]);
+  }, [url, scheme, asked]);
 
-  return roles;
+  return models;
 }
 
 export function ModelBadge() {
-  const roles = useModelRoles();
   const [open, setOpen] = useState(false);
+  const [asked, setAsked] = useState(0);
+  const models = useModels(asked);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -120,8 +130,11 @@ export function ModelBadge() {
     };
   }, [open]);
 
-  const root = roles?.find((r) => r.role === "root");
-  if (!roles || !root) return null;
+  if (!models) return null;
+  const error = "error" in models ? models.error : null;
+  const roles = "roles" in models ? models.roles : [];
+  const root = roles.find((r) => r.role === "root");
+  if (!error && !root) return null;
 
   return (
     <div
@@ -131,17 +144,34 @@ export function ModelBadge() {
       {/* First, so it reads as configuring the whole line rather than the effort beside it. */}
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // Asking again on open shows a models.yaml edit without reloading the page.
+          if (!open) setAsked((n) => n + 1);
+          setOpen((v) => !v);
+        }}
         aria-label="Models in use"
         aria-expanded={open}
         className="rounded p-1 hover:bg-gray-200 hover:text-gray-700"
       >
         <Wrench className="size-3.5" />
       </button>
-      <span className="font-medium text-gray-600" title={root.model}>
-        {root.label}
-      </span>
-      {root.effort && <span className="ml-2">{effortName(root.effort)}</span>}
+      {error ? (
+        <span className="font-medium text-red-600">Model settings error</span>
+      ) : (
+        root && (
+          <>
+            <span
+              className="font-medium text-gray-600"
+              title={root.model}
+            >
+              {root.label}
+            </span>
+            {root.effort && (
+              <span className="ml-2">{effortName(root.effort)}</span>
+            )}
+          </>
+        )
+      )}
 
       {open && (
         <div
@@ -149,37 +179,49 @@ export function ModelBadge() {
           aria-label="Models in use"
           className="animate-in fade-in-0 zoom-in-95 absolute bottom-full left-2 z-20 mb-2 w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-white p-4 text-sm text-gray-700 shadow-lg"
         >
-          <table className="w-full text-left">
-            <thead className="text-xs text-gray-500">
-              <tr>
-                <th className="pb-2 font-medium"></th>
-                <th className="pb-2 font-medium">Provider</th>
-                <th className="pb-2 font-medium">Model</th>
-                <th className="pb-2 font-medium">Effort</th>
-              </tr>
-            </thead>
-            <tbody>
-              {roles.map((r) => (
-                <tr key={r.role} className="border-t">
-                  <td className="py-2 pr-3 font-medium whitespace-nowrap">
-                    {ROLE_NAMES[r.role] ?? r.role}
-                  </td>
-                  <td className="py-2 pr-3">{providerName(r)}</td>
-                  <td className="py-2 pr-3 break-all" title={r.model}>
-                    {r.label}
-                  </td>
-                  <td className="py-2">
-                    {r.effort ? effortName(r.effort) : "—"}
-                  </td>
+          {error ? (
+            <p className="text-xs leading-relaxed break-words whitespace-pre-wrap text-red-700">
+              {error}
+            </p>
+          ) : (
+            <table className="w-full text-left">
+              <thead className="text-xs text-gray-500">
+                <tr>
+                  <th className="pb-2 font-medium"></th>
+                  <th className="pb-2 font-medium">Provider</th>
+                  <th className="pb-2 font-medium">Model</th>
+                  <th className="pb-2 font-medium">Effort</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {roles.map((r) => (
+                  <tr
+                    key={r.role}
+                    className="border-t"
+                  >
+                    <td className="py-2 pr-3 font-medium whitespace-nowrap">
+                      {ROLE_NAMES[r.role] ?? r.role}
+                    </td>
+                    <td className="py-2 pr-3">{providerName(r)}</td>
+                    <td
+                      className="py-2 pr-3 break-all"
+                      title={r.model}
+                    >
+                      {r.label}
+                    </td>
+                    <td className="py-2">
+                      {r.effort ? effortName(r.effort) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <p className="mt-3 border-t pt-3 text-xs leading-relaxed text-gray-500">
             Models and effort levels are set in <code>models.yaml</code> at the
-            repository root. Providers and their credentials, including custom
-            OpenAI-compatible endpoints, are configured in LangSmith under LLM
-            Gateway. Restart the server after changing either.
+            repository root, and edits apply to your next message. Provider API
+            keys go in LangSmith under Settings → Integrations → Provider
+            Secrets.
           </p>
         </div>
       )}

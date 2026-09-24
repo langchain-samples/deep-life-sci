@@ -1,12 +1,16 @@
-"""A model call the gateway refuses fails with the model setting to fix, not a bare 400.
+"""A provider's error on a model call reaches the user in the provider's own words.
 
-Model and effort are chosen in `models.yaml` and nothing checks the pair locally (see
-`models._effort`), so an unsupported combination first shows up as the provider's 400 at
-the first model call. That body names the parameter but not where it was set, and in the
-chat UI it arrives as a toast with no sign that a config file is involved. This re-raises
-it with the role's model, effort and where both come from (`models.rejection_message`).
+The LangGraph API shows the message of only a few exception types and replaces every other
+one with "An internal error occurred" (`langgraph_api/serde.py`), so a gateway 400 or 404
+from either SDK would reach the chat UI as that and nothing more. This re-raises it as a
+`RuntimeError` carrying the provider's message and the role's model and effort
+(`models.rejection_message`), without guessing at the cause.
 
-Anything that is not a refusal passes through unchanged.
+On the root that failure ends the run and is the toast the user sees. On an analyst leaf
+it ends that `task()` call, and the root reads it as the call's error; the root prompt
+tells it to relay a gateway error rather than work around it.
+
+A context overflow, and anything without a status code, passes through unchanged.
 """
 
 from __future__ import annotations
@@ -20,26 +24,22 @@ from langchain.agents.middleware.types import ModelRequest
 from deep_life_sci.models import rejection_message
 
 
-class ModelSettingError(RuntimeError):
-    """The gateway refused a role's model call; the message names the setting."""
+class ModelCallError(RuntimeError):
+    """The gateway answered a role's model call with an error; the message is theirs."""
 
 
-class ModelSettingErrors(AgentMiddleware):
+class SurfaceModelErrors(AgentMiddleware):
     def __init__(self, role: str) -> None:
         super().__init__()
         self.role = role
-
-    def _explained(self, exc: Exception) -> Exception:
-        message = rejection_message(self.role, exc)
-        return ModelSettingError(message) if message else exc
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]):
         try:
             return handler(request)
         except Exception as exc:
-            if (explained := self._explained(exc)) is exc:
-                raise
-            raise explained from exc
+            if message := rejection_message(self.role, exc):
+                raise ModelCallError(message) from exc
+            raise
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
@@ -47,6 +47,6 @@ class ModelSettingErrors(AgentMiddleware):
         try:
             return await handler(request)
         except Exception as exc:
-            if (explained := self._explained(exc)) is exc:
-                raise
-            raise explained from exc
+            if message := rejection_message(self.role, exc):
+                raise ModelCallError(message) from exc
+            raise

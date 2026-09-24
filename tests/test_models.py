@@ -9,10 +9,14 @@ and is tested as one.
 The subtlest behaviour in the module, and the one most likely to be broken by a
 well-intentioned edit: a **default** provider describes the default model it sits beside,
 so it must not survive that model being replaced. Without that, `ROOT_MODEL=claude-sonnet-5`
-alone would contradict the default `ROOT_PROVIDER=openai` and refuse to run.
+alone would contradict a models.yaml `provider: openai` and refuse to run.
 """
 
 from __future__ import annotations
+
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -22,6 +26,7 @@ from deep_life_sci.models import (
     LABELS,
     PROVIDERS,
     ROLES,
+    ROOT_TIMEOUT,
     WEB_SEARCH_SPECS,
     _effort,
     _infer_provider,
@@ -32,9 +37,12 @@ from deep_life_sci.models import (
     check_gateway_config,
     describe,
     gateway_key,
+    refresh,
     rejection_message,
+    root_model,
     slug,
     summary,
+    validate,
 )
 
 
@@ -94,8 +102,8 @@ class TestEffort:
         assert _effort("root") == DEFAULTS["root"]["effort"]
 
     @pytest.mark.parametrize("level", ["none", "minimal", "xhigh", "max"])
-    def test_any_level_is_left_for_the_provider_to_judge(self, level: str, monkeypatch):
-        """Levels differ by model, so a local list would refuse valid ones (`none`)."""
+    def test_reads_the_level_as_set(self, level: str, monkeypatch):
+        """Checking it against the model is `_resolve`'s job (`TestEffortCheck`)."""
         monkeypatch.setenv("SUBAGENT_EFFORT", level)
         assert _effort("subagent") == level
 
@@ -277,9 +285,20 @@ class TestLoadModelsYaml:
         path.write_text(text, encoding="utf-8")
         return _load(path)
 
-    def test_the_shipped_file_names_every_role(self):
+    def test_the_shipped_file_is_well_formed_and_every_role_can_run(self, monkeypatch):
+        """The one test that reads the repository's own models.yaml, whatever it now says."""
+        from deep_life_sci import models
+        from deep_life_sci.paths import REPO_ROOT
+
+        _use_models_file(monkeypatch, REPO_ROOT / "models.yaml")
+        assert set(models.DEFAULTS) == set(ROLES)
+        validate()
+
+    def test_the_tests_run_against_the_pinned_copy(self):
+        from deep_life_sci import paths
+
+        assert paths.MODELS_FILE.parent.name == "fixtures"
         assert set(DEFAULTS) == set(ROLES)
-        assert all(DEFAULTS[role]["model"] for role in ROLES)
 
     def test_reads_each_axis_and_the_labels(self, tmp_path):
         defaults, labels = self._load(tmp_path, VALID_YAML)
@@ -315,6 +334,14 @@ class TestLoadModelsYaml:
     def test_a_missing_file_says_what_it_is_for(self, tmp_path):
         with pytest.raises(SystemExit, match="names the model each role runs"):
             _load(tmp_path / "models.yaml")
+
+    def test_a_repeated_role_is_refused_rather_than_last_one_wins(self, tmp_path):
+        with pytest.raises(SystemExit, match="found `root` twice"):
+            self._load(tmp_path, VALID_YAML + "root: {model: claude-sonnet-5}\n")
+
+    def test_a_repeated_axis_is_refused_rather_than_last_one_wins(self, tmp_path):
+        with pytest.raises(SystemExit, match="found `effort` twice"):
+            self._load(tmp_path, VALID_YAML.replace("effort: high", "effort: high, effort: low"))
 
     def test_invalid_yaml_is_refused_legibly(self, tmp_path):
         with pytest.raises(SystemExit, match="is not valid YAML"):
@@ -365,25 +392,33 @@ class _Refused(Exception):
 
 
 class TestRejectionMessage:
-    """A refused call must say that model and effort have to be valid together."""
+    """A provider's error is shown as the provider worded it, with no guess at the cause."""
 
-    @pytest.mark.parametrize("status", [400, 404, 422])
-    def test_names_the_role_setting_and_both_axes(self, status: int, monkeypatch):
-        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-4-6")
-        monkeypatch.setenv("ROOT_EFFORT", "xhigh")
+    @pytest.mark.parametrize("status", [400, 404, 422, 429, 500])
+    def test_any_status_is_surfaced_with_the_providers_words_and_the_settings(
+        self, status: int, monkeypatch
+    ):
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
+        monkeypatch.setenv("ROOT_EFFORT", "high")
         message = rejection_message("root", _Refused(status))
         assert f"({status})" in message
-        assert "Unsupported value: 'xhigh'" in message  # the provider's own words first
-        assert "'claude-sonnet-4-6'" in message and "'xhigh'" in message
-        assert "models.yaml" in message and "ROOT_EFFORT" in message
-        assert "valid together" in message
+        assert "Unsupported value: 'xhigh'" in message
+        assert "'claude-sonnet-5'" in message and "'high'" in message
+        assert "valid together" not in message  # no diagnosis: a 400 is often a filter
 
     def test_an_empty_effort_is_shown_as_none_rather_than_blank(self, monkeypatch):
         monkeypatch.setenv("SUBAGENT_EFFORT", "")
         assert "effort '(none)'" in rejection_message("subagent", _Refused(400))
 
-    @pytest.mark.parametrize("exc", [_Refused(500), _Refused(429), TimeoutError("slow")])
-    def test_anything_but_a_refusal_is_left_alone(self, exc: Exception):
+    def test_a_setting_that_fails_its_checks_cannot_raise_in_place_of_the_error(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-4-6")
+        monkeypatch.setenv("ROOT_EFFORT", "xhigh")  # refused by `_resolve`
+        assert "'xhigh'" in rejection_message("root", _Refused(400))
+
+    @pytest.mark.parametrize("exc", [TimeoutError("slow"), ValueError("our bug")])
+    def test_anything_without_a_status_is_left_alone(self, exc: Exception):
         assert rejection_message("root", exc) is None
 
     def test_a_context_overflow_is_left_for_summarization_to_catch(self):
@@ -394,3 +429,119 @@ class TestRejectionMessage:
             pass
 
         assert rejection_message("root", _Overflow(400, "context_length_exceeded")) is None
+
+
+class TestEffortCheck:
+    """A level the model cannot take fails in `_resolve`, before anything is built or booted."""
+
+    def test_a_typo_is_caught_before_a_sweep_boots_a_container(self, monkeypatch):
+        monkeypatch.setenv("ROOT_EFFORT", "extreme")
+        with pytest.raises(SystemExit, match="ROOT_EFFORT='extreme' is not an effort level"):
+            describe()
+
+    def test_the_judge_is_checked_too(self, monkeypatch):
+        """`evals/run.py` describes the judge before the first example runs."""
+        monkeypatch.setenv("JUDGE_EFFORT", "hgih")
+        with pytest.raises(SystemExit, match="JUDGE_EFFORT"):
+            describe("judge")
+
+    @pytest.mark.parametrize(
+        ("model", "effort"),
+        [
+            ("openai/gpt-5.6-terra", "none"),  # the level an allowlist used to refuse
+            ("claude-sonnet-5", "xhigh"),
+            ("openai/o3", "high"),  # its profile lists no levels, which is not "none"
+            ("acme/some-model", "minimal"),  # no profile: only typos are refused
+        ],
+    )
+    def test_a_level_the_model_takes_is_accepted(self, model, effort, monkeypatch):
+        monkeypatch.setenv("ROOT_MODEL", model)
+        monkeypatch.setenv("ROOT_EFFORT", effort)
+        assert _resolve("root")[2] == effort
+
+    @pytest.mark.parametrize(
+        ("model", "effort", "scope"),
+        [
+            ("claude-sonnet-4-6", "xhigh", "for 'claude-sonnet-4-6'"),  # from its profile
+            ("claude-haiku-4-5-20251001", "none", "on the Anthropic path"),  # ChatAnthropic
+            ("claude-some-future-model", "minimal", "on the Anthropic path"),
+        ],
+    )
+    def test_a_level_the_model_cannot_take_is_refused(self, model, effort, scope, monkeypatch):
+        monkeypatch.setenv("SUBAGENT_MODEL", model)
+        monkeypatch.setenv("SUBAGENT_EFFORT", effort)
+        with pytest.raises(SystemExit, match=scope):
+            _resolve("subagent")
+
+
+def _use_models_file(monkeypatch, path):
+    """Point models.py at another models.yaml, and forget what it had read."""
+    from deep_life_sci import models, paths
+
+    monkeypatch.setattr(paths, "MODELS_FILE", path)
+    monkeypatch.setattr(models, "_config_state", None)
+
+
+class TestModelsFileLifecycle:
+    def test_importing_models_does_not_import_paths(self):
+        """`cli.py` imports models before `.env`; `paths` fixes DATA_DIR when imported."""
+        code = "import sys, deep_life_sci.models; print('deep_life_sci.paths' in sys.modules)"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        assert out.stdout.strip() == "False", out.stderr
+
+    def test_an_edit_applies_on_the_next_refresh(self, tmp_path, monkeypatch):
+        path = tmp_path / "models.yaml"
+        path.write_text(VALID_YAML, encoding="utf-8")
+        _use_models_file(monkeypatch, path)
+        assert _resolve("root")[2] == "high"
+        path.write_text(VALID_YAML.replace("effort: high", "effort: medium"), encoding="utf-8")
+        os.utime(path, ns=(1, 1))  # a new stamp even on a coarse-mtime filesystem
+        refresh()
+        assert _resolve("root")[2] == "medium"
+
+    def test_a_yaml_provider_does_not_survive_its_model_being_replaced(
+        self, tmp_path, monkeypatch
+    ):
+        """The shipped file names no provider, so only a file that does exercises this."""
+        path = tmp_path / "models.yaml"
+        terra = "root: {model: openai/gpt-5.6-terra,"
+        path.write_text(VALID_YAML.replace(terra, terra + " provider: openai,"))
+        _use_models_file(monkeypatch, path)
+        assert _resolve("root")[1] == "openai"
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
+        assert _resolve("root")[1] == "anthropic"
+
+    def test_a_yaml_value_that_cannot_work_names_the_line_in_models_yaml(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "models.yaml"
+        path.write_text(VALID_YAML.replace("openai/gpt-5.6-luna, provider: OpenAI", "gpt-5.6-luna"))
+        _use_models_file(monkeypatch, path)
+        with pytest.raises(SystemExit, match=r"models\.yaml search\.model='gpt-5\.6-luna'"):
+            validate("search")
+
+    def test_the_route_reports_a_setting_that_cannot_work_rather_than_raising(
+        self, tmp_path, monkeypatch
+    ):
+        """A SystemExit inside a request stops `langgraph dev`'s event loop."""
+        pytest.importorskip("starlette")
+        from starlette.testclient import TestClient
+
+        from deep_life_sci.webapp import app
+
+        path = tmp_path / "models.yaml"
+        path.write_text(VALID_YAML.replace("openai/gpt-5.6-luna, provider: OpenAI", "gpt-5.6-luna"))
+        _use_models_file(monkeypatch, path)
+        response = TestClient(app).get("/models")
+        assert response.status_code == 500
+        assert "search.model" in response.json()["error"]
+
+
+class TestAnthropicRoot:
+    def test_an_anthropic_root_builds_with_the_read_watchdog(self, monkeypatch):
+        """ChatAnthropic refuses an httpx.Timeout; unmocked, because the mocks hid that."""
+        monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_offline")
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
+        model = root_model()
+        assert model.default_request_timeout == ROOT_TIMEOUT.read
+        assert model.streaming

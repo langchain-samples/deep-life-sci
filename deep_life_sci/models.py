@@ -18,7 +18,7 @@ Each role is configured by three independent env vars, defaulting to the role's 
 
     ROOT_MODEL      SUBAGENT_MODEL      SEARCH_MODEL      JUDGE_MODEL      model id
     ROOT_PROVIDER   SUBAGENT_PROVIDER   SEARCH_PROVIDER   JUDGE_PROVIDER   anthropic|openai
-    ROOT_EFFORT     SUBAGENT_EFFORT     SEARCH_EFFORT     JUDGE_EFFORT     low..max
+    ROOT_EFFORT     SUBAGENT_EFFORT     SEARCH_EFFORT     JUDGE_EFFORT     see `_check_effort`
 
 `search` is the role behind `sources/web.py`'s `web_search` tool: a model with the
 provider's own server-side web search bound to it, called from inside the tool so its
@@ -56,13 +56,13 @@ Two things to know about the native path:
 """
 
 import os
+import threading
 from pathlib import Path
+from typing import NamedTuple, get_args
 
 import httpx
 import yaml
 from langchain_core.exceptions import ContextOverflowError
-
-from deep_life_sci import paths
 
 ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
 OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
@@ -205,10 +205,44 @@ PROVIDERS = ("anthropic", "openai")
 # psilocybin-depression-unpublished on two claims that were both false about the answer in
 # front of it. A grader that misreads the answer is a worse confound than a costlier one.
 
-# The four roles, in the order `describe()` and the UI list them.
+# The four roles, in the order `summary()` lists them. The first three run behind the chat
+# UI; the judge only grades evals.
 ROLES = ("root", "subagent", "search", "judge")
+CHAT_ROLES = ROLES[:3]
 
 _AXES = ("model", "provider", "effort")
+
+# Every env var this module reads, so `cli.py` and `evals/run.py` can preserve them across
+# their `load_dotenv(override=True)` without hand-maintaining a second copy of the list —
+# a copy that drifts is how a `ROOT_MODEL=...` on the command line silently loses to .env.
+# Built from names alone: both entry points import this before `.env` is loaded, so
+# importing this module must not read models.yaml or import `paths` (see `refresh`).
+ENV_VARS = tuple(f"{role.upper()}_{axis.upper()}" for role in ROLES for axis in _AXES)
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a repeated key rather than keeping the last one.
+
+    A second `root:` block pasted under the first would otherwise replace it whole, and a
+    repeated `effort:` would quietly win: the same silent wrong model that `_load` refuses
+    unknown keys to prevent.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                repeated = key in seen
+            except TypeError:  # unhashable; the base class reports that itself
+                continue
+            if repeated:
+                raise yaml.constructor.ConstructorError(
+                    "while reading a mapping", node.start_mark,
+                    f"found `{key}` twice; keep one", key_node.start_mark,
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep)
 
 
 def _text(role: str, axis: str, value: object) -> str:
@@ -221,23 +255,23 @@ def _text(role: str, axis: str, value: object) -> str:
     if value is None:
         return ""
     if not isinstance(value, str):
+        empty = "" if axis == "model" else ", or leave it empty for none"
         raise SystemExit(
-            f"{paths.MODELS_FILE.name}: {role}.{axis} is {value!r}; write it as text "
-            "(quote it), or leave it empty for none."
+            f"models.yaml: {role}.{axis} is {value!r}; write it as text (quote it){empty}."
         )
     return value.strip().lower() if axis != "model" else value.strip()
 
 
 def _load(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
-    """(per-role defaults, display labels) from models.yaml, refused legibly if malformed.
+    """(per-role defaults, display labels) from one models.yaml, refused legibly if malformed.
 
-    Read once at import. A model change needs a server restart regardless, because the
-    graph is assembled with its models already built, so re-reading per call would only
-    make the UI and the running agent disagree. Unknown keys are errors rather than
-    ignored, since a misspelt `subagents:` would otherwise run the wrong model silently.
+    Structure only. Whether a role's model, gateway path and effort work together is
+    `_resolve`'s check, because env overrides take part in it. Unknown and repeated keys
+    are errors rather than ignored, since a misspelt `subagents:` or a pasted second
+    `root:` would otherwise run the wrong model silently.
     """
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader) or {}
     except FileNotFoundError:
         raise SystemExit(f"{path} is missing; it names the model each role runs.") from None
     except yaml.YAMLError as exc:
@@ -272,16 +306,58 @@ def _load(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
     return defaults, labels
 
 
-DEFAULTS, LABELS = _load(paths.MODELS_FILE)
+class _Config(NamedTuple):
+    stamp: tuple[int, int] | None  # (mtime_ns, size) of the file this was read from
+    defaults: dict[str, dict[str, str]]
+    labels: dict[str, str]
 
-# Every env var this module reads, so `cli.py` and `evals/run.py` can preserve them across
-# their `load_dotenv(override=True)` without hand-maintaining a second copy of the list —
-# a copy that drifts is how a `ROOT_MODEL=...` on the command line silently loses to .env.
-ENV_VARS = tuple(
-    f"{role.upper()}_{axis.upper()}"
-    for role in DEFAULTS
-    for axis in ("model", "provider", "effort")
-)
+
+_config_state: _Config | None = None
+_config_lock = threading.Lock()
+
+
+def refresh() -> None:
+    """Re-read models.yaml if it changed since the last read. Blocking file I/O.
+
+    The server calls this before every graph build (`graph.make_graph`) and every
+    `GET /models`, through `asyncio.to_thread`, so an edit applies to the next run and to
+    the badge without a restart; the graph is rebuilt per run anyway. Env overrides need a
+    restart only because the process environment does. Everything else reads the file on
+    first use and keeps it (`_config`), so a CLI run or an eval sweep sees one
+    configuration throughout.
+
+    `paths` is imported here rather than at module level because it reads
+    DEEP_LIFE_SCI_DATA_DIR at import, and `cli.py` imports this module before `.env`.
+    """
+    global _config_state
+    from deep_life_sci import paths
+
+    path = paths.MODELS_FILE
+    with _config_lock:
+        try:
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except FileNotFoundError:
+            stamp = None
+        if _config_state is not None and stamp is not None and stamp == _config_state.stamp:
+            return
+        defaults, labels = _load(path)
+        _config_state = _Config(stamp, defaults, labels)
+
+
+def _config() -> _Config:
+    if _config_state is None:
+        refresh()
+    return _config_state
+
+
+def __getattr__(name: str):
+    """`DEFAULTS` and `LABELS`, read from models.yaml on first use rather than at import."""
+    if name == "DEFAULTS":
+        return _config().defaults
+    if name == "LABELS":
+        return _config().labels
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def gateway_key() -> str:
@@ -331,7 +407,14 @@ def _infer_provider(model: str) -> str:
     return ""
 
 
-def _provider_for(role: str, model: str, declared: str) -> str:
+def _provider_for(
+    role: str,
+    model: str,
+    declared: str,
+    *,
+    model_source: str = "",
+    provider_source: str = "",
+) -> str:
     """Validate one role's gateway path against the form of its model id.
 
     A named path wins where the form says nothing, which is the escape hatch: a model id in
@@ -339,51 +422,51 @@ def _provider_for(role: str, model: str, declared: str) -> str:
     Where the form *does* say something and the two disagree, that is an error rather than
     a preference — sending an id down the wrong path returns a 501 that reads like an
     outage, or silently drops prompt caching.
+
+    The sources name where each value came from (`models.yaml root.model`, or the env var),
+    so the error points at the line to fix; they default to the env var names.
     """
+    model_source = model_source or f"{role.upper()}_MODEL"
+    provider_source = provider_source or f"{role.upper()}_PROVIDER"
     inferred = _infer_provider(model)
     if declared:
         if declared not in PROVIDERS:
             raise SystemExit(
-                f"{role.upper()}_PROVIDER={declared!r} is not a gateway path. "
+                f"{provider_source}={declared!r} is not a gateway path. "
                 f"Choose one of: {', '.join(PROVIDERS)}"
             )
         if inferred and inferred != declared:
             raise SystemExit(
-                f"{role.upper()}_MODEL={model!r} is a {inferred!r} id but "
-                f"{role.upper()}_PROVIDER says {declared!r}. The paths take different id "
-                "forms: anthropic wants a bare id ('claude-sonnet-5'), openai a prefixed "
-                "one ('openai/gpt-5.6-terra'). Fix one or the other, or unset the "
-                "provider and let the form decide."
+                f"{model_source}={model!r} is a {inferred!r} id but {provider_source} "
+                f"says {declared!r}. The paths take different id forms: anthropic wants a "
+                "bare id ('claude-sonnet-5'), openai a prefixed one ('openai/gpt-5.6-terra'). "
+                "Fix one or the other, or unset the provider and let the form decide."
             )
         return declared
     if inferred:
         return inferred
     raise SystemExit(
-        f"Cannot tell which gateway path {role.upper()}_MODEL={model!r} needs. "
+        f"Cannot tell which gateway path {model_source}={model!r} needs. "
         "Anthropic-native ids are bare ('claude-sonnet-5'); everything else must carry a "
-        f"provider prefix ('openai/gpt-5.6-terra'). Or set {role.upper()}_PROVIDER "
-        f"explicitly to one of: {', '.join(PROVIDERS)}"
+        f"provider prefix ('openai/gpt-5.6-terra'). Or set {provider_source} explicitly to "
+        f"one of: {', '.join(PROVIDERS)}"
     )
 
 
 def _setting(role: str, axis: str) -> str:
-    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else the default.
+    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else models.yaml.
 
     An env var set to whitespace reads as unset rather than as an empty model id. That
     is why `_effort` does **not** go through here: on that axis an explicit empty value
     is a value, not an omission. Only `model` is left, so this reads narrower than it
     looks — do not fold the effort axis back into it.
     """
-    return os.environ.get(f"{role.upper()}_{axis.upper()}", "").strip() or DEFAULTS[role][axis]
+    value = os.environ.get(f"{role.upper()}_{axis.upper()}", "").strip()
+    return value or _config().defaults[role][axis]
 
 
 def _effort(role: str) -> str:
-    """`{ROLE}_EFFORT`, passed through unvalidated.
-
-    There is no local list of levels because there is no common one: the GPT-5.6 models
-    take `none` through `max`, Sonnet 4.6 has no `xhigh`, and Haiku 4.5 rejects the
-    parameter outright. A list here would refuse valid settings or pass invalid ones, so
-    the provider decides, and `rejection_message` makes its 400 name the setting to fix.
+    """`{ROLE}_EFFORT`, else the role's models.yaml effort. `_check_effort` validates it.
 
     On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
     defaults `thinking` to adaptive whenever effort is set, setting it also turns thinking
@@ -400,53 +483,128 @@ def _effort(role: str) -> str:
     `low` and 400'd, with nothing anywhere saying the clear had been ignored.
     """
     raw = os.environ.get(f"{role.upper()}_EFFORT")
-    return (DEFAULTS[role]["effort"] if raw is None else raw).strip().lower()
+    return (_config().defaults[role]["effort"] if raw is None else raw).strip().lower()
 
 
-# Statuses the gateway answers a bad model id or an unsupported parameter with.
-_REJECTED = (400, 404, 422)
+# Every effort level any model here takes. A value outside it is a typo whatever the model.
+_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _profile_levels(model: str, provider: str) -> tuple[str, ...] | None:
+    """The effort levels langchain's model profile lists for this id, or None if unknown.
+
+    Profiles are keyed by the vendor's bare id, so `openai/gpt-5.6-terra` is looked up as
+    `gpt-5.6-terra` in langchain-openai's table and `claude-*` in langchain-anthropic's.
+    Any other vendor has no table. A profile that lists no levels also counts as unknown
+    rather than as "takes no effort": o3's lists none, and o3 takes low through high.
+    """
+    vendor, _, bare = model.rpartition("/")
+    if not vendor and provider == "anthropic":
+        vendor = "anthropic"
+    try:
+        if vendor == "openai":
+            from langchain_openai.chat_models.base import _get_default_model_profile
+        elif vendor == "anthropic":
+            from langchain_anthropic.chat_models import _get_default_model_profile
+        else:
+            return None
+        levels = (_get_default_model_profile(bare) or {}).get("reasoning_effort_levels")
+    except Exception:  # noqa: BLE001 - a private helper; if it moves, there is no profile
+        return None
+    return tuple(levels) if levels else None
+
+
+def _anthropic_efforts() -> tuple[str, ...]:
+    """The levels `ChatAnthropic` accepts at all, read off its `reasoning_effort` Literal.
+
+    Pydantic checks that Literal when the model is built, so anything else fails there
+    with a bare ValidationError naming neither the role nor models.yaml.
+    """
+    from langchain_anthropic import ChatAnthropic
+
+    annotation = ChatAnthropic.model_fields["reasoning_effort"].annotation
+    return tuple(v for arg in get_args(annotation) for v in get_args(arg)) or _EFFORT_LEVELS
+
+
+def _check_effort(model: str, provider: str, effort: str, source: str) -> None:
+    """Refuse an effort this model cannot take, before anything is built or booted.
+
+    Most specific first: the levels the id's langchain profile lists (Sonnet 4.6 has no
+    `xhigh`; GPT-5.6 takes `none`); on the Anthropic-native path, what `ChatAnthropic`
+    accepts at all; otherwise every known level, which still catches a typo before an
+    eval sweep boots a container per example. What none of these knows — a model with no
+    profile that takes no effort, like Haiku 4.5 — is left to the provider, and its 400
+    reaches the user through `middleware/model_errors.py`.
+    """
+    if not effort:
+        return
+    levels, scope = _profile_levels(model, provider), f"for {model!r}"
+    if levels is None and provider == "anthropic":
+        levels, scope = _anthropic_efforts(), "on the Anthropic path"
+    if levels is None:
+        levels, scope = _EFFORT_LEVELS, "for any model"
+    if effort not in levels:
+        raise SystemExit(
+            f"{source}={effort!r} is not an effort level {scope}. Choose one of: "
+            f"{', '.join(levels)}; or leave it empty to omit it."
+        )
 
 
 def rejection_message(role: str, exc: BaseException) -> str | None:
-    """The gateway's refusal of a role's request, restated as the setting to fix.
+    """A provider's HTTP error on one role's model call, as text the user will see.
 
-    None for anything else, so callers re-raise the original. A 400 can have other causes
-    (a content filter, an oversized request), so the provider's own message stays first and
-    the settings are offered as the likely suspect rather than the certain one. Both SDKs'
-    `APIStatusError` carry `status_code`, so no provider import is needed.
-
-    A context overflow is also a 400, and is left alone: deepagents' summarization
-    middleware catches `ContextOverflowError` to compact the history and retry, and a
-    rewrapped one would end the run instead.
+    None for anything without a status code, so our own bugs stay as they are, and for a
+    context overflow, which deepagents' summarization middleware catches as
+    `ContextOverflowError` to compact the history and retry; a rewrapped one would end the
+    run instead. Everything else is reported as the provider worded it, with the role's
+    settings beside it and no guess at the cause: a 400 is as often a content filter or an
+    unreadable image as a setting. Both SDKs' `APIStatusError` carry `status_code`, so no
+    provider import is needed. Reads the settings without `_resolve`'s checks, so this
+    cannot raise in place of the error it reports.
     """
     status = getattr(exc, "status_code", None)
-    if status not in _REJECTED or isinstance(exc, ContextOverflowError):
+    if not isinstance(status, int) or isinstance(exc, ContextOverflowError):
         return None
-    model, _, effort = _resolve(role)
     return (
-        f"The LLM Gateway rejected the {role} model's request ({status}): {exc}\n\n"
-        f"The {role} role runs model {model!r} with effort {effort or '(none)'!r}, set in "
-        f"models.yaml or {role.upper()}_MODEL / {role.upper()}_EFFORT. Both must be valid "
-        "together: the model must be available in your LangSmith LLM Gateway, and the "
-        "effort must be a level that model supports. Levels differ by model; leave the "
-        "effort empty to omit it."
+        f"The LLM Gateway returned an error for the {role} model's request ({status}): "
+        f"{exc}\n\n({role} role: model {_setting(role, 'model')!r}, effort "
+        f"{_effort(role) or '(none)'!r}, from models.yaml or {role.upper()}_* env vars.)"
     )
 
 
 def _resolve(role: str) -> tuple[str, str, str]:
-    """(model id, gateway path, effort) for one role, from the env or the defaults above."""
+    """(model id, gateway path, effort) for one role, from the env or models.yaml.
+
+    Refuses any combination that cannot work, naming where each value came from.
+    """
+    upper, defaults = role.upper(), _config().defaults[role]
     model = _setting(role, "model")
-    provider = os.environ.get(f"{role.upper()}_PROVIDER", "").strip().lower()
+    from_env = bool(os.environ.get(f"{upper}_MODEL", "").strip())
+    model_source = f"{upper}_MODEL" if from_env else f"models.yaml {role}.model"
+    provider = os.environ.get(f"{upper}_PROVIDER", "").strip().lower()
+    provider_source = f"{upper}_PROVIDER"
     if not provider:
         # A default provider describes the default model it sits beside, so it does not
-        # survive that model being replaced: `ROOT_MODEL=openai/gpt-5.6-terra` alone would
-        # otherwise contradict ROOT_PROVIDER and refuse to run.
-        provider = (
-            DEFAULTS[role]["provider"]
-            if model == DEFAULTS[role]["model"]
-            else _infer_provider(model)
-        )
-    return model, _provider_for(role, model, provider), _effort(role)
+        # survive that model being replaced: `ROOT_MODEL=claude-sonnet-5` alone would
+        # otherwise contradict a models.yaml `provider: openai` and refuse to run.
+        provider = defaults["provider"] if model == defaults["model"] else _infer_provider(model)
+        if not from_env:
+            provider_source = f"models.yaml {role}.provider"
+    provider = _provider_for(
+        role, model, provider, model_source=model_source, provider_source=provider_source
+    )
+    effort = _effort(role)
+    effort_source = (
+        f"{upper}_EFFORT" if f"{upper}_EFFORT" in os.environ else f"models.yaml {role}.effort"
+    )
+    _check_effort(model, provider, effort, effort_source)
+    return model, provider, effort
+
+
+def validate(*roles: str) -> None:
+    """Resolve each role now (all four by default), so a bad setting fails before a boot."""
+    for role in roles or ROLES:
+        _resolve(role)
 
 
 def _build(model: str, provider: str, **kwargs):
@@ -455,6 +613,13 @@ def _build(model: str, provider: str, **kwargs):
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
+        # ChatAnthropic types `timeout` as a float and refuses an httpx.Timeout, which is
+        # what ROOT_TIMEOUT is, so an Anthropic root could not be built at all. Its `read`
+        # is the part that matters (the gap between streamed chunks); a float applies that
+        # one value to every phase, so connect and pool wait 30s here rather than 5s.
+        # ChatOpenAI takes the components as they are, so only this path collapses them.
+        if isinstance(timeout := kwargs.get("timeout"), httpx.Timeout):
+            kwargs["timeout"] = timeout.read
         return ChatAnthropic(
             model=model,
             base_url=os.environ.get("LANGSMITH_GATEWAY_ANTHROPIC_URL", ANTHROPIC_BASE_URL),
@@ -588,7 +753,7 @@ def summary(*roles: str) -> list[dict[str, str]]:
         rows.append({
             "role": role,
             "model": model,
-            "label": LABELS.get(model) or model,
+            "label": _config().labels.get(model) or model,
             "provider": provider,
             "effort": effort,
         })
