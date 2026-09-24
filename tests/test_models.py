@@ -18,7 +18,6 @@ import pytest
 
 from deep_life_sci.models import (
     DEFAULTS,
-    EFFORT_LEVELS,
     ENV_VARS,
     LABELS,
     PROVIDERS,
@@ -33,6 +32,7 @@ from deep_life_sci.models import (
     check_gateway_config,
     describe,
     gateway_key,
+    rejection_message,
     slug,
     summary,
 )
@@ -93,19 +93,15 @@ class TestEffort:
     def test_defaults_to_the_roles_constant(self):
         assert _effort("root") == DEFAULTS["root"]["effort"]
 
-    @pytest.mark.parametrize("level", EFFORT_LEVELS)
-    def test_accepts_every_documented_level(self, level: str, monkeypatch):
+    @pytest.mark.parametrize("level", ["none", "minimal", "xhigh", "max"])
+    def test_any_level_is_left_for_the_provider_to_judge(self, level: str, monkeypatch):
+        """Levels differ by model, so a local list would refuse valid ones (`none`)."""
         monkeypatch.setenv("SUBAGENT_EFFORT", level)
         assert _effort("subagent") == level
 
     def test_is_case_insensitive(self, monkeypatch):
         monkeypatch.setenv("ROOT_EFFORT", "HIGH")
         assert _effort("root") == "high"
-
-    def test_a_typo_is_caught_before_a_sweep_boots_nine_containers(self, monkeypatch):
-        monkeypatch.setenv("ROOT_EFFORT", "extreme")
-        with pytest.raises(SystemExit, match="is not an effort level"):
-            _effort("root")
 
     def test_an_explicitly_empty_effort_is_unset(self, monkeypatch):
         """`SUBAGENT_EFFORT=` is how Haiku 4.5, which has no effort scale, is used."""
@@ -358,3 +354,34 @@ class TestSummary:
         assert [row["role"] for row in response.json()["roles"]] == [
             "root", "subagent", "search"
         ]
+
+
+class _Refused(Exception):
+    """Stands in for either SDK's APIStatusError: all `rejection_message` reads."""
+
+    def __init__(self, status_code: int, message: str = "Unsupported value: 'xhigh'"):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class TestRejectionMessage:
+    """A refused call must say that model and effort have to be valid together."""
+
+    @pytest.mark.parametrize("status", [400, 404, 422])
+    def test_names_the_role_setting_and_both_axes(self, status: int, monkeypatch):
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-4-6")
+        monkeypatch.setenv("ROOT_EFFORT", "xhigh")
+        message = rejection_message("root", _Refused(status))
+        assert f"({status})" in message
+        assert "Unsupported value: 'xhigh'" in message  # the provider's own words first
+        assert "'claude-sonnet-4-6'" in message and "'xhigh'" in message
+        assert "models.yaml" in message and "ROOT_EFFORT" in message
+        assert "valid together" in message
+
+    def test_an_empty_effort_is_shown_as_none_rather_than_blank(self, monkeypatch):
+        monkeypatch.setenv("SUBAGENT_EFFORT", "")
+        assert "effort '(none)'" in rejection_message("subagent", _Refused(400))
+
+    @pytest.mark.parametrize("exc", [_Refused(500), _Refused(429), TimeoutError("slow")])
+    def test_anything_but_a_refusal_is_left_alone(self, exc: Exception):
+        assert rejection_message("root", exc) is None

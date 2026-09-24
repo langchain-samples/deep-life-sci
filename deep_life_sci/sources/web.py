@@ -45,7 +45,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from deep_life_sci.models import describe, web_search_model
+from deep_life_sci.models import describe, rejection_message, web_search_model
 
 # Cost and latency, not politeness — see the module docstring. Eight concurrent searches
 # is already a wide question; more usually means the model is enumerating rather than
@@ -247,6 +247,12 @@ async def web_search(query: str) -> dict:
                 _PROMPT.format(today=date.today().isoformat(), query=query)
             )
     except Exception as exc:  # noqa: BLE001 - a failed search must not kill the run
+        if explained := rejection_message("search", exc):
+            return _failed(
+                query,
+                f"{explained} The model must also support its provider's server-side web "
+                "search.",
+            )
         return _failed(
             query,
             f"{describe('search')} failed: {exc}. Not every model supports its provider's "

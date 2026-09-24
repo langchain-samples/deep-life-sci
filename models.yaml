@@ -1,77 +1,23 @@
-# Which model each role runs, and at what thinking effort. Restart the server after editing.
-#
-# Providers and their credentials are not configured here: every call goes through the
-# LangSmith LLM Gateway, so add a provider under LangSmith -> LLM Gateway (a provider secret
-# for OpenAI/Anthropic, or a saved model configuration for a custom OpenAI-compatible
-# endpoint) and then name its model below.
-#
-#   model     Gateway model id. Anthropic models take the bare id (`claude-sonnet-5`) so they
-#             use the native path, where prompt caching works; everything else takes a
-#             provider-prefixed id (`openai/gpt-5.6-terra`).
-#   provider  Optional: `anthropic` or `openai`, the gateway path. Inferred from the id's
-#             form; name it only for an id in neither form.
-#   effort    low | medium | high | xhigh | max, or leave it empty for none. Empty is a real
-#             setting: on Anthropic it means no thinking, and models with no effort scale
-#             (Haiku 4.5) reject the parameter with a 400.
-#
-# `ROOT_MODEL`, `SUBAGENT_EFFORT` etc. in the environment override these, which is how eval
-# sweeps vary one axis without editing this file.
+# Model and effort per role. Add providers in LangSmith -> LLM Gateway. Restart after editing.
+# Model and effort must be valid together: check which effort levels your model supports.
+# Leave effort empty to omit it (required for models with no effort setting).
 
-# The orchestrating agent.
-#
-# 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves held
-# fixed: identical 10/15 rubric, same failure set (base-editing-t-cells-convergence,
-# fmt-cdiff-placebo-trials, mrna-vaccines-lung-cancer-trials,
-# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot). terra-high found
-# citations sol-low missed on 3 of 10 citation-checked seeds (egan-ulk1-ampk-sites,
-# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot), going 10/10 vs 7/10 —
-# a citation-completeness win at equal rubric score, hence the default.
-#
-# Earlier baseline evaluations, before switching the root off Sonnet: terra and Sonnet 5 hit
-# 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie on
-# quality makes it a cost decision, and every head-to-head so far puts terra far ahead per
-# paper. `claude-sonnet-5` is the previous default's model, `claude-sonnet-4-6` the one
-# before it, and both share these leaves, so either isolates the root — but watch root
-# context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6 there (fmt-cdiff 86k ->
-# 214k chars) for fan-outs 22-62% faster (198s -> 76s on semaglutide-weightloss-boxplot).
-#
-# What did *not* move across sol-low, terra-low and terra-high: the same core rubric seeds
-# fail regardless of root model or effort. That points at a prompt, tool or criteria problem
-# rather than a model-selection one.
 root:
   model: openai/gpt-5.6-terra
   effort: high
 
-# The analyst subagents.
-#
-# luna rather than Haiku 4.5 on cost, with quality held flat. Over the same dataset with the
-# judge pinned, terra-low/luna-low scored the same *cell for cell* as terra-low/haiku-4.5 —
-# every seed, all three evaluators — for ~40% less on 21% fewer tokens, at +5s median latency
-# (31.0s -> 36.2s). Read that cost delta as a direction rather than a constant: it is one run
-# of 11 examples with no repeats.
-#
-# The root's latency figures above were measured against Haiku leaves.
-# `model: claude-haiku-4-5-20251001` restores them, but it also has to clear the effort —
-# Haiku 4.5 has no effort scale and the gateway answers the parameter with a 400.
 subagent:
   model: openai/gpt-5.6-luna
   effort: low
 
-# The `web_search` tool's model. It must support its provider's server-side web search
-# (models.py:WEB_SEARCH_SPECS), which today means an OpenAI or Anthropic model.
 search:
   model: openai/gpt-5.6-luna
   effort: low
 
-# The eval grader. Pinned so that a score change is attributable to the pair under test
-# rather than to the grader, and terra rather than luna because luna failed
-# psilocybin-depression-unpublished on two claims that were both false about the answer in
-# front of it. A grader that misreads the answer is a worse confound than a costlier one.
 judge:
   model: openai/gpt-5.6-terra
   effort: low
 
-# Display names for the chat UI, keyed by model id. A model without one shows its id.
 labels:
   openai/gpt-5.6-terra: GPT-5.6 Terra
   openai/gpt-5.6-luna: GPT-5.6 Luna

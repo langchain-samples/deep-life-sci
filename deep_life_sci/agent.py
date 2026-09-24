@@ -16,6 +16,7 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 from deep_life_sci.middleware.artifacts import ArtifactMiddleware
 from deep_life_sci.middleware.cadence import UpdateCadence
+from deep_life_sci.middleware.model_errors import ModelSettingErrors
 from deep_life_sci.middleware.perf import LoopLagProbe
 from deep_life_sci.middleware.progress import with_progress
 from deep_life_sci.middleware.tool_errors import with_error_capture
@@ -58,7 +59,10 @@ def build_agent(backend):
             **spec,
             "model": subagent_model(),
             "tools": [],
-            "middleware": [FilesystemMiddleware(backend=backend, tools=filesystem_tools)],
+            "middleware": [
+                FilesystemMiddleware(backend=backend, tools=filesystem_tools),
+                ModelSettingErrors("subagent"),
+            ],
         }
 
     # Disable deepagents auto-added `general-purpose` subagent
@@ -100,6 +104,8 @@ def build_agent(backend):
             # First: its `before_agent` strips the upload payload out of the human
             # message, which must happen before the first model call.
             UploadMiddleware(backend),
+            # A refused model call names the models.yaml setting to fix.
+            ModelSettingErrors("root"),
             UpdateCadence(),
             CodeInterpreterMiddleware(
                 # Tools reach JS camelCased: pubmed_search -> tools.pubmedSearch.

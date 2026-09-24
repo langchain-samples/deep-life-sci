@@ -35,6 +35,8 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain_quickjs import CodeInterpreterMiddleware
 
+    from deep_life_sci.middleware.model_errors import ModelSettingErrors
+
     kwargs, backend = assembled
     assert kwargs["backend"] is backend
     assert {s["name"] for s in kwargs["subagents"]} == {
@@ -46,11 +48,13 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
     }
     for leaf in kwargs["subagents"]:
         assert leaf["tools"] == []
-        (filesystem,) = leaf["middleware"]
+        filesystem, errors = leaf["middleware"]
         assert isinstance(filesystem, FilesystemMiddleware)
+        assert isinstance(errors, ModelSettingErrors) and errors.role == "subagent"
         expected = ["read_file", "grep"] if leaf["name"] == "trial-analyst" else ["read_file"]
         assert [tool.name for tool in filesystem.tools] == expected
     assert isinstance(kwargs["middleware"][0], UploadMiddleware)
+    assert [m.role for m in kwargs["middleware"] if isinstance(m, ModelSettingErrors)] == ["root"]
     assert any(isinstance(m, ArtifactMiddleware) for m in kwargs["middleware"])
     (interpreter,) = [m for m in kwargs["middleware"] if isinstance(m, CodeInterpreterMiddleware)]
     assert interpreter._timeout == 900.0

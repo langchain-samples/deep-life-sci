@@ -14,8 +14,7 @@ edit that later setup runs leave alone. Either way the key is what the OpenAI SD
 call an api_key, so it is passed explicitly rather than through the environment.
 
 Each role is configured by three independent env vars, defaulting to the role's entry in
-`models.yaml` at the repository root (where the reasons for the current defaults are
-recorded, beside the values):
+`models.yaml` at the repository root (the reasons for those defaults are recorded below):
 
     ROOT_MODEL      SUBAGENT_MODEL      SEARCH_MODEL      JUDGE_MODEL      model id
     ROOT_PROVIDER   SUBAGENT_PROVIDER   SEARCH_PROVIDER   JUDGE_PROVIDER   anthropic|openai
@@ -162,13 +161,48 @@ WEB_SEARCH_SPECS = {
     "openai": {"type": "web_search"},
 }
 
-# Effort levels the gateway accepts on some model. Validated here only to catch a typo
-# before a sweep boots nine containers; whether a *given* model supports the level is the
-# API's call (Haiku 4.5 rejects the parameter outright, Sonnet 4.6 has no `xhigh`).
-EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-
 # The two gateway paths, which is all a provider selects here — see the module docstring.
 PROVIDERS = ("anthropic", "openai")
+
+# Why models.yaml's defaults are what they are. Kept here rather than in the file a user
+# edits, so that file stays short.
+#
+# 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves
+# held fixed: identical 10/15 rubric, same failure set (base-editing-t-cells-convergence,
+# fmt-cdiff-placebo-trials, mrna-vaccines-lung-cancer-trials,
+# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot). terra-high found
+# citations sol-low missed on 3 of 10 citation-checked seeds (egan-ulk1-ampk-sites,
+# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot), going 10/10 vs 7/10 —
+# a citation-completeness win at equal rubric score, hence the default.
+#
+# Earlier baseline evaluations, before switching the root off Sonnet: terra and Sonnet 5
+# hit 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie
+# on quality makes it a cost decision, and every head-to-head so far puts terra far ahead
+# per paper. `ROOT_MODEL=claude-sonnet-5` is the previous default's model,
+# `claude-sonnet-4-6` the one before it, and both share these leaves, so either isolates
+# the root — but watch root context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6
+# there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s -> 76s on
+# semaglutide-weightloss-boxplot).
+#
+# The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
+# dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
+# as terra-low/haiku-4.5 -- every seed, all three evaluators -- for ~40% less on 21% fewer
+# tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
+# rather than a constant: it is one run of 11 examples with no repeats.
+#
+# What did *not* move across sol-low, terra-low and terra-high: the same core rubric seeds
+# fail regardless of root model or effort. That points at a prompt, tool or criteria
+# problem rather than a model-selection one.
+#
+# The older latency measurements above were taken against Haiku leaves.
+# `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
+# has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
+# gateway answers the parameter with a 400.
+#
+# The judge is pinned so that a score change is attributable to the pair under test rather
+# than to the grader, and it is terra rather than luna because luna failed
+# psilocybin-depression-unpublished on two claims that were both false about the answer in
+# front of it. A grader that misreads the answer is a worse confound than a costlier one.
 
 # The four roles, in the order `describe()` and the UI list them.
 ROLES = ("root", "subagent", "search", "judge")
@@ -343,11 +377,12 @@ def _setting(role: str, axis: str) -> str:
 
 
 def _effort(role: str) -> str:
-    """`{ROLE}_EFFORT`, validated locally.
+    """`{ROLE}_EFFORT`, passed through unvalidated.
 
-    Validated here only to catch a typo before a sweep boots nine containers; whether a
-    *given* model supports the level is the API's call (Haiku 4.5 rejects the parameter
-    outright, Sonnet 4.6 has no `xhigh`).
+    There is no local list of levels because there is no common one: the GPT-5.6 models
+    take `none` through `max`, Sonnet 4.6 has no `xhigh`, and Haiku 4.5 rejects the
+    parameter outright. A list here would refuse valid settings or pass invalid ones, so
+    the provider decides, and `rejection_message` makes its 400 name the setting to fix.
 
     On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
     defaults `thinking` to adaptive whenever effort is set, setting it also turns thinking
@@ -364,13 +399,33 @@ def _effort(role: str) -> str:
     `low` and 400'd, with nothing anywhere saying the clear had been ignored.
     """
     raw = os.environ.get(f"{role.upper()}_EFFORT")
-    effort = (DEFAULTS[role]["effort"] if raw is None else raw).strip().lower()
-    if effort and effort not in EFFORT_LEVELS:
-        raise SystemExit(
-            f"{role.upper()}_EFFORT={effort!r} is not an effort level. "
-            f"Choose one of: {', '.join(EFFORT_LEVELS)}"
-        )
-    return effort
+    return (DEFAULTS[role]["effort"] if raw is None else raw).strip().lower()
+
+
+# Statuses the gateway answers a bad model id or an unsupported parameter with.
+_REJECTED = (400, 404, 422)
+
+
+def rejection_message(role: str, exc: BaseException) -> str | None:
+    """The gateway's refusal of a role's request, restated as the setting to fix.
+
+    None for anything else, so callers re-raise the original. A 400 can have other causes
+    (a content filter, an oversized request), so the provider's own message stays first and
+    the settings are offered as the likely suspect rather than the certain one. Both SDKs'
+    `APIStatusError` carry `status_code`, so no provider import is needed.
+    """
+    status = getattr(exc, "status_code", None)
+    if status not in _REJECTED:
+        return None
+    model, _, effort = _resolve(role)
+    return (
+        f"The LLM Gateway rejected the {role} model's request ({status}): {exc}\n\n"
+        f"The {role} role runs model {model!r} with effort {effort or '(none)'!r}, set in "
+        f"models.yaml or {role.upper()}_MODEL / {role.upper()}_EFFORT. Both must be valid "
+        "together: the model must be available in your LangSmith LLM Gateway, and the "
+        "effort must be a level that model supports. Levels differ by model; leave the "
+        "effort empty to omit it."
+    )
 
 
 def _resolve(role: str) -> tuple[str, str, str]:
@@ -490,7 +545,7 @@ def web_search_model(**kwargs):
 def judge_model(**kwargs):
     """The eval judge's model — configured independently of the pair under test.
 
-    See `judge` in models.yaml for why it is pinned. JUDGE_MODEL in the environment
+    See the defaults' rationale above for why it is pinned. JUDGE_MODEL in the environment
     overrides it, which is how you check whether a verdict is the answer's fault or the
     grader's.
     """
