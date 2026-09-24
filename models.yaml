@@ -2,26 +2,29 @@
 # Model and effort must be valid together: check which effort levels your model supports.
 # Leave effort empty to omit it (required for models with no effort setting).
 
+# Main agent
 root:
-  model: openai/gpt-5.6-terra
-  effort: high
+  model: openai/gpt-5.6-terra  # Anthropic: claude-sonnet-5
+  effort: high                 # Anthropic: high
 
+# Sub-agents spawned for tasks like reading papers
 subagent:
-  model: openai/gpt-5.6-luna
-  effort: low
+  model: openai/gpt-5.6-luna   # Anthropic: claude-haiku-4-5-20251001
+  effort: low                  # Anthropic: leave empty (Haiku 4.5 has no effort setting)
 
+# Web search
 search:
-  model: openai/gpt-5.6-luna
-  effort: low
+  model: openai/gpt-5.6-luna   # Anthropic: claude-haiku-4-5-20251001
+  effort: low                  # Anthropic: leave empty (Haiku 4.5 has no effort setting)
 
+# Judge for LLM-as-a-judge evals in LangSmith
 judge:
-  model: openai/gpt-5.6-terra
-  effort: low
+  model: openai/gpt-5.6-terra  # Anthropic: claude-sonnet-5
+  effort: low                  # Anthropic: low
 
 labels:
   openai/gpt-5.6-terra: GPT-5.6 Terra
   openai/gpt-5.6-luna: GPT-5.6 Luna
   openai/gpt-5.6-sol: GPT-5.6 Sol
   claude-sonnet-5: Claude Sonnet 5
-  claude-sonnet-4-6: Claude Sonnet 4.6
   claude-haiku-4-5-20251001: Claude Haiku 4.5
