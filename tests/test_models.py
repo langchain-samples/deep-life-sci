@@ -20,10 +20,13 @@ from deep_life_sci.models import (
     DEFAULTS,
     EFFORT_LEVELS,
     ENV_VARS,
+    LABELS,
     PROVIDERS,
+    ROLES,
     WEB_SEARCH_SPECS,
     _effort,
     _infer_provider,
+    _load,
     _provider_for,
     _resolve,
     _setting,
@@ -31,6 +34,7 @@ from deep_life_sci.models import (
     describe,
     gateway_key,
     slug,
+    summary,
 )
 
 
@@ -112,10 +116,12 @@ class TestEffort:
 class TestResolve:
     def test_the_defaults_resolve_without_any_environment(self):
         model, provider, effort = _resolve("root")
+        default = DEFAULTS["root"]
         assert (model, provider, effort) == (
-            DEFAULTS["root"]["model"],
-            DEFAULTS["root"]["provider"],
-            DEFAULTS["root"]["effort"],
+            default["model"],
+            # models.yaml may leave the path to the id's form.
+            default["provider"] or _infer_provider(default["model"]),
+            default["effort"],
         )
 
     def test_a_model_swap_alone_moves_the_path_with_it(self, monkeypatch):
@@ -147,7 +153,9 @@ class TestResolve:
         monkeypatch.setenv("SUBAGENT_MODEL", "claude-haiku-4-5-20251001")
         monkeypatch.setenv("SUBAGENT_EFFORT", "")
         assert _resolve("subagent") == ("claude-haiku-4-5-20251001", "anthropic", "")
-        assert _resolve("root")[1] == DEFAULTS["root"]["provider"]
+        assert _resolve("root")[1] == (
+            DEFAULTS["root"]["provider"] or _infer_provider(DEFAULTS["root"]["model"])
+        )
 
 
 class TestEnvVars:
@@ -232,7 +240,7 @@ class TestDescribe:
         assert "subagent=" in line
 
     def test_prints_the_path_because_it_decides_whether_caching_works(self):
-        assert f"({DEFAULTS['root']['provider']}" in describe("root")
+        assert f"({_resolve('root')[1]}" in describe("root")
 
     def test_an_unset_effort_is_omitted_rather_than_printed_empty(self, monkeypatch):
         monkeypatch.setenv("SUBAGENT_EFFORT", "")
@@ -254,3 +262,99 @@ class TestSlug:
         monkeypatch.setenv("ROOT_MODEL", "claude-haiku-4-5-20251001")
         monkeypatch.setenv("ROOT_EFFORT", "")
         assert slug() == "claude-haiku-4-5-20251001"
+
+
+VALID_YAML = """
+root: {model: openai/gpt-5.6-terra, effort: high}
+subagent: {model: claude-haiku-4-5-20251001, effort:}
+search: {model: openai/gpt-5.6-luna, provider: OpenAI, effort: low}
+judge: {model: openai/gpt-5.6-terra}
+labels: {openai/gpt-5.6-terra: GPT-5.6 Terra}
+"""
+
+
+class TestLoadModelsYaml:
+    """models.yaml is what a user edits, so a mistake in it must fail loudly at startup."""
+
+    def _load(self, tmp_path, text: str):
+        path = tmp_path / "models.yaml"
+        path.write_text(text, encoding="utf-8")
+        return _load(path)
+
+    def test_the_shipped_file_names_every_role(self):
+        assert set(DEFAULTS) == set(ROLES)
+        assert all(DEFAULTS[role]["model"] for role in ROLES)
+
+    def test_reads_each_axis_and_the_labels(self, tmp_path):
+        defaults, labels = self._load(tmp_path, VALID_YAML)
+        assert defaults["root"] == {
+            "model": "openai/gpt-5.6-terra", "provider": "", "effort": "high"
+        }
+        assert defaults["search"]["provider"] == "openai"
+        assert labels == {"openai/gpt-5.6-terra": "GPT-5.6 Terra"}
+
+    def test_an_empty_or_absent_effort_is_none_rather_than_a_default(self, tmp_path):
+        """Empty is a value on this axis: Haiku 4.5 400s on any effort at all."""
+        defaults, _ = self._load(tmp_path, VALID_YAML)
+        assert defaults["subagent"]["effort"] == ""
+        assert defaults["judge"]["effort"] == ""
+
+    def test_an_unquoted_yaml_boolean_is_refused_rather_than_read_as_none(self, tmp_path):
+        """`effort: off` parses as False; reading that as "none" would hide a typo."""
+        with pytest.raises(SystemExit, match=r"subagent\.effort is False"):
+            self._load(tmp_path, VALID_YAML.replace("effort:}", "effort: off}"))
+
+    def test_a_missing_role_is_refused(self, tmp_path):
+        with pytest.raises(SystemExit, match="`judge` needs a `model`"):
+            self._load(tmp_path, VALID_YAML.replace("judge:", "# judge:"))
+
+    def test_a_misspelt_role_is_refused_rather_than_ignored(self, tmp_path):
+        with pytest.raises(SystemExit, match=r"unknown key.*subagents"):
+            self._load(tmp_path, VALID_YAML + "subagents: {model: x}\n")
+
+    def test_a_misspelt_axis_is_refused_rather_than_ignored(self, tmp_path):
+        with pytest.raises(SystemExit, match=r"root has unknown key.*efort"):
+            self._load(tmp_path, VALID_YAML.replace("effort: high", "efort: high"))
+
+    def test_a_missing_file_says_what_it_is_for(self, tmp_path):
+        with pytest.raises(SystemExit, match="names the model each role runs"):
+            _load(tmp_path / "models.yaml")
+
+    def test_invalid_yaml_is_refused_legibly(self, tmp_path):
+        with pytest.raises(SystemExit, match="is not valid YAML"):
+            self._load(tmp_path, "root: [unclosed")
+
+
+class TestSummary:
+    """What the chat UI's model badge shows: the resolved roles, not the file."""
+
+    def test_reports_what_this_process_runs_including_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
+        monkeypatch.setenv("ROOT_EFFORT", "medium")
+        (root,) = summary("root")
+        assert root == {
+            "role": "root",
+            "model": "claude-sonnet-5",
+            "label": LABELS.get("claude-sonnet-5", "claude-sonnet-5"),
+            "provider": "anthropic",
+            "effort": "medium",
+        }
+
+    def test_a_model_without_a_label_shows_its_id(self, monkeypatch):
+        monkeypatch.setenv("SUBAGENT_MODEL", "openai/some-unlabelled-model")
+        assert summary("subagent")[0]["label"] == "openai/some-unlabelled-model"
+
+    def test_defaults_to_every_role_in_order(self):
+        assert [row["role"] for row in summary()] == list(ROLES)
+
+    def test_the_route_serves_the_three_chat_roles_and_not_the_judge(self):
+        pytest.importorskip("starlette")
+        from starlette.testclient import TestClient
+
+        from deep_life_sci.webapp import app
+
+        response = TestClient(app).get("/models")
+        assert response.status_code == 200
+        assert [row["role"] for row in response.json()["roles"]] == [
+            "root", "subagent", "search"
+        ]

@@ -13,8 +13,9 @@ tracing. `scripts/setup.py` prompts once and writes both, so setting them apart 
 edit that later setup runs leave alone. Either way the key is what the OpenAI SDK would
 call an api_key, so it is passed explicitly rather than through the environment.
 
-Each role is configured by three independent env vars, defaulting to the twelve
-constants below:
+Each role is configured by three independent env vars, defaulting to the role's entry in
+`models.yaml` at the repository root (where the reasons for the current defaults are
+recorded, beside the values):
 
     ROOT_MODEL      SUBAGENT_MODEL      SEARCH_MODEL      JUDGE_MODEL      model id
     ROOT_PROVIDER   SUBAGENT_PROVIDER   SEARCH_PROVIDER   JUDGE_PROVIDER   anthropic|openai
@@ -56,72 +57,15 @@ Two things to know about the native path:
 """
 
 import os
+from pathlib import Path
 
 import httpx
+import yaml
+
+from deep_life_sci import paths
 
 ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
 OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
-
-# --- The twelve model settings: four roles x three axes ----------------------------
-# Each is overridden by the identically named env var, so `ROOT_EFFORT=high uv run agent`
-# needs no code change. `""` means unset, which is not the same thing on both paths: on an
-# Anthropic model it is *no thinking at all* rather than a default level (see `_effort`),
-# while an OpenAI model falls back to whatever the provider does by default. A provider
-# belongs to the model beside it: swap the model in the environment without naming a path
-# and the path comes from the new id's form instead (see `_resolve`).
-
-ROOT_MODEL = "openai/gpt-5.6-terra"
-ROOT_PROVIDER = "openai"
-ROOT_EFFORT = "high"
-
-SUBAGENT_MODEL = "openai/gpt-5.6-luna"
-SUBAGENT_PROVIDER = "openai"
-SUBAGENT_EFFORT = "low"
-
-SEARCH_MODEL = "openai/gpt-5.6-luna"
-SEARCH_PROVIDER = "openai"
-SEARCH_EFFORT = "low"
-
-JUDGE_MODEL = "openai/gpt-5.6-terra"
-JUDGE_PROVIDER = "openai"
-JUDGE_EFFORT = "low"
-
-# 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves
-# held fixed: identical 10/15 rubric, same failure set (base-editing-t-cells-convergence,
-# fmt-cdiff-placebo-trials, mrna-vaccines-lung-cancer-trials,
-# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot). terra-high found
-# citations sol-low missed on 3 of 10 citation-checked seeds (egan-ulk1-ampk-sites,
-# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot), going 10/10 vs 7/10 —
-# a citation-completeness win at equal rubric score, hence the default.
-#
-# Earlier baseline evaluations, before switching the root off Sonnet: terra and Sonnet 5
-# hit 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie
-# on quality makes it a cost decision, and every head-to-head so far puts terra far ahead
-# per paper. `ROOT_MODEL=claude-sonnet-5` is the previous default's model,
-# `claude-sonnet-4-6` the one before it, and both share these leaves, so either isolates
-# the root — but watch root context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6
-# there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s -> 76s on
-# semaglutide-weightloss-boxplot).
-#
-# The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
-# dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
-# as terra-low/haiku-4.5 -- every seed, all three evaluators -- for ~40% less on 21% fewer
-# tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
-# rather than a constant: it is one run of 11 examples with no repeats.
-#
-# What did *not* move across sol-low, terra-low and terra-high: the same core rubric seeds
-# fail regardless of root model or effort. That points at a prompt, tool or criteria
-# problem rather than a model-selection one.
-#
-# The older latency measurements above were taken against Haiku leaves.
-# `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
-# has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
-# gateway answers the parameter with a 400.
-#
-# The judge is pinned so that a score change is attributable to the pair under test rather
-# than to the grader, and it is terra rather than luna because luna failed
-# psilocybin-depression-unpublished on two claims that were both false about the answer in
-# front of it. A grader that misreads the answer is a worse confound than a costlier one.
 
 # Per-socket deadlines on the root model's streaming call. Components, not a scalar:
 # the read timeout is the gap *between* chunks, not the whole request, so `read` is a
@@ -226,21 +170,74 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # The two gateway paths, which is all a provider selects here — see the module docstring.
 PROVIDERS = ("anthropic", "openai")
 
-# The twelve settings above, indexed for lookup by role and axis.
-DEFAULTS = {
-    "root": {"model": ROOT_MODEL, "provider": ROOT_PROVIDER, "effort": ROOT_EFFORT},
-    "subagent": {
-        "model": SUBAGENT_MODEL,
-        "provider": SUBAGENT_PROVIDER,
-        "effort": SUBAGENT_EFFORT,
-    },
-    "search": {
-        "model": SEARCH_MODEL,
-        "provider": SEARCH_PROVIDER,
-        "effort": SEARCH_EFFORT,
-    },
-    "judge": {"model": JUDGE_MODEL, "provider": JUDGE_PROVIDER, "effort": JUDGE_EFFORT},
-}
+# The four roles, in the order `describe()` and the UI list them.
+ROLES = ("root", "subagent", "search", "judge")
+
+_AXES = ("model", "provider", "effort")
+
+
+def _text(role: str, axis: str, value: object) -> str:
+    """One scalar out of models.yaml, as the string the env var would have held.
+
+    Empty or absent is `""`, which on the effort axis is a value (no effort), not an
+    omission. A YAML boolean is refused rather than coerced: unquoted `off` or `no` parses
+    as False, and silently reading that as "no effort" would hide a typo for `low`.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise SystemExit(
+            f"{paths.MODELS_FILE.name}: {role}.{axis} is {value!r}; write it as text "
+            "(quote it), or leave it empty for none."
+        )
+    return value.strip().lower() if axis != "model" else value.strip()
+
+
+def _load(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    """(per-role defaults, display labels) from models.yaml, refused legibly if malformed.
+
+    Read once at import. A model change needs a server restart regardless, because the
+    graph is assembled with its models already built, so re-reading per call would only
+    make the UI and the running agent disagree. Unknown keys are errors rather than
+    ignored, since a misspelt `subagents:` would otherwise run the wrong model silently.
+    """
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        raise SystemExit(f"{path} is missing; it names the model each role runs.") from None
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"{path} is not valid YAML: {exc}") from None
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{path.name} must be a mapping of roles to models.")
+    if unknown := set(raw) - {*ROLES, "labels"}:
+        raise SystemExit(
+            f"{path.name}: unknown key(s) {', '.join(sorted(map(str, unknown)))}. "
+            f"Expected {', '.join(ROLES)} and labels."
+        )
+
+    defaults = {}
+    for role in ROLES:
+        entry = raw.get(role)
+        if not isinstance(entry, dict) or not _text(role, "model", entry.get("model")):
+            raise SystemExit(
+                f"{path.name}: `{role}` needs a `model`, e.g. `model: openai/gpt-5.6-luna`."
+            )
+        if unknown := set(entry) - set(_AXES):
+            raise SystemExit(
+                f"{path.name}: {role} has unknown key(s) "
+                f"{', '.join(sorted(map(str, unknown)))}. Expected {', '.join(_AXES)}."
+            )
+        defaults[role] = {axis: _text(role, axis, entry.get(axis)) for axis in _AXES}
+
+    labels = raw.get("labels") or {}
+    if not isinstance(labels, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
+    ):
+        raise SystemExit(f"{path.name}: `labels` must map model ids to display names.")
+    return defaults, labels
+
+
+DEFAULTS, LABELS = _load(paths.MODELS_FILE)
 
 # Every env var this module reads, so `cli.py` and `evals/run.py` can preserve them across
 # their `load_dotenv(override=True)` without hand-maintaining a second copy of the list —
@@ -493,8 +490,9 @@ def web_search_model(**kwargs):
 def judge_model(**kwargs):
     """The eval judge's model — configured independently of the pair under test.
 
-    See JUDGE_MODEL for why it is pinned. JUDGE_MODEL in the environment overrides it,
-    which is how you check whether a verdict is the answer's fault or the grader's.
+    See `judge` in models.yaml for why it is pinned. JUDGE_MODEL in the environment
+    overrides it, which is how you check whether a verdict is the answer's fault or the
+    grader's.
     """
     kwargs.setdefault("timeout", JUDGE_TIMEOUT_SECONDS)
     return _model_for("judge", **kwargs)
@@ -516,6 +514,25 @@ def describe(*roles: str) -> str:
         model, provider, effort = _resolve(role)
         parts.append(f"{role}={model} ({provider}" + (f", {effort})" if effort else ")"))
     return " ".join(parts)
+
+
+def summary(*roles: str) -> list[dict[str, str]]:
+    """Each role's resolved model, for the chat UI's model badge (`webapp.py`).
+
+    Resolved rather than read from models.yaml, so the UI shows what this process actually
+    runs, environment overrides included. `label` falls back to the model id.
+    """
+    rows = []
+    for role in roles or ROLES:
+        model, provider, effort = _resolve(role)
+        rows.append({
+            "role": role,
+            "model": model,
+            "label": LABELS.get(model) or model,
+            "provider": provider,
+            "effort": effort,
+        })
+    return rows
 
 
 def slug() -> str:

@@ -110,7 +110,7 @@ decision-making, diagnosis, or treatment.**
 
 ## Notes
 
-*Model:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default, but you can swap in any OpenAI or Anthropic model, or modify it to use models by other providers.
+*Models:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default. To change the model or effort for the main agent, subagents or web search, edit [`models.yaml`](models.yaml) and restart. To add a provider, including a custom OpenAI-compatible endpoint, configure it in LangSmith under **LLM Gateway**. The wrench under the chat box shows what each role is running.
 
 The UI is a modified clone of [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui) in
 `.chat-ui/`.
