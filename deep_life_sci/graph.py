@@ -38,6 +38,7 @@ import re
 from langchain_core.runnables import RunnableConfig
 from langsmith.sandbox import SandboxClient
 
+from deep_life_sci import models
 from deep_life_sci.agent import build_agent
 from deep_life_sci.middleware.perf import install_logging
 from deep_life_sci.sandbox import (
@@ -51,6 +52,11 @@ from deep_life_sci.sandbox import (
 from deep_life_sci.sources import cache_io
 
 install_logging()
+
+# Read and check models.yaml at server start, so a mistake in it stops the server with its
+# message rather than surfacing on the first request.
+models.refresh()
+models.validate(*models.CHAT_ROLES)
 
 _client = SandboxClient()
 
@@ -107,6 +113,23 @@ def _acquire(thread_id: str):
     return sandbox
 
 
+def _config_error(exc: SystemExit) -> RuntimeError:
+    """A models.yaml or model-setting error raised inside a request, as one the UI shows.
+
+    The config checks raise SystemExit, which is right for the CLI and for server start.
+    Inside a request it is a BaseException that escapes the task and, under `langgraph dev`,
+    stops the server's event loop; a RuntimeError reaches the chat UI as a toast instead.
+    """
+    return RuntimeError(str(exc))
+
+
+def _build(backend):
+    try:
+        return build_agent(backend)
+    except SystemExit as exc:
+        raise _config_error(exc) from None
+
+
 class _UnboundSandbox:
     """Placeholder for a graph that is being read rather than run.
 
@@ -137,6 +160,15 @@ async def make_graph(config: RunnableConfig):
     socket call, so it has to go through a worker thread. Keeping `_acquire` itself
     synchronous also keeps it usable from the CLI, which has no loop to protect.
     """
+    # Every build picks up an edited models.yaml, so a change applies to the next run with no
+    # restart. Off the loop: it is a file read, and the dev server refuses blocking I/O.
+    # Checked before `_acquire` below, so a setting that cannot work never boots a sandbox.
+    try:
+        await asyncio.to_thread(models.refresh)
+        models.validate(*models.CHAT_ROLES)
+    except SystemExit as exc:
+        raise _config_error(exc) from None
+
     configurable = config.get("configurable") or {}
     thread_id = configurable.get("thread_id")
     # `langgraph_api` sets this on every factory call, True only for `threads.create_run`.
@@ -151,7 +183,7 @@ async def make_graph(config: RunnableConfig):
     # `_UnboundSandbox` reaching a real run and raising on the first tool call.
     is_read = configurable.get("__is_for_execution__") is False
     if not thread_id or is_read:
-        return build_agent(ResilientSandbox(sandbox=_UnboundSandbox()))
+        return _build(ResilientSandbox(sandbox=_UnboundSandbox()))
 
     key = str(thread_id)
     # Self-gated to once per TTL window, so this is a no-op on all but one turn in ten
@@ -168,4 +200,4 @@ async def make_graph(config: RunnableConfig):
     # Files written before the container died do not come back. That is a real loss, but
     # a strictly smaller one than failing the tool call: /workspace/out is swept and
     # published after every writing call, so anything already delivered is already out.
-    return build_agent(ResilientSandbox(sandbox=sandbox, reacquire=lambda: _acquire(key)))
+    return _build(ResilientSandbox(sandbox=sandbox, reacquire=lambda: _acquire(key)))

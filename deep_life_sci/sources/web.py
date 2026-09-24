@@ -240,8 +240,9 @@ async def web_search(query: str) -> dict:
     if not (query := query.strip()):
         return _failed(query, "web_search needs a question; an empty query is not one")
 
-    model = web_search_model()
     try:
+        # Inside the `try`: building the model can fail too, and must not kill the run.
+        model = web_search_model()
         async with _SEMAPHORE:
             message = await model.ainvoke(
                 _PROMPT.format(today=date.today().isoformat(), query=query)

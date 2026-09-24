@@ -435,6 +435,7 @@ PATCH_MARKS = {
     "progress-row": ("src/components/thread/index.tsx", "RunStatus", True),
     "thread-search": ("src/providers/Thread.tsx", "first_message", True),
     "cancel-on-stop": ("src/components/thread/index.tsx", "onDisconnect", True),
+    "model-badge": ("src/components/thread/index.tsx", "<ModelBadge />", True),
 }
 
 
@@ -476,6 +477,7 @@ def apply_patches() -> None:
     patch_progress_row()
     patch_thread_search()
     patch_cancel_on_stop()
+    patch_model_badge()
 
 
 REWRITE = """  // setup: artifact components load /ui/* from the page origin, so this proxy is
@@ -1508,6 +1510,38 @@ def patch_cancel_on_stop() -> None:
     text = text.replace(CANCEL_ON_STOP_REGEN_OLD, CANCEL_ON_STOP_REGEN_NEW)
     thread.write_text(text, encoding="utf-8")
     say(TAG, "wired the chat UI's stop button to cancel the run server-side")
+
+
+# The model badge sits under the composer's controls row, inside the form so it shares the
+# composer's background. Anchored on the row's close and the form's, which upstream has once.
+MODEL_BADGE_EDITS = [
+    ('import { useStreamContext } from "@/providers/Stream";',
+     'import { useStreamContext } from "@/providers/Stream";\n'
+     'import { ModelBadge } from "./ModelBadge";'),
+    ("                      </div>\n                    </form>\n",
+     "                      </div>\n                      <ModelBadge />\n"
+     "                    </form>\n"),
+]
+
+
+def patch_model_badge() -> None:
+    """Mount the badge naming the model in use (`chat-ui-overlay/.../ModelBadge.tsx`)."""
+    thread = chat_ui_dir() / "src" / "components" / "thread" / "index.tsx"
+    if not thread.is_file():
+        return
+    if _marked("model-badge"):
+        return
+    text = thread.read_text(encoding="utf-8")
+    for old, _ in MODEL_BADGE_EDITS:
+        if text.count(old) != 1:
+            say(TAG, f"warning: {thread} is not the shape expected; left the model badge "
+                     "out. The composer will not show which model is in use. Missing anchor:")
+            print(old)
+            return
+    for old, new in MODEL_BADGE_EDITS:
+        text = text.replace(old, new, 1)
+    thread.write_text(text, encoding="utf-8")
+    say(TAG, "mounted the model badge under the chat UI's composer")
 
 
 def patch_app_name() -> None:

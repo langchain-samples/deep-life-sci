@@ -366,6 +366,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langsmith" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -396,6 +397,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2.10" },
     { name = "langsmith", extras = ["sandbox"], specifier = ">=0.10.15" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [package.metadata.requires-dev]

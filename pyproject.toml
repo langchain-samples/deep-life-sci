@@ -31,6 +31,8 @@ dependencies = [
     # is named so the sandbox transport stays declared if that ever moves behind it.
     "langsmith[sandbox]>=0.10.15",
     "python-dotenv>=1.2.2",
+    # models.yaml, the per-role model settings (models.py).
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]

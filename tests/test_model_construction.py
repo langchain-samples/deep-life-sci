@@ -45,7 +45,8 @@ def test_roles_construct_the_correct_provider_and_timeout(
     assert (
         kwargs["timeout"]
         == {
-            "root": models.ROOT_TIMEOUT,
+            # ChatAnthropic takes only a float, so the Anthropic path keeps the read watchdog.
+            "root": models.ROOT_TIMEOUT.read if provider == "anthropic" else models.ROOT_TIMEOUT,
             "subagent": models.SUBAGENT_TIMEOUT_SECONDS,
             "search": models.SEARCH_TIMEOUT_SECONDS,
             "judge": models.JUDGE_TIMEOUT_SECONDS,

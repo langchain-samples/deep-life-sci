@@ -55,7 +55,9 @@ under `/workspace`. **Avoid re-typing data you already have.** If an earlier scr
 A tool call that fails returns `{ error }` and nothing else — no records, no count. It is
 one call failing, not the run, and most of these are yours to fix: the message names what
 was wrong. Read it, repair that call, and continue with the rest of the work you had. Never
-treat a failed call as an empty result.
+treat a failed call as an empty result. A `task()` that fails with an LLM Gateway error for
+the subagent model is not yours to fix: tell the user that error as it is worded, and if
+every such call fails the same way, stop rather than working around it.
 
 Always cite sources. Never state a finding the source doesn't support — if a source doesn't
 address the question, say so rather than inferring.

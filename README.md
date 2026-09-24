@@ -37,19 +37,13 @@ An open-source [Deep Agent](https://docs.langchain.com/oss/python/deepagents/ove
 
 ## Quickstart
 
-### 1. Get LangSmith
+### 1. Get and configure LangSmith
 
 You need a [LangSmith](https://smith.langchain.com) account. Setup will prompt you to add
 your `LANGSMITH_API_KEY`.
 
-Model calls go through the [LangSmith LLM gateway](https://docs.langchain.com/langsmith/llm-gateway), so your workspace also needs the
-provider key behind them, added once under **Settings → Integrations → Provider Secrets**
-as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use
-(the default is OpenAI).
+[LangSmith Sandboxes](https://docs.langchain.com/langsmith/sandboxes) must also be enabled from the Sandboxes tab in your LangSmith console. On a personal account on the free Developer tier you will need to add a credit card to use sandboxes, but you get free 5 LangSmith Compute Units (LCUs) per month, enough for ~650 agent runs.
 
-[LangSmith Sandboxes](https://docs.langchain.com/langsmith/sandboxes) must also be enabled.
-Enable them from the Sandboxes tab in your LangSmith console. On a personal account on the
-free Developer tier you will need to add a credit card to use sandboxes, but you get free 5 LangSmith Compute Units (LCUs) per month, enough for ~650 agent runs.
 ### 2. Get the code
 
 In the terminal:
@@ -84,7 +78,15 @@ uv run scripts/setup.py
 The chat UI needs Node.js 20.9 or newer. If yours is missing or older, setup installs a
 private copy inside the repo; nothing else on your machine changes.
 
-### 5. Run the agent
+### 5. Configure your models
+
+Model calls go through the [LangSmith LLM gateway](https://docs.langchain.com/langsmith/llm-gateway), so your workspace also needs the
+provider key behind them, added once under **Settings → Integrations → Provider Secrets**
+as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
+
+Then, in the `models.yaml` file, configure the models you want to use for the agent. Defaults are OpenAI; recommended Anthropic alternatives are shown in comments.
+
+### 6. Run the agent
 
 ```bash
 uv run scripts/dev.py                        # opens the chat UI in your browser (recommended)
@@ -110,7 +112,7 @@ decision-making, diagnosis, or treatment.**
 
 ## Notes
 
-*Model:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default, but you can swap in any OpenAI or Anthropic model, or modify it to use models by other providers.
+*Models:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default. To change the model or effort for the main agent, subagents or web search, edit [`models.yaml`](models.yaml); changes apply to your next message. To add a provider, including a custom OpenAI-compatible endpoint, configure it in LangSmith under **LLM Gateway**. The wrench under the chat box shows what each role is running.
 
 The UI is a modified clone of [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui) in
 `.chat-ui/`.

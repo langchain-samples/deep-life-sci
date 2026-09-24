@@ -253,6 +253,35 @@ class TestWebSearchTool:
         assert result["answer"] == ""
         assert any("web search unavailable" in w for w in result["warnings"])
 
+    async def test_a_provider_400_keeps_its_words_and_the_content_filter_hint(self, monkeypatch):
+        """A filtered biomedical query is a 400 too; it must not read as a config fault."""
+        import httpx
+        import openai
+
+        request = httpx.Request("POST", "https://gateway.invalid/v1/responses")
+        error = openai.BadRequestError(
+            "flagged by the content filter", response=httpx.Response(400, request=request),
+            body=None,
+        )
+
+        class Filtered:
+            async def ainvoke(self, _prompt):
+                raise error
+
+        monkeypatch.setattr(web, "web_search_model", lambda: Filtered())
+        result = await web_search.ainvoke({"query": "lethal dose of fentanyl in mice"})
+        (warning,) = result["warnings"]
+        assert "flagged by the content filter" in warning
+        assert "content filter can reject a query" in warning
+
+    async def test_a_model_that_cannot_be_built_is_contained_too(self, monkeypatch):
+        def unbuildable():
+            raise ValueError("reasoning_effort Input should be 'low', ...")
+
+        monkeypatch.setattr(web, "web_search_model", unbuildable)
+        result = await web_search.ainvoke({"query": "what did the FDA approve?"})
+        assert any("reasoning_effort" in w for w in result["warnings"])
+
     async def test_a_good_search_is_assembled_into_the_documented_shape(self, monkeypatch):
         message = SimpleNamespace(
             content=[

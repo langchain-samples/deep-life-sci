@@ -35,6 +35,10 @@ from pathlib import Path
 # deep_life_sci/paths.py -> deep_life_sci/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# The model each role runs (`models.py`). At the root beside langgraph.json because it is
+# the file a user edits to change models, not package internals.
+MODELS_FILE = REPO_ROOT / "models.yaml"
+
 DATA_DIR = Path(os.environ.get("DEEP_LIFE_SCI_DATA_DIR") or REPO_ROOT / "data")
 
 ABSTRACT_CACHE = DATA_DIR / "abstracts"

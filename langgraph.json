@@ -6,5 +6,8 @@
   "ui": {
     "agent": "./ui/ui.tsx"
   },
+  "http": {
+    "app": "./deep_life_sci/webapp.py:app"
+  },
   "env": ".env"
 }
