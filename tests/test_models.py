@@ -28,6 +28,7 @@ from deep_life_sci.models import (
     ROLES,
     ROOT_TIMEOUT,
     WEB_SEARCH_SPECS,
+    WebSearchUnavailable,
     _bedrock_parts,
     _effort,
     _infer_provider,
@@ -46,6 +47,8 @@ from deep_life_sci.models import (
     slug,
     summary,
     validate,
+    web_search_model,
+    web_search_problem,
 )
 
 
@@ -615,10 +618,19 @@ class TestBedrock:
         assert _web_search_spec(model, provider) == WEB_SEARCH_SPECS["bedrock"]
 
     @pytest.mark.parametrize("model", [BEDROCK_CLAUDE, "bedrock/amazon.nova-pro-v1:0"])
-    def test_a_model_bedrock_cannot_search_with_is_refused_as_the_search_role(
+    def test_a_model_bedrock_cannot_search_with_starts_and_reports_why(
         self, model, monkeypatch
     ):
+        """Only web search is lost: startup passes, and the reason is kept for each search."""
         monkeypatch.setenv("SEARCH_MODEL", model)
         monkeypatch.setenv("SEARCH_EFFORT", "")
-        with pytest.raises(SystemExit, match="cannot be the search model"):
-            validate("search")
+        validate("search")
+        assert "SEARCH_MODEL=" in web_search_problem()
+        assert "cannot be the search model" in web_search_problem()
+        with pytest.raises(WebSearchUnavailable):
+            web_search_model()
+
+    def test_a_search_model_that_can_search_reports_no_problem(self, monkeypatch):
+        monkeypatch.setenv("SEARCH_MODEL", "bedrock/openai.gpt-5.6-luna")
+        assert web_search_problem() is None
+

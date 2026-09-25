@@ -146,6 +146,15 @@ async def test_a_setting_that_cannot_work_fails_the_run_before_any_sandbox_boots
     acquire.assert_not_called()
 
 
+async def test_a_search_model_that_cannot_search_does_not_stop_a_run(graph_module, monkeypatch):
+    graph = graph_module
+    monkeypatch.setattr(graph, "_acquire", lambda key: SimpleNamespace())
+    monkeypatch.setattr(graph, "build_agent", lambda backend: backend)
+    monkeypatch.setenv("SEARCH_MODEL", "bedrock/us.anthropic.claude-sonnet-5")
+    monkeypatch.setenv("SEARCH_EFFORT", "")
+    assert await graph.make_graph({"configurable": {"thread_id": "t"}}) is not None
+
+
 @pytest.mark.parametrize("status", ["running", "stopped"])
 def test_existing_graph_sandbox_is_reused(graph_module, monkeypatch, status):
     graph = graph_module

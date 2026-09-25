@@ -59,8 +59,9 @@ the workspace's `AWS_BEARER_TOKEN_BEDROCK` Provider Secret; nothing here holds A
 credentials. Claude on Bedrock takes the Anthropic Messages format on the gateway's
 standard endpoint (`_messages_base_url`), so caching and effort work as they do natively;
 every other Bedrock model takes the OpenAI-compatible path. Effort is checked against the
-profile of the model behind the Bedrock id, and the search role must be one of Bedrock's
-GPT models, the only ones its web search serves (`_web_search_spec`).
+profile of the model behind the Bedrock id. Bedrock's web search serves only its GPT
+models; any other search model leaves the agent running and each web search returning
+that as its warning (`_web_search_spec`).
 """
 
 import os
@@ -650,9 +651,16 @@ def _resolve(role: str) -> tuple[str, str, str]:
         f"{upper}_EFFORT" if f"{upper}_EFFORT" in os.environ else f"models.yaml {role}.effort"
     )
     _check_effort(model, provider, effort, effort_source)
-    if role == "search":
-        _web_search_spec(model, provider, model_source)
     return model, provider, effort
+
+
+class WebSearchUnavailable(ValueError):
+    """The search role's model has no server-side web search; the message says what does.
+
+    Raised per search rather than at startup: a search model that cannot search takes out
+    web search only, and each `web_search` call returns this as its warning for the root
+    to relay, while the rest of the agent runs.
+    """
 
 
 def _web_search_spec(model: str, provider: str, source: str = "SEARCH_MODEL") -> dict:
@@ -668,13 +676,28 @@ def _web_search_spec(model: str, provider: str, source: str = "SEARCH_MODEL") ->
     maker, bare = bedrock
     if maker == "openai" and bare.startswith(_BEDROCK_SEARCH_MODELS):
         return WEB_SEARCH_SPECS["bedrock"]
-    raise SystemExit(
+    raise WebSearchUnavailable(
         f"{source}={model!r} cannot be the search model: Bedrock's web search runs only on "
         f"its OpenAI GPT models ({', '.join(m + '*' for m in _BEDROCK_SEARCH_MODELS)}, e.g. "
         "'bedrock/openai.gpt-5.6-luna', in us-east-1, us-east-2 or us-west-2), and Claude "
         "has no server-side search on Bedrock. Use one of those, or a model on OpenAI or "
         "Anthropic directly."
     )
+
+
+def web_search_problem() -> str | None:
+    """Why the search role cannot search, or None. For a warning at startup, not a refusal."""
+    model, provider, _ = _resolve("search")
+    try:
+        _web_search_spec(model, provider, _source_of("search", "model"))
+    except WebSearchUnavailable as exc:
+        return str(exc)
+    return None
+
+
+def _source_of(role: str, axis: str) -> str:
+    name = f"{role.upper()}_{axis.upper()}"
+    return name if os.environ.get(name, "").strip() else f"models.yaml {role}.{axis}"
 
 
 def validate(*roles: str) -> None:
@@ -799,7 +822,7 @@ def web_search_model(**kwargs):
     kwargs.setdefault("timeout", SEARCH_TIMEOUT_SECONDS)
     if effort:
         kwargs.setdefault("reasoning_effort", effort)
-    spec = _web_search_spec(model, provider)
+    spec = _web_search_spec(model, provider, _source_of("search", "model"))
     return _build(model, provider, **kwargs).bind_tools([spec])
 
 

@@ -289,6 +289,17 @@ class TestWebSearchTool:
         result = await web_search.ainvoke({"query": "what did the FDA approve?"})
         assert not any("no search was performed" in w for w in result["warnings"])
 
+    async def test_a_search_model_that_cannot_search_returns_the_reason(self, monkeypatch):
+        """No model is built and nothing raises; the warning is what the root relays."""
+        monkeypatch.setenv("SEARCH_MODEL", "bedrock/us.anthropic.claude-sonnet-5")
+        monkeypatch.setenv("SEARCH_EFFORT", "")
+        result = await web_search.ainvoke({"query": "what did the FDA approve?"})
+        assert result["answer"] == ""
+        (warning,) = result["warnings"]
+        assert "web search unavailable" in warning
+        model = "bedrock/us.anthropic.claude-sonnet-5"
+        assert f"SEARCH_MODEL='{model}' cannot be the search model" in warning
+
     async def test_a_model_that_cannot_be_built_is_contained_too(self, monkeypatch):
         def unbuildable():
             raise ValueError("reasoning_effort Input should be 'low', ...")
