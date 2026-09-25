@@ -28,12 +28,15 @@ from deep_life_sci.models import (
     ROLES,
     ROOT_TIMEOUT,
     WEB_SEARCH_SPECS,
+    _bedrock_parts,
     _effort,
     _infer_provider,
     _load,
+    _messages_base_url,
     _provider_for,
     _resolve,
     _setting,
+    _web_search_spec,
     check_gateway_config,
     describe,
     gateway_key,
@@ -227,7 +230,11 @@ class TestCheckGatewayConfig:
 class TestWebSearchSpecs:
     def test_there_is_a_spec_for_every_gateway_path(self):
         """A missing one is a KeyError inside `web_search_model`, at run time."""
-        assert set(WEB_SEARCH_SPECS) == set(PROVIDERS)
+        assert set(PROVIDERS) <= set(WEB_SEARCH_SPECS)
+
+    def test_bedrock_search_stays_inside_the_aws_boundary(self):
+        """Left at its default, every fetch fails without an extra IAM permission."""
+        assert WEB_SEARCH_SPECS["bedrock"] == {"type": "web_search", "external_web_access": False}
 
     def test_the_anthropic_spec_caps_searches_per_request(self):
         assert WEB_SEARCH_SPECS["anthropic"]["max_uses"] == 5
@@ -545,3 +552,73 @@ class TestAnthropicRoot:
         model = root_model()
         assert model.default_request_timeout == ROOT_TIMEOUT.read
         assert model.streaming
+
+
+BEDROCK_CLAUDE = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+class TestBedrock:
+    """Bedrock through the same gateway and key: Claude on Messages, the rest OpenAI-style."""
+
+    @pytest.mark.parametrize(
+        ("model", "parts"),
+        [
+            (BEDROCK_CLAUDE, ("anthropic", "claude-sonnet-4-5-20250929")),
+            ("bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+             ("anthropic", "claude-haiku-4-5-20251001")),
+            ("bedrock/openai.gpt-5.6-terra", ("openai", "gpt-5.6-terra")),
+            ("bedrock/amazon.nova-pro-v1:0", ("amazon", "nova-pro")),
+        ],
+    )
+    def test_an_id_is_read_as_its_maker_and_the_bare_id_its_profile_uses(self, model, parts):
+        assert _bedrock_parts(model) == parts
+
+    def test_other_ids_are_not_bedrock(self):
+        assert _bedrock_parts("openai/gpt-5.6-terra") is None
+        assert _bedrock_parts("claude-sonnet-5") is None
+
+    def test_claude_takes_the_messages_path_and_everything_else_the_openai_one(self):
+        assert _infer_provider(BEDROCK_CLAUDE) == "anthropic"
+        assert _infer_provider("bedrock/openai.gpt-5.6-terra") == "openai"
+        assert _infer_provider("bedrock/amazon.nova-pro-v1:0") == "openai"
+
+    def test_claude_may_still_be_sent_down_the_openai_path_by_choice(self):
+        """It works there, only without caching, so it is not a contradiction."""
+        assert _provider_for("root", BEDROCK_CLAUDE, "openai") == "openai"
+
+    def test_claude_on_bedrock_is_built_as_chat_anthropic_on_the_standard_endpoint(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_offline")
+        monkeypatch.setenv("ROOT_MODEL", BEDROCK_CLAUDE)
+        model = root_model()
+        assert type(model).__name__ == "ChatAnthropic"
+        assert model.model == BEDROCK_CLAUDE
+        assert model.anthropic_api_url == "https://gateway.smith.langchain.com"
+
+    def test_the_standard_endpoint_follows_a_regional_gateway(self, monkeypatch):
+        monkeypatch.setenv("LANGSMITH_GATEWAY_BASE_URL", "https://eu.gateway.smith.langchain.com/v1/")
+        assert _messages_base_url(BEDROCK_CLAUDE) == "https://eu.gateway.smith.langchain.com"
+        assert _messages_base_url("claude-sonnet-5").endswith("/anthropic")
+
+    def test_effort_is_checked_against_the_model_behind_the_bedrock_id(self, monkeypatch):
+        monkeypatch.setenv("ROOT_MODEL", "bedrock/openai.gpt-5.6-terra")
+        monkeypatch.setenv("ROOT_EFFORT", "minimal")  # not a GPT-5.6 level
+        with pytest.raises(SystemExit, match=r"for 'bedrock/openai\.gpt-5\.6-terra'"):
+            _resolve("root")
+        monkeypatch.setenv("ROOT_EFFORT", "none")
+        assert _resolve("root")[2] == "none"
+
+    def test_a_bedrock_gpt_model_searches_with_bedrocks_own_tool(self, monkeypatch):
+        monkeypatch.setenv("SEARCH_MODEL", "bedrock/openai.gpt-5.6-luna")
+        model, provider, _ = _resolve("search")
+        assert _web_search_spec(model, provider) == WEB_SEARCH_SPECS["bedrock"]
+
+    @pytest.mark.parametrize("model", [BEDROCK_CLAUDE, "bedrock/amazon.nova-pro-v1:0"])
+    def test_a_model_bedrock_cannot_search_with_is_refused_as_the_search_role(
+        self, model, monkeypatch
+    ):
+        monkeypatch.setenv("SEARCH_MODEL", model)
+        monkeypatch.setenv("SEARCH_EFFORT", "")
+        with pytest.raises(SystemExit, match="cannot be the search model"):
+            validate("search")

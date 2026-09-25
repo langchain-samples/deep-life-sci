@@ -274,6 +274,21 @@ class TestWebSearchTool:
         assert "flagged by the content filter" in warning
         assert "content filter can reject a query" in warning
 
+    async def test_a_search_call_without_query_text_is_not_called_unsourced(self, monkeypatch):
+        message = SimpleNamespace(content=[
+            {"type": "web_search_call", "status": "completed"},
+            {"type": "text", "text": "Approved in 2021.",
+             "annotations": [{"type": "url_citation", "url": "https://fda.gov/a", "title": "FDA"}]},
+        ])
+
+        class Searching:
+            async def ainvoke(self, _prompt):
+                return message
+
+        monkeypatch.setattr(web, "web_search_model", lambda: Searching())
+        result = await web_search.ainvoke({"query": "what did the FDA approve?"})
+        assert not any("no search was performed" in w for w in result["warnings"])
+
     async def test_a_model_that_cannot_be_built_is_contained_too(self, monkeypatch):
         def unbuildable():
             raise ValueError("reasoning_effort Input should be 'low', ...")

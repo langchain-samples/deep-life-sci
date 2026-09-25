@@ -33,6 +33,7 @@ const ROLE_NAMES: Record<Role["role"], string> = {
 const PROVIDER_NAMES: Record<string, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
+  bedrock: "Amazon Bedrock",
 };
 
 const EFFORT_NAMES: Record<string, string> = {
