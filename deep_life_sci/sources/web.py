@@ -201,9 +201,10 @@ def _warnings(blocks: list[dict], answer: str) -> list[str]:
             status = block.get("status")
             if status not in (None, "completed"):
                 out.append(f"search {status}")
-    # A search call that names no query still ran. Not every server-side search reports its
-    # query text (Bedrock's is not verified to), and calling that "unsourced" would tell
-    # the root to discard a sourced answer.
+    # A search call that names no query still ran. All three searches here report their
+    # queries today (Bedrock's GPT search verified 2026-09-25), but a call without them is
+    # still a search, and calling that "unsourced" would tell the root to discard a sourced
+    # answer.
     ran = any(b.get("type") in ("web_search_call", "web_search_tool_result") for b in blocks)
     if not (_searched(blocks) or ran):
         out.append("no search was performed; the answer is unsourced")
