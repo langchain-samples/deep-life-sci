@@ -57,6 +57,9 @@ install_logging()
 # message rather than surfacing on the first request.
 models.refresh()
 models.validate(*models.CHAT_ROLES)
+if problem := models.web_search_problem():
+    # Not a refusal: the rest of the agent runs, and each web search returns this.
+    print(f"[models] warning: web search is unavailable. {problem}")
 
 _client = SandboxClient()
 

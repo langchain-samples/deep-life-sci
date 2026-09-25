@@ -45,7 +45,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from deep_life_sci.models import describe, web_search_model
+from deep_life_sci.models import WebSearchUnavailable, describe, web_search_model
 
 # Cost and latency, not politeness — see the module docstring. Eight concurrent searches
 # is already a wide question; more usually means the model is enumerating rather than
@@ -201,7 +201,12 @@ def _warnings(blocks: list[dict], answer: str) -> list[str]:
             status = block.get("status")
             if status not in (None, "completed"):
                 out.append(f"search {status}")
-    if not _searched(blocks):
+    # A search call that names no query still ran. All three searches here report their
+    # queries today (Bedrock's GPT search verified 2026-09-25), but a call without them is
+    # still a search, and calling that "unsourced" would tell the root to discard a sourced
+    # answer.
+    ran = any(b.get("type") in ("web_search_call", "web_search_tool_result") for b in blocks)
+    if not (_searched(blocks) or ran):
         out.append("no search was performed; the answer is unsourced")
     if len(answer) > MAX_ANSWER_CHARS:
         out.append(f"answer truncated to {MAX_ANSWER_CHARS} chars")
@@ -247,6 +252,10 @@ async def web_search(query: str) -> dict:
             message = await model.ainvoke(
                 _PROMPT.format(today=date.today().isoformat(), query=query)
             )
+    except WebSearchUnavailable as exc:
+        # The search model cannot search at all, so every call will say the same thing;
+        # the message already names the setting and what works instead.
+        return _failed(query, str(exc))
     except Exception as exc:  # noqa: BLE001 - a failed search must not kill the run
         return _failed(
             query,

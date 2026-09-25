@@ -83,6 +83,8 @@ private copy inside the repo; nothing else on your machine changes.
 Model calls go through the [LangSmith LLM gateway](https://docs.langchain.com/langsmith/llm-gateway), so your workspace also needs the
 provider key behind them, added once under **Settings → Integrations → Provider Secrets**
 as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
+For Amazon Bedrock, add `AWS_BEARER_TOKEN_BEDROCK` (a Bedrock API key) and prefix model ids with
+`bedrock/`; see the note at the top of `models.yaml`.
 
 Then, in the `models.yaml` file, configure the models you want to use for the agent. Defaults are OpenAI; recommended Anthropic alternatives are shown in comments.
 

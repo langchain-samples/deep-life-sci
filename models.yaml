@@ -1,9 +1,16 @@
 # Model and effort per role. Edits apply to the next message; no restart needed.
-# Model ids: Anthropic models are bare (claude-sonnet-5); any other model needs its provider
-# prefix (openai/gpt-5.6-terra). An id without one is refused with a message saying so.
-# Effort must be a level your model supports; leave it empty to omit it (required for
-# models with no effort setting). Provider API keys go in LangSmith under
-# Settings -> Integrations -> Provider Secrets.
+
+# Model ids: Anthropic models are bare (e.g. claude-sonnet-5); any other model needs a provider
+# prefix (e.g. openai/gpt-5.6-terra)
+
+# Effort must be a level the model supports; leave it empty to omit it
+# This is required for models with no effort setting)
+
+# Provider API keys go in LangSmith under Settings -> Integrations -> Provider Secrets
+
+# Amazon Bedrock: prefix the Bedrock model or inference profile id with bedrock/
+# (bedrock/openai.gpt-5.6-terra, bedrock/us.anthropic.claude-...) and add the
+# AWS_BEARER_TOKEN_BEDROCK Provider Secret in LangSmith
 
 # Main agent
 root:
@@ -16,6 +23,7 @@ subagent:
   effort: low                  # Anthropic: leave empty (Haiku 4.5 has no effort setting)
 
 # Web search
+# Note: web search on Bedrock needs one of its GPT models (gpt-5.4 or later); Claude has no web search there
 search:
   model: openai/gpt-5.6-luna   # Anthropic: claude-haiku-4-5-20251001
   effort: low                  # Anthropic: leave empty (Haiku 4.5 has no effort setting)
