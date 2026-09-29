@@ -34,9 +34,10 @@ or Large (https://docs.langchain.com/langsmith/cloud-platform-features#sizes). T
 fixed at creation; the size is not. The released `langgraph deploy` can only create the
 previous pricing's `dev`/`prod` deployments, and a `dev` one can never become Serverless. So
 this creates a new deployment itself, with the Deployments API's own name for the type
-(`dev_zero` is what an existing Serverless deployment reports), sets its size, and hands the
-build to `langgraph deploy --deployment-id`. Builds are remote: a deployment created for
-uploaded source cannot take a locally built image.
+(`dev_zero` is what an existing Serverless deployment reports) and hands the build to
+`langgraph deploy --deployment-id`. It starts at its type's default size (Small); a
+`--size` other than that is set once the first build has made a revision to resize. Builds
+are remote: a deployment created for uploaded source cannot take a locally built image.
 
 Models are whatever models.yaml says when this runs. Editing it changes a deployment only on
 the next deploy; the hot reload is a local-server convenience.
@@ -185,6 +186,28 @@ class Host:
                                      json={"deployment_tier": deployment_tier}))
 
 
+def resize(host: Host, name: str, deployment_id: str, wanted: str) -> str | None:
+    """Set the size tier, and return it; a refusal is reported, never fatal, because the
+    deployment works at any size and can be resized from its LangSmith page."""
+    try:
+        host.set_tier(deployment_id, wanted)
+    except Exception as exc:  # noqa: BLE001 - reported; the deploy can go ahead
+        say(TAG, f"warning: could not size {name} as {wanted} ({exc}); change it on its "
+                 "LangSmith page.")
+        return None
+    say(TAG, f"sized {name} as {wanted}")
+    return wanted
+
+
+def deployment_url(host: Host, name: str) -> str:
+    """The deployment's URL, or a placeholder if the lookup fails after a good deploy."""
+    try:
+        deployment = host.find(name)
+    except Exception:  # noqa: BLE001 - the deploy already succeeded; this is a courtesy
+        deployment = None
+    return (deployment or {}).get("url") or "<deployment URL from its LangSmith page>"
+
+
 def _confirm(question: str, assume_yes: bool) -> bool:
     if assume_yes:
         return True
@@ -224,8 +247,8 @@ def main() -> int:
                         help="serverless (default) or dedicated; fixed once the deployment "
                         "is created")
     parser.add_argument("--size", choices=SIZES, type=str.lower,
-                        help="Small, Medium or Large (default: s for a new deployment; an "
-                        "existing one keeps its size unless this is given)")
+                        help="Small, Medium or Large; without it a new deployment starts at "
+                        "its type's default size and an existing one keeps its own")
     parser.add_argument("--yes", "-y", action="store_true", help="build a missing snapshot "
                         "without asking")
     parser.add_argument("passthrough", nargs=argparse.REMAINDER,
@@ -266,28 +289,26 @@ def main() -> int:
             deployment_type = args.type or "serverless"
             say(TAG, f"creating {name} ({deployment_type})")
             deployment_id = host.create(name, deployment_type, secrets)
-            current = None
+            # Read back rather than assumed: a new deployment starts at its type's default
+            # size, and that is the size the platform reports, not one we pick.
+            deployment = host.find(name) or {"id": deployment_id}
+            created = True
         else:
             deployment_id = str(deployment["id"])
-            current = deployment.get("deployment_tier")
             deployment_type = type_of(deployment)
+            created = False
             if args.type and deployment_type and args.type != deployment_type:
                 say(TAG, f"warning: {name} is {deployment_type}, and a type cannot change; "
                          f"deploy under another --name for {args.type}.")
     except Exception as exc:  # noqa: BLE001 - refused or unreachable, the same dead end
         die(TAG, f"the Deployments API refused: {exc}")
 
-    # A new deployment gets the size asked for, Small by default; an existing one keeps
-    # whatever it was resized to unless --size says otherwise. A size the platform refuses
-    # is reported rather than fatal: the deployment can still be built, and resized later.
-    size = args.size or ("s" if deployment is None else None)
-    if size and deployment_type and current != tier(deployment_type, size):
-        try:
-            host.set_tier(deployment_id, tier(deployment_type, size))
-            current = tier(deployment_type, size)
-        except Exception as exc:  # noqa: BLE001 - reported; the deploy can go ahead
-            say(TAG, f"warning: could not size {name} as {tier(deployment_type, size)} ({exc}); "
-                     "change it on its LangSmith page.")
+    current = deployment.get("deployment_tier")
+    wanted = tier(deployment_type, args.size) if args.size and deployment_type else None
+    # An existing deployment is resized before the build, so the new revision has the size.
+    # A new one only after it: resizing a deployment with no revision yet answered HTTP 500.
+    if wanted and wanted != current and not created:
+        current = resize(host, name, deployment_id, wanted) or current
     # After the Deployments API has accepted the name, so that a refusal costs seconds rather
     # than the snapshot build that would otherwise come first.
     ensure_snapshot(secrets["SANDBOX_SNAPSHOT_NAME"], secrets["LANGSMITH_SANDBOX_API_KEY"],
@@ -299,8 +320,11 @@ def main() -> int:
             "--config", str(DEPLOY_CONFIG), "--deployment-id", deployment_id, "--remote",
             *passthrough]
     code = subprocess.call(argv, cwd=REPO_ROOT, env=env)
+    if code == 0 and wanted and wanted != current and created:
+        resize(host, name, deployment_id, wanted)
     if code == 0:
-        say(TAG, "try it from the local chat UI:  uv run scripts/dev.py --remote <deployment URL>")
+        say(TAG, f"try it from the local chat UI:  uv run scripts/dev.py --remote "
+                 f"{deployment_url(host, name)}")
     return code
 
 

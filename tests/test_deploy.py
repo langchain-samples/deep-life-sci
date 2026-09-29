@@ -162,7 +162,8 @@ class TestTypeAndSize:
                 return httpx.Response(422, json={"detail": "tier not allowed"})
             return httpx.Response(200, json={"resources": [
                 {"id": "dep-2", "name": "lab-x", "deployment_tier": "SERVERLESS_S"},
-                {"id": "dep-3", "name": "lab", "deployment_tier": "DEDICATED_M"},
+                {"id": "dep-3", "name": "lab", "deployment_tier": "DEDICATED_M",
+                 "url": "https://lab-123.us.langgraph.app"},
             ]})
 
         transport = httpx.MockTransport(handle)
@@ -188,6 +189,11 @@ class TestTypeAndSize:
         assert found["id"] == "dep-3" and deploy.type_of(found) == "dedicated"
         assert host.find("la") is None
         assert deploy.tier("serverless", "m") == "SERVERLESS_M"
+
+    def test_the_closing_hint_names_the_deployments_url(self, requests):
+        host, _ = requests
+        assert deploy.deployment_url(host, "lab") == "https://lab-123.us.langgraph.app"
+        assert deploy.deployment_url(host, "lab-x").startswith("<")
 
     def test_a_refused_tier_raises_with_the_platforms_reason(self, requests):
         host, _ = requests
