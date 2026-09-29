@@ -100,9 +100,33 @@ uv run agent "which papers base-edit PCSK9?" # runs headlessly in CLI
 
 Ctrl-C to stop the running server.
 
+## Deploy to LangSmith
+
+To run the agent server in the cloud with [LangSmith Deployment](https://docs.langchain.com/langsmith/deployments):
+
+```bash
+uv run scripts/deploy.py
+```
+
+This creates a deployment named `deep-life-sci`, or updates it if it exists (`--name` picks
+another). It builds the deployment its own sandbox snapshot the first time, and uploads the
+keys it needs from your `.env` as deployment secrets. It builds in the cloud if Docker isn't
+running locally. Models are whatever `models.yaml` says when you deploy; edit it and deploy
+again to change them.
+
+Then chat with the deployment from your local chat UI, using the deployment URL shown on its
+LangSmith page:
+
+```bash
+uv run scripts/dev.py --remote https://<your-deployment>.langgraph.app
+```
+
+A deployment accepts requests only with a LangSmith API key from your workspace, so this is
+for your own use. The deployment also opens in LangSmith Studio from its page.
+
 ## Coming soon
 
-* [LangSmith cloud deployments](https://www.langchain.com/langsmith/deployment) with user authentication
+* User authentication for deployments, and a hosted chat UI
 * Additional scientific data sources
 
 ## Disclaimer

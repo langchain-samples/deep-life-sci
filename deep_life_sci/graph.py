@@ -36,16 +36,18 @@ import asyncio
 import re
 
 from langchain_core.runnables import RunnableConfig
-from langsmith.sandbox import SandboxClient
+from langgraph_sdk.runtime import ServerRuntime
 
 from deep_life_sci import models
 from deep_life_sci.agent import build_agent
 from deep_life_sci.middleware.perf import install_logging
 from deep_life_sci.sandbox import (
+    NAME_PREFIX,
     SNAPSHOT_NAME,
     ResilientSandbox,
     boot,
     find_snapshot,
+    make_client,
     provision,
     warm,
 )
@@ -60,7 +62,7 @@ models.validate(*models.CHAT_ROLES)
 # Not a refusal: the rest of the agent runs, and each web search returns this.
 models.report_web_search_problem()
 
-_client = SandboxClient()
+_client = make_client()
 
 # thread_id -> sandbox name. The sandbox itself is looked up fresh each turn, because
 # the TTL may have reaped it while the user was away and a cached handle would then be
@@ -71,7 +73,7 @@ _sandbox_names: dict[str, str] = {}
 def _sandbox_name(thread_id: str) -> str:
     """A stable, name-safe sandbox id derived from the thread id."""
     slug = re.sub(r"[^a-zA-Z0-9-]", "-", thread_id)[:40].strip("-")
-    return f"pubmed-{slug or 'default'}"
+    return f"{NAME_PREFIX}-{slug or 'default'}"
 
 
 def _acquire(thread_id: str):
@@ -150,12 +152,15 @@ class _UnboundSandbox:
         raise RuntimeError(msg)
 
 
-async def make_graph(config: RunnableConfig):
+async def make_graph(config: RunnableConfig, runtime: ServerRuntime):
     """Build the agent bound to this thread's sandbox.
 
     Called per request by the LangGraph server — per *run* is what binds a sandbox, and
     that is what lets it, and so the files in `/workspace/out`, follow the thread rather
     than the process. Reads get an unbound one; see below.
+
+    The server picks what to pass by the annotations, so `runtime` must stay annotated as
+    `ServerRuntime`: without it the factory is called with the config alone.
 
     Acquiring a sandbox is synchronous HTTP. Under `langgraph dev` that runs inside the
     server's event loop, where blockbuster raises `BlockingError` on any blocking
@@ -173,18 +178,15 @@ async def make_graph(config: RunnableConfig):
 
     configurable = config.get("configurable") or {}
     thread_id = configurable.get("thread_id")
-    # `langgraph_api` sets this on every factory call, True only for `threads.create_run`.
-    # A read — `/threads/{id}/history`, `/threads/{id}/state`, Studio's diagram — has a
-    # thread_id like a run does, so without this the sandbox lookup below runs on every
-    # one: 470ms of synchronous HTTP to render a transcript that needs no container at
-    # all, and, if the TTL already reaped the thread's sandbox, `_acquire` boots a fresh
-    # one just to page back through an old conversation.
-    #
-    # Absent is treated as a run, not a read. The key is private to the server and may
-    # move between releases; the failure that guesses wrong in that direction is a
-    # `_UnboundSandbox` reaching a real run and raising on the first tool call.
-    is_read = configurable.get("__is_for_execution__") is False
-    if not thread_id or is_read:
+    # `execution_runtime` is set only for `threads.create_run`. A read —
+    # `/threads/{id}/history`, `/threads/{id}/state`, Studio's diagram — has a thread_id
+    # like a run does, so without this the sandbox lookup below runs on every one: 470ms of
+    # synchronous HTTP to render a transcript that needs no container at all, and, if the
+    # TTL already reaped the thread's sandbox, `_acquire` boots a fresh one just to page
+    # back through an old conversation. Deployed, reads are served by API servers and runs
+    # by queue workers, so a read that booted a container would boot it in the wrong
+    # process as well.
+    if not thread_id or runtime.execution_runtime is None:
         return _build(ResilientSandbox(sandbox=_UnboundSandbox()))
 
     key = str(thread_id)

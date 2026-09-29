@@ -1,0 +1,8 @@
+{
+  "name": "deep-life-sci",
+  "private": true,
+  "description": "npm workspace root: the LangGraph build installs JS dependencies beside langgraph.json, and the artifact components' dependencies live in ui/",
+  "workspaces": [
+    "ui"
+  ]
+}

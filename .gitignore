@@ -22,10 +22,10 @@ node_modules/
 # The tracked CLAUDE.md files are the checked-in half and stay in git.
 .claude/
 
-# Node modules for the artifact components in ui/. The lockfile beside them IS tracked:
-# langgraph.json bundles ui/ui.tsx at build time, so the bundle's dependencies need to
-# resolve to the same versions everywhere.
-ui/node_modules/
+# Node modules for the artifact components in ui/, an npm workspace of the root
+# package.json. The root package-lock.json IS tracked: langgraph.json bundles ui/ui.tsx at
+# build time, so the bundle's dependencies need to resolve to the same versions everywhere.
+# (`node_modules/` above already covers the root and ui/ both.)
 
 # The Node setup installs when the machine has none it can use (`install_node`), and the
 # staging directory it unpacks into first.

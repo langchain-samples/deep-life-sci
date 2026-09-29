@@ -23,6 +23,8 @@ Run from the repository root:
 ```bash
 uv run scripts/setup.py                # initial setup: environment, deps, snapshot, UI
 uv run scripts/dev.py                  # start API and chat UI; NO_BROWSER=1 skips browser
+uv run scripts/deploy.py               # create or update a LangSmith deployment
+uv run scripts/dev.py --remote <URL>   # local chat UI against a deployment
 uv run agent ["question"]              # one-shot CLI; no question uses the demo
 uv run scripts/build_snapshot.py       # rebuild the scientific Python sandbox image
 uv run langgraph dev                   # API only, port 2024
@@ -103,7 +105,17 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 ## Lifecycle and deployment pitfalls
 
 - Graph runs reuse a sandbox by `thread_id`. Graph reads, including reads with a thread
-  ID, use `_UnboundSandbox`; inspecting history must not boot a container.
+  ID, use `_UnboundSandbox`; inspecting history must not boot a container. The factory
+  tells them apart by `ServerRuntime.execution_runtime`, so keep its `runtime` annotated.
+- Deploys go through `scripts/deploy.py`, which reads `langgraph.deploy.json` (keep it
+  equal to `langgraph.json` apart from `env`) and uploads only its secret allowlist. A
+  new runtime setting needs an entry there as well as in `.env.example`.
+- Deployed, API servers and queue workers are separate processes on separate replicas:
+  in-process state (rate limiters, caches, `_sandbox_names`) is per process, and the
+  host `data/` cache is per replica. Deployments resolve Python dependencies from
+  `pyproject.toml` bounds, not `uv.lock`; cap beta dependencies there.
+- Artifact component dependencies install from the root `package.json` workspace; the
+  deploy build runs npm only beside `langgraph.json`.
 - Blocking filesystem and SDK calls in async paths must run through `asyncio.to_thread`.
   Otherwise they stall concurrent runs and can fail under the development server.
 - Preserve per-source rate limits and API guards; they prevent silent wrong answers.

@@ -92,7 +92,10 @@ def graph_module(monkeypatch):
     # independent of authentication and never changes graph._acquire itself.
     import langsmith.sandbox
 
+    from deep_life_sci import sandbox
+
     monkeypatch.setattr(langsmith.sandbox, "SandboxClient", Mock())
+    monkeypatch.setattr(sandbox, "SandboxClient", Mock())
     from deep_life_sci import graph
 
     monkeypatch.setattr(graph, "_client", Mock())
@@ -101,15 +104,29 @@ def graph_module(monkeypatch):
     return graph
 
 
+# What the server passes as `runtime`: `execution_runtime` is set only for a run.
+RUN = SimpleNamespace(execution_runtime=SimpleNamespace())
+READ = SimpleNamespace(execution_runtime=None)
+
+
+def test_the_server_hands_the_factory_its_runtime(graph_module):
+    """The server chooses the factory's arguments by annotation, so this pins that it
+    still sees `runtime` as the ServerRuntime rather than handing it the config."""
+    factory_utils = pytest.importorskip("langgraph_api._factory_utils")
+    hook = factory_utils._classify_factory(graph_module.make_graph)
+    config, runtime = object(), object()
+    assert hook(config, runtime) == {"config": config, "runtime": runtime}
+
+
 @pytest.mark.parametrize(
-    "config", [{}, {"configurable": {"thread_id": "a", "__is_for_execution__": False}}]
+    ("config", "runtime"), [({}, RUN), ({"configurable": {"thread_id": "a"}}, READ)]
 )
-async def test_graph_reads_never_acquire_a_sandbox(graph_module, monkeypatch, config):
+async def test_graph_reads_never_acquire_a_sandbox(graph_module, monkeypatch, config, runtime):
     graph = graph_module
     acquire = Mock(side_effect=AssertionError("must not acquire"))
     monkeypatch.setattr(graph, "_acquire", acquire)
     monkeypatch.setattr(graph, "build_agent", lambda backend: backend)
-    backend = await graph.make_graph(config)
+    backend = await graph.make_graph(config, runtime)
     assert isinstance(backend._sandbox, graph._UnboundSandbox)
     acquire.assert_not_called()
     with pytest.raises(RuntimeError, match="unbound"):
@@ -128,7 +145,7 @@ async def test_graph_run_acquires_off_loop_and_retains_recovery_callback(graph_m
 
     monkeypatch.setattr(graph, "_acquire", acquire)
     monkeypatch.setattr(graph, "build_agent", lambda backend: backend)
-    backend = await graph.make_graph({"configurable": {"thread_id": 42}})
+    backend = await graph.make_graph({"configurable": {"thread_id": 42}}, RUN)
     assert backend._sandbox is raw
     assert await backend._arebind(0) is True
 
@@ -142,7 +159,7 @@ async def test_a_setting_that_cannot_work_fails_the_run_before_any_sandbox_boots
     monkeypatch.setattr(graph, "_acquire", acquire)
     monkeypatch.setenv("SEARCH_MODEL", "gpt-5.6-luna")  # no gateway path
     with pytest.raises(RuntimeError, match=r"SEARCH_MODEL='gpt-5\.6-luna'"):
-        await graph.make_graph({"configurable": {"thread_id": "t"}})
+        await graph.make_graph({"configurable": {"thread_id": "t"}}, RUN)
     acquire.assert_not_called()
 
 
@@ -152,7 +169,7 @@ async def test_a_search_model_that_cannot_search_does_not_stop_a_run(graph_modul
     monkeypatch.setattr(graph, "build_agent", lambda backend: backend)
     monkeypatch.setenv("SEARCH_MODEL", "bedrock/us.anthropic.claude-sonnet-5")
     monkeypatch.setenv("SEARCH_EFFORT", "")
-    assert await graph.make_graph({"configurable": {"thread_id": "t"}}) is not None
+    assert await graph.make_graph({"configurable": {"thread_id": "t"}}, RUN) is not None
 
 
 @pytest.mark.parametrize("status", ["running", "stopped"])

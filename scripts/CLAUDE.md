@@ -72,4 +72,11 @@ Every patch function's docstring says what it is for. What is not in any one of 
 
 The `/ui/:path*` rewrite is the one patch that is load-bearing rather than cosmetic: without
 it the artifact components never render (see the same-origin invariant in the root
-`CLAUDE.md`).
+`CLAUDE.md`). `rewrite-origin` points it at `LANGGRAPH_API_URL` when that is set, which is how
+`dev.py --remote` sends it to a deployment; keep the two following the same variable.
+
+## Deploying
+
+`deploy.py` wraps `langgraph deploy`; its docstring says why. It owns `.env.deploy` the way
+`setup.py` owns `.env`, and rewrites `langgraph.deploy.json` from `langgraph.json` when the
+two differ. It never edits `.env`.

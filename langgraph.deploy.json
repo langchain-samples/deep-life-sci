@@ -1,6 +1,8 @@
 {
   "python_version": "3.12",
-  "dependencies": ["."],
+  "dependencies": [
+    "."
+  ],
   "graphs": {
     "agent": "./deep_life_sci/graph.py:make_graph"
   },
@@ -24,5 +26,5 @@
       "sweep_interval_minutes": 60
     }
   },
-  "env": ".env"
+  "env": ".env.deploy"
 }

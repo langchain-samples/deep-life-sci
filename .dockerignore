@@ -4,25 +4,30 @@
 #
 # The entries that matter are the two big ones: .chat-ui (the dev-only Next frontend,
 # node_modules included) and data/ (20M+ of fetched abstracts, re-fetchable and
-# machine-local). .venv too — the image builds its own from uv.lock, and a macOS venv
-# would be wrong in a Linux image even if it were small.
+# machine-local). .venv too — the image installs its own (scripts/deploy.py says from
+# what), and a macOS venv would be wrong in a Linux image even if it were small.
 #
 # `**/` on anything that can appear at depth: unlike .gitignore, a bare `node_modules/`
 # here matches only the context root, so ui/node_modules would otherwise ship.
 #
-# Do NOT add pyproject.toml, uv.lock, langgraph.json, deep_life_sci/, ui/ or README.md:
-# the first four are the build inputs, ui/ is the artifact components the graph bundles,
-# and pyproject declares `readme = "README.md"`, so excluding it fails the build outright.
+# Do NOT add pyproject.toml, uv.lock, langgraph.json, langgraph.deploy.json, deep_life_sci/,
+# ui/, package.json, package-lock.json, models.yaml or README.md: the configs and
+# deep_life_sci/ are the build inputs, ui/ and the two npm files are the artifact
+# components the graph bundles, the server reads models.yaml at run time, and pyproject
+# declares `readme = "README.md"`, so excluding it fails the build outright.
 .chat-ui/
 # Frontend sources for that same dev-only app; setup copies them into .chat-ui/src.
 chat-ui-overlay/
 .venv/
+*.egg-info/
 # A host Node setup unpacked for the chat UI; the image never runs the UI.
 .node/
 .node.partial/
 data/
-.git/
+# No trailing slash: in a git worktree `.git` is a file, not a directory.
+.git
 .github/
+.claude/
 **/node_modules/
 **/.next/
 **/__pycache__/
@@ -34,7 +39,9 @@ data/
 
 # Secrets stay on the host. langgraph.json's `env` becomes docker-compose's `env_file`,
 # read at run time from outside the image, so the file itself is never needed in here.
+# `.env.deploy` is what scripts/deploy.py uploads as deployment secrets, not image content.
 .env
+.env.*
 
 # Example attachments for trying the composer by hand. 3 MB of PDFs, figures and
 # reference exports that nothing at run time reads.
@@ -45,3 +52,5 @@ samples/
 # [tool.setuptools] names the packages explicitly and the version is static — the build
 # reads neither evals/ nor .git/.
 evals/
+# The unit suite, for the same reason.
+tests/

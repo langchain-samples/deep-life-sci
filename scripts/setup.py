@@ -329,11 +329,9 @@ def ensure_snapshot() -> None:
 
     load_dotenv(ENV_FILE, override=True)
     try:
-        from langsmith.sandbox import SandboxClient
+        from deep_life_sci.sandbox import SNAPSHOT_NAME, make_client
 
-        from deep_life_sci.sandbox import SNAPSHOT_NAME
-
-        names = {s.name for s in SandboxClient().list_snapshots(name_contains=SNAPSHOT_NAME)}
+        names = {s.name for s in make_client().list_snapshots(name_contains=SNAPSHOT_NAME)}
     except Exception as exc:  # noqa: BLE001 - any failure here is the same user-facing problem
         # Reaching LangSmith at all failed, so this is a credentials or connectivity
         # problem and every run would have it too. Fail here, where the cause is visible.
@@ -419,6 +417,7 @@ BRAND_LOGOS_IMPORT = (
 
 PATCH_MARKS = {
     "rewrite": ("next.config.mjs", "/ui/:path", True),
+    "rewrite-origin": ("next.config.mjs", "process.env.LANGGRAPH_API_URL", True),
     "dev-indicator": ("next.config.mjs", "devIndicators", True),
     "svg": ("src/components/icons/langgraph.tsx", "clip-path=", False),
     "logo-mark": ("src/components/icons/langgraph.tsx", LOGO_VIEWBOX_NEW, True),
@@ -461,6 +460,7 @@ def unapplied_patches() -> list[str]:
 def apply_patches() -> None:
     """Every patch, in order. Safe to call on an already-patched clone."""
     patch_next_config()
+    patch_rewrite_origin()
     patch_dev_indicator()
     patch_svg_props()
     patch_logo_mark()
@@ -515,6 +515,32 @@ def patch_next_config() -> None:
     lines.insert(hits[0] + 1, REWRITE.rstrip())
     cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
     say(TAG, "added the /ui/* rewrite to next.config.mjs")
+
+
+REWRITE_ORIGIN_OLD = 'destination: "http://localhost:2024/ui/:path*"'
+REWRITE_ORIGIN_NEW = (
+    'destination: `${process.env.LANGGRAPH_API_URL || "http://localhost:2024"}/ui/:path*`'
+)
+
+
+def patch_rewrite_origin() -> None:
+    """Send the /ui/* rewrite wherever the API passthrough goes.
+
+    `LANGGRAPH_API_URL` is the upstream passthrough's own setting, and `dev.py --remote` sets
+    it to a deployment. Unset, as in a local run, the rewrite still points at :2024. Its own
+    patch rather than a change to REWRITE, so a clone that already has the rewrite picks it up.
+    """
+    cfg = chat_ui_dir() / "next.config.mjs"
+    if not cfg.is_file() or _marked("rewrite-origin"):
+        return
+    text = cfg.read_text(encoding="utf-8")
+    if text.count(REWRITE_ORIGIN_OLD) != 1:
+        say(TAG, f"warning: {cfg} is not the shape expected. Point the /ui/* rewrite at "
+                 "the deployment by hand:")
+        print(f"      {{ source: \"/ui/:path*\", {REWRITE_ORIGIN_NEW} }},")
+        return
+    cfg.write_text(text.replace(REWRITE_ORIGIN_OLD, REWRITE_ORIGIN_NEW), encoding="utf-8")
+    say(TAG, "pointed the /ui/* rewrite at LANGGRAPH_API_URL, else localhost:2024")
 
 
 DEV_INDICATOR = """\
@@ -1842,14 +1868,18 @@ def ensure_artifact_deps() -> None:
     clone above. They fail silently when missing: the bundler logs `Could not resolve
     "xlsx"`, still answers /ui/<graph>/entrypoint.js with a 200, and the chart is simply
     absent — indistinguishable from the missing-rewrite failure. `npm ci` rather than
-    `npm install` because ui/package-lock.json is tracked for exactly this reason.
+    `npm install` because package-lock.json is tracked for exactly this reason.
+
+    At the repo root, where ui/ is an npm workspace: a deployment's build runs its install
+    beside langgraph.json and nowhere else, so that is where the lockfile has to be for the
+    image to get these too.
     """
-    if (REPO_ROOT / "ui" / "node_modules").is_dir():
+    if (REPO_ROOT / "node_modules" / "xlsx").is_dir():
         return
     # `--silent` below prints nothing at all until it finishes, so without the duration
     # this is a dead terminal for minutes at the very last step of setup.
     say(TAG, "installing artifact component dependencies (a few minutes)…")
-    run(["npm", "ci", "--silent"], cwd=REPO_ROOT / "ui")
+    run(["npm", "ci", "--silent"], cwd=REPO_ROOT)
 
 
 def main() -> int:

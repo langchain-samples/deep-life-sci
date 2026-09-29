@@ -1,6 +1,7 @@
 """Start the local stack: the agent server and the chat UI that renders its artifacts.
 
     uv run scripts/dev.py                    # both, logs interleaved and prefixed
+    uv run scripts/dev.py --remote <URL>     # only the chat UI, against a deployment
     NO_BROWSER=1 uv run scripts/dev.py       # don't open a browser tab
     AGENT_CHAT_UI=~/src/acu uv run …         # a chat UI checkout of your own
 
@@ -17,10 +18,18 @@ still gets the old behaviour of never stopping what this script did not start.
 Python rather than bash because this is the one command Windows users cannot avoid, and
 the three things it needs — a port check, a browser, and killing a process tree on Ctrl-C —
 are exactly the three with no portable shell spelling.
+
+`--remote` is for a server made by `scripts/deploy.py`. The UI then talks to it through
+the upstream app's own API passthrough (`src/app/api/[..._path]`), which adds this .env's
+LangSmith key server-side so the key never reaches the browser. The `/ui/*` rewrite follows
+the same `LANGGRAPH_API_URL`; the server serves those assets without authentication. A
+deployment still needs its key, so this is for your own use from localhost, not a way to
+publish the UI.
 """
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import os
 import signal
@@ -37,6 +46,7 @@ from _common import (
     answering,
     chat_ui_dir,
     die,
+    env_value,
     listening,
     pnpm_or_die,
     require_setup,
@@ -55,7 +65,7 @@ WINDOWS = os.name == "nt"
 _started: list[tuple[str, subprocess.Popen[str]]] = []
 
 
-def spawn(name: str, cwd, argv: list[str]) -> None:
+def spawn(name: str, cwd, argv: list[str], env: dict[str, str] | None = None) -> None:
     """Start a server, its own process group, output pumped through a prefixing thread."""
     exe = tool(argv[0])
     if exe is None:
@@ -76,6 +86,7 @@ def spawn(name: str, cwd, argv: list[str]) -> None:
         text=True,
         bufsize=1,  # line buffered: the prefix appears as the server logs it, not at exit
         errors="replace",
+        env={**os.environ, **env} if env else None,
         **group,
     )
     _started.append((name, proc))
@@ -240,7 +251,28 @@ def _take_over(port: int, label: str, healthy: bool, kill_hint: str) -> bool:
     return _kill_holder(port, holder[0])
 
 
+def remote_ui_env(url: str) -> dict[str, str]:
+    """What the chat UI needs to talk to a deployment instead of :2024.
+
+    Environment rather than `.env.local`, which setup wrote for the local server and which
+    Next reads only for names the environment has not already set.
+    """
+    return {
+        "LANGGRAPH_API_URL": url.rstrip("/"),
+        "LANGSMITH_API_KEY": env_value("LANGSMITH_API_KEY"),
+        "NEXT_PUBLIC_API_URL": "http://localhost:3000/api",
+        "NEXT_PUBLIC_ASSISTANT_ID": "agent",
+    }
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(prog="uv run scripts/dev.py")
+    parser.add_argument("--remote", metavar="URL",
+                        help="start only the chat UI, against this deployment")
+    args = parser.parse_args()
+    if args.remote and not args.remote.startswith(("http://", "https://")):
+        die("dev", f"--remote wants the deployment's URL, starting https://; got {args.remote!r}")
+
     require_setup("dev")
     ui_dir = chat_ui_dir()
     if not ui_dir.is_dir():
@@ -278,7 +310,9 @@ def main() -> int:
     # server: every request from the chat UI then hangs, so the window shows its thinking
     # indicator forever with no error to explain it. `_take_over` asks before stopping
     # anything, so a :2024 of your own still survives a run of this.
-    if listening(2024) and not _take_over(
+    if args.remote:
+        say("dev", f"agent server: {args.remote}")
+    elif listening(2024) and not _take_over(
         2024, "the agent server", answering(2024),
         'pkill -f "langgraph dev"   '
         '(add -9 if it survives; Windows: taskkill /F /IM langgraph.exe)',
@@ -307,16 +341,21 @@ def main() -> int:
     # timeout: Next compiles that route on first request, so a healthy but cold server can
     # take well over 5s, and calling it dead sends the user off to kill a server that was
     # about to work.
+    ui_kill_hint = (
+        "lsof -ti tcp:3000 | xargs kill   (add -9 if it survives; Windows: npx kill-port 3000)"
+    )
     if listening(3000) and not _take_over(
-        3000, "the chat UI", answering(3000, path="/", timeout=20.0),
-        "lsof -ti tcp:3000 | xargs kill   "
-        "(add -9 if it survives; Windows: npx kill-port 3000)",
+        3000, "the chat UI", answering(3000, path="/", timeout=20.0), ui_kill_hint,
     ):
+        if args.remote:
+            # Reusing it would chat with whichever server it was started against.
+            die("dev", f"a chat UI is already on :3000; stop it to use --remote:  {ui_kill_hint}")
         say("dev", ":3000 already serving — reusing it")
         if not os.environ.get("NO_BROWSER"):
             webbrowser.open(UI_URL)
     else:
-        spawn("ui", ui_dir, [*pnpm.argv, "dev"])
+        spawn("ui", ui_dir, [*pnpm.argv, "dev"],
+              env=remote_ui_env(args.remote) if args.remote else None)
         open_ui_when_ready()
 
     # Both already up. Nothing to supervise and nothing this script may stop — the servers

@@ -74,6 +74,25 @@ logger = logging.getLogger(__name__)
 # takes ~1s. Run that once, then every run starts warm.
 SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py-bio")
 
+# Sandbox names are global to a LangSmith workspace, and thread-keyed ones (`graph.py`) are
+# derived from the thread id alone. A deployment gets a prefix of its own from
+# `scripts/deploy.py`, so its sandboxes, a local server's, and a second deployment's never
+# answer to the same name.
+NAME_PREFIX = os.environ.get("SANDBOX_NAME_PREFIX", "").strip() or "pubmed"
+
+
+def make_client(**kwargs: Any) -> SandboxClient:
+    """A `SandboxClient` authenticated with `LANGSMITH_SANDBOX_API_KEY`, if that is set.
+
+    Otherwise the SDK reads `LANGSMITH_API_KEY`, which is what every local run uses. The
+    override is for LangSmith Deployment: the platform injects a `LANGSMITH_API_KEY` of its
+    own under a reserved name that cannot be replaced, and nothing documents what that key
+    is allowed to do. `scripts/deploy.py` sets the override to a key known to reach
+    sandboxes, so a deployment never depends on it.
+    """
+    key = os.environ.get("LANGSMITH_SANDBOX_API_KEY", "").strip() or None
+    return SandboxClient(api_key=key, **kwargs)
+
 # Fallback for a clone that hasn't built the snapshot yet. Same package set, paid per run.
 PROVISION = (
     f"mkdir -p {WORKSPACE}/out && "
@@ -439,8 +458,8 @@ async def sandbox_session(*, quiet: bool = False):
         quiet: Suppress the boot/provision progress lines. Evals run many of these and
             the per-example noise buries the scores.
     """
-    client = SandboxClient()
-    snapshot = find_snapshot(client)
+    sandboxes = make_client()
+    snapshot = find_snapshot(sandboxes)
     if snapshot is None and not quiet:
         print(
             f"[sandbox] no snapshot named {SNAPSHOT_NAME!r} — installing at runtime "
@@ -450,8 +469,8 @@ async def sandbox_session(*, quiet: bool = False):
     t0 = time.monotonic()
     # Named by us rather than by the server, for the same reason `graph.py` names its
     # own: a create whose response we never see is still a container we can delete.
-    name = f"pubmed-run-{uuid.uuid4().hex[:16]}"
-    sandbox = boot(client, snapshot, name)
+    name = f"{NAME_PREFIX}-run-{uuid.uuid4().hex[:16]}"
+    sandbox = boot(sandboxes, snapshot, name)
     try:
         if not quiet:
             print(f"[sandbox] up in {time.monotonic() - t0:.1f}s ({snapshot or 'base image'})")
@@ -466,4 +485,4 @@ async def sandbox_session(*, quiet: bool = False):
         finally:
             await backend.aclose()
     finally:
-        discard(client, name)
+        discard(sandboxes, name)

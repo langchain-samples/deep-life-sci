@@ -3,6 +3,7 @@
 Run this once (and again whenever you want to change the library set):
 
     uv run scripts/build_snapshot.py
+    uv run scripts/build_snapshot.py --name pubmed-py-bio-mine   # another name (deploy.py)
 
 It boots a plain sandbox, installs the scientific Python stack, and freezes the result
 as a named snapshot. `deep_life_sci/sandbox.py` then boots from that snapshot, which
@@ -18,6 +19,7 @@ without the package being installed.
 Put the printed name in `.env` as SANDBOX_SNAPSHOT_NAME.
 """
 
+import argparse
 import os
 import time
 
@@ -139,8 +141,13 @@ SANDBOX_DISABLED_HINT = (
 
 def main() -> None:
     """Translate a missing sandbox entitlement into the setting that fixes it."""
+    parser = argparse.ArgumentParser(prog="uv run scripts/build_snapshot.py")
+    # A flag rather than the environment, because the `load_dotenv(override=True)` above
+    # lets .env's SANDBOX_SNAPSHOT_NAME win over one exported for a single build.
+    parser.add_argument("--name", default=SNAPSHOT_NAME, help="snapshot to build or replace")
+    args = parser.parse_args()
     try:
-        build()
+        build(args.name)
     except SystemExit:
         raise
     except Exception as exc:
@@ -150,18 +157,22 @@ def main() -> None:
         raise SystemExit(f"{exc}\n\n{SANDBOX_DISABLED_HINT}") from exc
 
 
-def build() -> None:
+def build(name: str) -> None:
     # 300s rather than the SDK's 10s default. `capture_snapshot` takes a `timeout`, but
     # it governs only the ready-poll *after* the POST — the POST itself is left on the
     # client default, and capture is well over 10s now that the platform compacts
     # snapshots. That matters more than it sounds: the delete below runs first, so a
     # capture that times out leaves no snapshot at all, and every run then falls back
     # to the ~95s runtime install.
-    client = SandboxClient(timeout=300.0)
+    #
+    # The key is the one `deep_life_sci/sandbox.py:make_client` boots with, because a
+    # snapshot is only visible to the workspace it was captured in.
+    key = os.environ.get("LANGSMITH_SANDBOX_API_KEY", "").strip() or None
+    client = SandboxClient(api_key=key, timeout=300.0)
 
-    for existing in client.list_snapshots(name_contains=SNAPSHOT_NAME):
-        if existing.name == SNAPSHOT_NAME:
-            print(f"[snapshot] deleting existing {SNAPSHOT_NAME} ({existing.id})", flush=True)
+    for existing in client.list_snapshots(name_contains=name):
+        if existing.name == name:
+            print(f"[snapshot] deleting existing {name} ({existing.id})", flush=True)
             client.delete_snapshot(existing.id)
 
     t0 = time.monotonic()
@@ -196,11 +207,12 @@ def build() -> None:
 
         t2 = time.monotonic()
         print("[build] capturing the snapshot…", flush=True)
-        snapshot = client.capture_snapshot(sandbox.name, SNAPSHOT_NAME, timeout=600)
+        snapshot = client.capture_snapshot(sandbox.name, name, timeout=600)
         print(f"[build] captured in {time.monotonic() - t2:.1f}s", flush=True)
 
     print(f"\n[snapshot] ready: name={snapshot.name} id={snapshot.id}", flush=True)
-    print(f"[snapshot] set SANDBOX_SNAPSHOT_NAME={snapshot.name} in .env", flush=True)
+    if name == SNAPSHOT_NAME:
+        print(f"[snapshot] set SANDBOX_SNAPSHOT_NAME={snapshot.name} in .env", flush=True)
 
 
 if __name__ == "__main__":
