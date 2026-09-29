@@ -146,6 +146,23 @@ export function AssistantMessage({
     return null;
   }
 
+  // setup: an AI turn that is only thinking + tool_use renders no content of its own, but
+  // its hover CommandBar is opacity-0 rather than absent and still occupies its row. A run
+  // here is dozens of such turns, so unpatched the first visible output sits about a
+  // screenful below the question. See scripts/CLAUDE.md.
+  const hasCustomComponents = !!thread.values.ui?.some(
+    (ui) => ui.metadata?.message_id === message?.id,
+  );
+  if (
+    !isToolResult &&
+    !threadInterrupt &&
+    contentString.length === 0 &&
+    !hasCustomComponents &&
+    (hideToolCalls || (!hasToolCalls && !hasAnthropicToolCalls))
+  ) {
+    return null;
+  }
+
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-2">

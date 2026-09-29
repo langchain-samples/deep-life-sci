@@ -28,6 +28,26 @@ import { toast } from "sonner";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
 
+// setup: the agent orchestrates inside one `eval`, so a multi-minute run produces no visible
+// message until it is over. It narrates itself over the same custom-event channel the UI
+// components already use — see deep_life_sci/middleware/progress.py — and the latest line
+// travels to the thread view through the context below.
+export type ProgressEvent = { type: "progress"; text: string };
+
+function isProgressEvent(event: unknown): event is ProgressEvent {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as { type?: unknown }).type === "progress" &&
+    typeof (event as { text?: unknown }).text === "string"
+  );
+}
+
+// A context of its own rather than another key on the stream value: that value is the SDK
+// hook's return, and spreading it to add one would fix whatever it computes per render.
+const RunProgressContext = createContext<string | null>(null);
+export const useRunProgress = (): string | null => useContext(RunProgressContext);
+
 const useTypedStream = useStream<
   StateType,
   {
@@ -36,7 +56,7 @@ const useTypedStream = useStream<
       ui?: (UIMessage | RemoveUIMessage)[] | UIMessage | RemoveUIMessage;
       context?: Record<string, unknown>;
     };
-    CustomEventType: UIMessage | RemoveUIMessage;
+    CustomEventType: UIMessage | RemoveUIMessage | ProgressEvent;
   }
 >;
 
@@ -83,6 +103,7 @@ const StreamSession = ({
 }) => {
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
+  const [runProgress, setRunProgress] = useState<string | null>(null);
   const streamValue = useTypedStream({
     apiUrl,
     apiKey: apiKey ?? undefined,
@@ -95,6 +116,10 @@ const StreamSession = ({
     threadId: threadId ?? null,
     fetchStateHistory: true,
     onCustomEvent: (event, options) => {
+      if (isProgressEvent(event)) {
+        setRunProgress(event.text);
+        return;
+      }
       if (isUIMessage(event) || isRemoveUIMessage(event)) {
         options.mutate((prev) => {
           const ui = uiMessageReducer(prev.ui ?? [], event);
@@ -128,9 +153,17 @@ const StreamSession = ({
     });
   }, [apiKey, apiUrl, authScheme]);
 
+  // A finished run's last line is not progress any more. Clearing on `isLoading` also covers
+  // the run that failed, where no completion event is coming.
+  useEffect(() => {
+    if (!streamValue.isLoading) setRunProgress(null);
+  }, [streamValue.isLoading]);
+
   return (
     <StreamContext.Provider value={streamValue}>
-      {children}
+      <RunProgressContext.Provider value={runProgress}>
+        {children}
+      </RunProgressContext.Provider>
     </StreamContext.Provider>
   );
 };
@@ -190,11 +223,11 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             <div className="flex flex-col items-start gap-2">
               <LangGraphLogoSVG className="h-7" />
               <h1 className="text-xl font-semibold tracking-tight">
-                Agent Chat
+                Deep Life Sci
               </h1>
             </div>
             <p className="text-muted-foreground">
-              Welcome to Agent Chat! Before you get started, you need to enter
+              Welcome to Deep Life Sci! Before you get started, you need to enter
               the URL of the deployment and the assistant / graph ID.
             </p>
           </div>

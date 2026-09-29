@@ -58,14 +58,33 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       authScheme || undefined,
     );
 
-    const threads = await client.threads.search({
+    // setup: the sidebar needs exactly one field of thread state — the first human
+    // message, for the title. Asking for all of `values` drags this agent's QuickJS
+    // heap snapshot down with it (125 MB for 40 threads, measured). See CLAUDE.md.
+    const query = {
       metadata: {
         ...getThreadSearchMetadata(resolvedAssistantId),
       },
       limit: 100,
-    });
+    };
+    let threads: Thread[];
+    try {
+      threads = await client.threads.search({
+        ...query,
+        select: ["thread_id", "created_at", "updated_at", "metadata", "status"],
+        extract: { first_message: "values.messages[0]" },
+      });
+    } catch {
+      // Older servers have neither `select` nor `extract`. Slow beats empty.
+      threads = await client.threads.search(query);
+    }
 
-    return threads;
+    // Put the extracted message back where the thread list already looks for it.
+    return threads.map((t) =>
+      t.extracted?.first_message
+        ? ({ ...t, values: { messages: [t.extracted.first_message] } } as Thread)
+        : t,
+    );
   }, [apiUrl, assistantId, authScheme, envAssistantId]);
 
   const value = {

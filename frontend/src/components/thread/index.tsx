@@ -3,16 +3,18 @@ import { ReactNode, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
+import { ModelBadge } from "./ModelBadge";
+import { RunStatus } from "./RunStatus";
 import { useState, FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
-import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
+import { AssistantMessage } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
 } from "@/lib/ensure-tool-responses";
-import { LangGraphLogoSVG } from "../icons/langgraph";
+import { BrandLogos as LangGraphLogoSVG } from "../icons/brand-logos";
 import { TooltipIconButton } from "./tooltip-icon-button";
 import {
   ArrowDown,
@@ -30,13 +32,6 @@ import { toast } from "sonner";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import { GitHubSVG } from "../icons/github";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../ui/tooltip";
 import { useFileUpload } from "@/hooks/use-file-upload";
 import { ContentBlocksPreview } from "./ContentBlocksPreview";
 import {
@@ -87,30 +82,6 @@ function ScrollToBottom(props: { className?: string }) {
   );
 }
 
-function OpenGitHubRepo() {
-  return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <a
-            href="https://github.com/langchain-ai/agent-chat-ui"
-            target="_blank"
-            className="flex items-center justify-center"
-          >
-            <GitHubSVG
-              width="24"
-              height="24"
-            />
-          </a>
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          <p>Open GitHub repo</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const [artifactOpen, closeArtifact] = useArtifactOpen();
@@ -135,7 +106,6 @@ export function Thread() {
     dragOver,
     handlePaste,
   } = useFileUpload();
-  const [firstTokenReceived, setFirstTokenReceived] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
@@ -180,25 +150,10 @@ export function Thread() {
     }
   }, [stream.error]);
 
-  // TODO: this should be part of the useStream hook
-  const prevMessageLength = useRef(0);
-  useEffect(() => {
-    if (
-      messages.length !== prevMessageLength.current &&
-      messages?.length &&
-      messages[messages.length - 1].type === "ai"
-    ) {
-      setFirstTokenReceived(true);
-    }
-
-    prevMessageLength.current = messages.length;
-  }, [messages]);
-
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if ((input.trim().length === 0 && contentBlocks.length === 0) || isLoading)
       return;
-    setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {
       id: uuidv4(),
@@ -220,6 +175,9 @@ export function Thread() {
         streamMode: ["values"],
         streamSubgraphs: true,
         streamResumable: true,
+        // setup: stop() only aborts the client stream; without this the run keeps
+        // going server-side and the thread stays busy. See setup.py.
+        onDisconnect: "cancel",
         optimisticValues: (prev) => ({
           ...prev,
           context,
@@ -239,14 +197,12 @@ export function Thread() {
   const handleRegenerate = (
     parentCheckpoint: Checkpoint | null | undefined,
   ) => {
-    // Do this so the loading state is correct
-    prevMessageLength.current = prevMessageLength.current - 1;
-    setFirstTokenReceived(false);
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
       streamMode: ["values"],
       streamSubgraphs: true,
       streamResumable: true,
+      onDisconnect: "cancel",
     });
   };
 
@@ -325,9 +281,6 @@ export function Thread() {
                   </Button>
                 )}
               </div>
-              <div className="absolute top-2 right-4 flex items-center">
-                <OpenGitHubRepo />
-              </div>
             </div>
           )}
           {chatStarted && (
@@ -361,19 +314,16 @@ export function Thread() {
                   }}
                 >
                   <LangGraphLogoSVG
-                    width={32}
-                    height={32}
+                    width={20}
+                    height={20}
                   />
                   <span className="text-xl font-semibold tracking-tight">
-                    Agent Chat
+                    Deep Life Sci
                   </span>
                 </motion.button>
               </div>
 
               <div className="flex items-center gap-4">
-                <div className="flex items-center">
-                  <OpenGitHubRepo />
-                </div>
                 <TooltipIconButton
                   size="lg"
                   className="p-4"
@@ -427,18 +377,16 @@ export function Thread() {
                       handleRegenerate={handleRegenerate}
                     />
                   )}
-                  {isLoading && !firstTokenReceived && (
-                    <AssistantMessageLoading />
-                  )}
+                  <RunStatus />
                 </>
               }
               footer={
                 <div className="sticky bottom-0 flex flex-col items-center gap-8 bg-white">
                   {!chatStarted && (
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-col items-center gap-3">
                       <LangGraphLogoSVG className="h-8 flex-shrink-0" />
                       <h1 className="text-2xl font-semibold tracking-tight">
-                        Agent Chat
+                        Deep Life Sci
                       </h1>
                     </div>
                   )}
@@ -505,7 +453,7 @@ export function Thread() {
                         >
                           <Plus className="size-5 text-gray-600" />
                           <span className="text-sm text-gray-600">
-                            Upload PDF or Image
+                            Attach files
                           </span>
                         </Label>
                         <input
@@ -513,7 +461,7 @@ export function Thread() {
                           type="file"
                           onChange={handleFileUpload}
                           multiple
-                          accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                          accept="*/*"
                           className="hidden"
                         />
                         {stream.isLoading ? (
@@ -538,6 +486,7 @@ export function Thread() {
                           </Button>
                         )}
                       </div>
+                      <ModelBadge />
                     </form>
                   </div>
                 </div>

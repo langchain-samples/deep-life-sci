@@ -1,15 +1,37 @@
 import { useState, useRef, useEffect, ChangeEvent } from "react";
 import { toast } from "sonner";
 import { ContentBlock } from "@langchain/core/messages";
-import { fileToContentBlock } from "@/lib/multimodal-utils";
+import {
+  fileToContentBlock,
+  isSandboxUpload,
+  uploadMimeType,
+  UPLOAD_TYPES,
+} from "@/lib/multimodal-utils";
 
-export const SUPPORTED_FILE_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-];
+// setup: everything deep_life_sci/middleware/uploads.py has a reader for. None of it is
+// model context — the graph lifts the payload off the human message before the first model
+// call and materialises it in the sandbox at /workspace/uploads, so a table gets computed
+// over, a bibliography becomes a corpus, and a PDF or an image is read by a cheap subagent
+// instead of by the root model. See scripts/CLAUDE.md.
+export const SUPPORTED_FILE_TYPES: string[] = [...UPLOAD_TYPES];
+
+// Every call site below tests these rather than the list, because a MIME-only check rejects
+// the file the user came to attach: Windows with Excel installed reports a .csv as
+// `application/vnd.ms-excel`, and some browsers report "" or application/octet-stream.
+export function isSupportedUpload(file: File): boolean {
+  return isSandboxUpload(file);
+}
+
+// Which uploads become a `type: "file"` block rather than an image one: all of them. An
+// image is transport to the sandbox here rather than model context, so it takes the same
+// shape as everything else and the graph has one block type to strip.
+export function isFileBlockUpload(file: File): boolean {
+  return isSandboxUpload(file);
+}
+
+export const UNSUPPORTED_FILE_TITLE = "That file type isn't supported";
+export const UNSUPPORTED_FILE_BODY =
+  "Tables, bibliographies (.nbib/.ris/.bib), PDFs, .sdf/.smi, FASTA/GenBank and images.";
 
 interface UseFileUploadOptions {
   initialBlocks?: ContentBlock.Multimodal.Data[];
@@ -25,15 +47,15 @@ export function useFileUpload({
   const dragCounter = useRef(0);
 
   const isDuplicate = (file: File, blocks: ContentBlock.Multimodal.Data[]) => {
-    if (file.type === "application/pdf") {
+    if (isFileBlockUpload(file)) {
       return blocks.some(
         (b) =>
           b.type === "file" &&
-          b.mimeType === "application/pdf" &&
+          b.mimeType === uploadMimeType(file) &&
           b.metadata?.filename === file.name,
       );
     }
-    if (SUPPORTED_FILE_TYPES.includes(file.type)) {
+    if (isSupportedUpload(file)) {
       return blocks.some(
         (b) =>
           b.type === "image" &&
@@ -49,10 +71,10 @@ export function useFileUpload({
     if (!files) return;
     const fileArray = Array.from(files);
     const validFiles = fileArray.filter((file) =>
-      SUPPORTED_FILE_TYPES.includes(file.type),
+      isSupportedUpload(file),
     );
     const invalidFiles = fileArray.filter(
-      (file) => !SUPPORTED_FILE_TYPES.includes(file.type),
+      (file) => !isSupportedUpload(file),
     );
     const duplicateFiles = validFiles.filter((file) =>
       isDuplicate(file, contentBlocks),
@@ -63,7 +85,7 @@ export function useFileUpload({
 
     if (invalidFiles.length > 0) {
       toast.error(
-        "You have uploaded invalid file type. Please upload a JPEG, PNG, GIF, WEBP image or a PDF.",
+        UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY },
       );
     }
     if (duplicateFiles.length > 0) {
@@ -109,10 +131,10 @@ export function useFileUpload({
 
       const files = Array.from(e.dataTransfer.files);
       const validFiles = files.filter((file) =>
-        SUPPORTED_FILE_TYPES.includes(file.type),
+        isSupportedUpload(file),
       );
       const invalidFiles = files.filter(
-        (file) => !SUPPORTED_FILE_TYPES.includes(file.type),
+        (file) => !isSupportedUpload(file),
       );
       const duplicateFiles = validFiles.filter((file) =>
         isDuplicate(file, contentBlocks),
@@ -123,7 +145,7 @@ export function useFileUpload({
 
       if (invalidFiles.length > 0) {
         toast.error(
-          "You have uploaded invalid file type. Please upload a JPEG, PNG, GIF, WEBP image or a PDF.",
+          UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY },
         );
       }
       if (duplicateFiles.length > 0) {
@@ -215,21 +237,21 @@ export function useFileUpload({
     }
     e.preventDefault();
     const validFiles = files.filter((file) =>
-      SUPPORTED_FILE_TYPES.includes(file.type),
+      isSupportedUpload(file),
     );
     const invalidFiles = files.filter(
-      (file) => !SUPPORTED_FILE_TYPES.includes(file.type),
+      (file) => !isSupportedUpload(file),
     );
     const isDuplicate = (file: File) => {
-      if (file.type === "application/pdf") {
+      if (isFileBlockUpload(file)) {
         return contentBlocks.some(
           (b) =>
             b.type === "file" &&
-            b.mimeType === "application/pdf" &&
+            b.mimeType === uploadMimeType(file) &&
             b.metadata?.filename === file.name,
         );
       }
-      if (SUPPORTED_FILE_TYPES.includes(file.type)) {
+      if (isSupportedUpload(file)) {
         return contentBlocks.some(
           (b) =>
             b.type === "image" &&
@@ -243,7 +265,7 @@ export function useFileUpload({
     const uniqueFiles = validFiles.filter((file) => !isDuplicate(file));
     if (invalidFiles.length > 0) {
       toast.error(
-        "You have pasted an invalid file type. Please paste a JPEG, PNG, GIF, WEBP image or a PDF.",
+        UNSUPPORTED_FILE_TITLE, { description: UNSUPPORTED_FILE_BODY },
       );
     }
     if (duplicateFiles.length > 0) {
