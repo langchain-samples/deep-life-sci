@@ -108,13 +108,16 @@ To run the agent server in the cloud with [LangSmith Deployment](https://docs.la
 uv run scripts/deploy.py
 ```
 
-This creates a deployment named `deep-life-sci`, or updates it if it exists (`--name` picks
-another). It builds the deployment its own sandbox snapshot the first time, and uploads the
-keys it needs from your `.env` as deployment secrets. It builds in the cloud if Docker isn't
-running locally. Models are whatever `models.yaml` says when you deploy; edit it and deploy
+This creates a deployment named `deep-life-sci-cloud`, or updates it if it exists (use `--name` to pick
+another). Models are whatever `models.yaml` says when you deploy; edit it and deploy
 again to change them.
 
-Then chat with the deployment from your local chat UI, using the deployment URL shown on its
+*Cost:* the default is a Serverless Small deployment, about $62 a month at most, depending on usage. It scales to zero when idle, so the first request after
+a quiet spell is slower. The LangSmith Plus plan includes one deployment free. For an always-on, user-facing
+deployment at higher cost, use `--type dedicated`. Model calls and
+sandboxes are billed separately. See [pricing](https://www.langchain.com/pricing) for current rates.
+
+Chat with the deployment from your local chat UI, using the deployment URL shown on its
 LangSmith page:
 
 ```bash
@@ -122,7 +125,7 @@ uv run scripts/dev.py --remote https://<your-deployment>.langgraph.app
 ```
 
 A deployment accepts requests only with a LangSmith API key from your workspace, so this is
-for your own use. The deployment also opens in LangSmith Studio from its page.
+for your own use.
 
 ## Coming soon
 
