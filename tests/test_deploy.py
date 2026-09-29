@@ -138,6 +138,15 @@ class TestDeploySecrets:
             assert f'"{name}"' in source, name
 
 
+def test_the_default_name_is_not_the_local_tracing_project():
+    """The platform refuses a deployment named after an existing tracing project."""
+    example = dict(
+        line.split("=", 1) for line in _read(".env.example").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    assert deploy.normalize(example["LANGSMITH_PROJECT"]) != deploy.DEFAULT_NAME
+
+
 class TestTypeAndSize:
     @pytest.fixture
     def requests(self):

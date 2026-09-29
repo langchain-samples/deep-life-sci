@@ -1,6 +1,6 @@
 """Deploy the agent server to LangSmith Deployment.
 
-    uv run scripts/deploy.py                  # create, or update, the `deep-life-sci` deployment
+    uv run scripts/deploy.py                  # create, or update, `deep-life-sci-cloud`
     uv run scripts/deploy.py --name my-lab    # a deployment of another name
     uv run scripts/deploy.py --type dedicated # the type only applies when one is created
     uv run scripts/deploy.py --size m         # Small, Medium or Large; changeable later
@@ -60,7 +60,9 @@ TAG = "deploy"
 CONFIG = REPO_ROOT / "langgraph.json"
 DEPLOY_CONFIG = REPO_ROOT / "langgraph.deploy.json"
 DEPLOY_ENV = REPO_ROOT / ".env.deploy"
-DEFAULT_NAME = "deep-life-sci"
+# Not `deep-life-sci`: a deployment creates a tracing project of its own name, and that is
+# the project every local run already traces to (.env.example's LANGSMITH_PROJECT).
+DEFAULT_NAME = "deep-life-sci-cloud"
 HOST_URL = "https://api.host.langchain.com"
 EU_HOST_URL = "https://eu.api.host.langchain.com"
 
@@ -241,6 +243,10 @@ def main() -> int:
 
     load_dotenv(ENV_FILE, override=True)
 
+    if name == normalize(os.environ.get("LANGSMITH_PROJECT", "")):
+        die(TAG, f"{name!r} is the tracing project your local runs use (LANGSMITH_PROJECT), and "
+                 "a deployment creates a tracing project of its own name. Pick another --name.")
+
     sync_deploy_config()
     secrets = deploy_secrets(name)
     write_deploy_env(secrets)
@@ -248,9 +254,6 @@ def main() -> int:
     if "NCBI_API_KEY" not in secrets:
         say(TAG, "warning: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
                  "every user, and without a key that caller is held to 3 requests/sec.")
-
-    ensure_snapshot(secrets["SANDBOX_SNAPSHOT_NAME"], secrets["LANGSMITH_SANDBOX_API_KEY"],
-                    args.yes)
 
     api_key = env_value("LANGSMITH_API_KEY")
     host_url = os.environ.get("LANGGRAPH_HOST_URL") or (
@@ -285,6 +288,10 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - reported; the deploy can go ahead
             say(TAG, f"warning: could not size {name} as {tier(deployment_type, size)} ({exc}); "
                      "change it on its LangSmith page.")
+    # After the Deployments API has accepted the name, so that a refusal costs seconds rather
+    # than the snapshot build that would otherwise come first.
+    ensure_snapshot(secrets["SANDBOX_SNAPSHOT_NAME"], secrets["LANGSMITH_SANDBOX_API_KEY"],
+                    args.yes)
     say(TAG, f"deploying {name} ({current or 'its default size'})")
 
     env = {**os.environ, "LANGGRAPH_HOST_API_KEY": api_key, "LANGGRAPH_HOST_URL": host_url}
