@@ -144,8 +144,7 @@ decision-making, diagnosis, or treatment.**
 
 *Models:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default. To change the model or effort for the main agent, subagents or web search, edit [`models.yaml`](models.yaml); changes apply to your next message. To add a provider, including a custom OpenAI-compatible endpoint, configure it in LangSmith under **LLM Gateway**. The wrench under the chat box shows what each role is running.
 
-The UI is a modified clone of [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui) in
-`.chat-ui/`.
+The chat UI in `frontend/` began as [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui).
 
 Full text journal articles are only available if present in PMC's open-access subset. Only abstracts are available for paywalled papers.
 

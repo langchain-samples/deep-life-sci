@@ -32,9 +32,8 @@ node_modules/
 /.node/
 /.node.partial/
 
-# The chat frontend `scripts/setup.py` clones. A checkout of someone else's repo,
-# vendored here only so the UI needs no directory outside this one — also in
-# .dockerignore, or a dev-only Next app ships inside the deploy image.
+# Where `scripts/setup.py` used to clone the chat UI, before it moved into frontend/. A
+# checkout from then may still have one on disk.
 .chat-ui/
 
 # Host-side cache. Not a deliverable, and `data/` is 20M+ of fetched abstracts that

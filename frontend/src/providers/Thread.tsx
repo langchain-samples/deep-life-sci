@@ -58,9 +58,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       authScheme || undefined,
     );
 
-    // setup: the sidebar needs exactly one field of thread state — the first human
+    // The sidebar needs exactly one field of thread state — the first human
     // message, for the title. Asking for all of `values` drags this agent's QuickJS
-    // heap snapshot down with it (125 MB for 40 threads, measured). See CLAUDE.md.
+    // heap snapshot down with it (125 MB for 40 threads, measured). See frontend/CLAUDE.md.
     const query = {
       metadata: {
         ...getThreadSearchMetadata(resolvedAssistantId),

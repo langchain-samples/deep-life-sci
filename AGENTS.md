@@ -11,8 +11,8 @@ ClinicalTrials.gov, web search, specialist subagents, and sandboxed analysis.
 
 - Read `tests/test_invariants.py` for contracts that span multiple files.
 - Before changing source clients, read `deep_life_sci/sources/CLAUDE.md`.
-- Before changing setup or the chat stack, read `scripts/CLAUDE.md`; for overlay
-  components, also read `chat-ui-overlay/CLAUDE.md`. These files apply to any coding agent.
+- Before changing setup or the launcher, read `scripts/CLAUDE.md`; before changing the chat
+  UI, read `frontend/CLAUDE.md`. These files apply to any coding agent.
 - Keep `README.md` focused on human setup. Module docstrings explain implementation;
   avoid duplicating them here. See `tests/__init__.py` and `evals/README.md` for test scope.
 
@@ -31,6 +31,7 @@ uv run langgraph dev                   # API only, port 2024
 uv run --group test pytest             # offline tests
 uv run --group test pytest tests/test_pubmed.py  # example focused check
 uv run ruff check .                    # repository lint configuration in pyproject.toml
+(cd frontend && npx pnpm@10.5.1 lint && npx pnpm@10.5.1 exec tsc --noEmit)  # chat UI checks
 uv run python -m evals.run --structural --limit 3  # live evaluation, no judge model
 uv run python -m evals.sync             # publish dataset seeds to LangSmith
 ```
@@ -57,8 +58,8 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   belong together: the read timeout measures gaps between streamed chunks.
 - Define host paths in `paths.py`, anchored to the repository root. Preserve
   `DEEP_LIFE_SCI_DATA_DIR` overrides and scope cache sweeps to the named cache roots.
-- `.chat-ui/` is an ignored upstream clone patched by setup. Make persistent UI changes
-  in `chat-ui-overlay/` or the setup patches, not only in the generated clone.
+- `frontend/` is the chat UI, this repo's own code since it moved in from agent-chat-ui
+  (`frontend/UPSTREAM.md`). A `.chat-ui/` left on disk is the old clone and is unused.
 
 ## Agent and tool contracts
 
@@ -129,6 +130,6 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 - Artifact UI scripts use host-relative URLs. Frontends must proxy `/ui/*` through their
   own origin. Check `/ui/<graph>/entrypoint.js` when artifact cards fail to render.
 - Thread lists must request metadata projections rather than full state: QuickJS snapshots
-  can make each thread response megabytes. Preserve the `patch_thread_search` behavior.
+  can make each thread response megabytes. Preserve the search in `frontend/src/providers/Thread.tsx`.
 - QuickJS middleware and dynamic subagent APIs are beta. Exercise the real compiled-agent
   integration test when changing their wiring or upgrading those dependencies.

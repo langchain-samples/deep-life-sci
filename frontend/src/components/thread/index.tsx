@@ -175,8 +175,8 @@ export function Thread() {
         streamMode: ["values"],
         streamSubgraphs: true,
         streamResumable: true,
-        // setup: stop() only aborts the client stream; without this the run keeps
-        // going server-side and the thread stays busy. See setup.py.
+        // `stop()` only aborts the client stream; without this the run keeps
+        // going server-side and the thread stays busy.
         onDisconnect: "cancel",
         optimisticValues: (prev) => ({
           ...prev,

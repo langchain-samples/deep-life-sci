@@ -146,10 +146,10 @@ export function AssistantMessage({
     return null;
   }
 
-  // setup: an AI turn that is only thinking + tool_use renders no content of its own, but
+  // An AI turn that is only thinking + tool_use renders no content of its own, but
   // its hover CommandBar is opacity-0 rather than absent and still occupies its row. A run
   // here is dozens of such turns, so unpatched the first visible output sits about a
-  // screenful below the question. See scripts/CLAUDE.md.
+  // screenful below the question. See frontend/CLAUDE.md.
   const hasCustomComponents = !!thread.values.ui?.some(
     (ui) => ui.metadata?.message_id === message?.id,
   );

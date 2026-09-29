@@ -28,7 +28,7 @@ import { toast } from "sonner";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
 
-// setup: the agent orchestrates inside one `eval`, so a multi-minute run produces no visible
+// The agent orchestrates inside one `eval`, so a multi-minute run produces no visible
 // message until it is over. It narrates itself over the same custom-event channel the UI
 // components already use — see deep_life_sci/middleware/progress.py — and the latest line
 // travels to the thread view through the context below.

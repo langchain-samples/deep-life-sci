@@ -145,10 +145,9 @@ def set_env(key: str, value: str) -> None:
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def chat_ui_dir() -> Path:
-    """Where the frontend lives: inside the repo, or wherever AGENT_CHAT_UI points."""
-    override = os.environ.get("AGENT_CHAT_UI")
-    return Path(override).expanduser() if override else REPO_ROOT / ".chat-ui"
+def frontend_dir() -> Path:
+    """The chat UI, a Next app kept in this repo (see frontend/UPSTREAM.md)."""
+    return REPO_ROOT / "frontend"
 
 
 class Pnpm(NamedTuple):
@@ -163,14 +162,14 @@ class Pnpm(NamedTuple):
 
 
 def pinned_pnpm() -> str | None:
-    """The chat UI's `packageManager` pin, e.g. "pnpm@10.5.1" — or None if it has none.
+    """frontend/'s `packageManager` pin, e.g. "pnpm@10.5.1" — or None if it has none.
 
     Reading this ourselves is what makes the ladder below robust. Corepack is the tool that
     normally reads this field, but it is bundled with node under a long-standing plan to
     unbundle it, so a setup that *depends* on corepack inherits that clock. Holding the pin
     as a string instead means every rung can honour it and corepack becomes a convenience.
     """
-    manifest = chat_ui_dir() / "package.json"
+    manifest = frontend_dir() / "package.json"
     if not manifest.is_file():
         return None
     try:
@@ -216,7 +215,7 @@ def pnpm_command(tag: str = "setup") -> Pnpm | None:
 
       1. `pnpm` on PATH        — no download. pnpm 9+ re-execs itself at the pin, so this
                                  is reproducible too: a newer global pnpm runs as the pinned
-                                 version inside the clone. An older pnpm reports its own
+                                 version inside frontend/. An older pnpm reports its own
                                  version, fails the match below, and falls through.
       2. `corepack pnpm`       — bundled with node, downloads the pin to a per-user cache.
       3. `npm exec --yes <pin>` — the rung that survives corepack being unbundled. Caches
@@ -234,8 +233,8 @@ def pnpm_command(tag: str = "setup") -> Pnpm | None:
 
     pin = pinned_pnpm()
     want = pin.split("@", 1)[1] if pin else None
-    ui = chat_ui_dir()
-    # The pin lives in the clone, so rung 1 must run *there* to self-correct onto it.
+    ui = frontend_dir()
+    # The pin lives in frontend/, so rung 1 must run *there* to self-correct onto it.
     cwd = ui if ui.is_dir() else None
 
     rungs: list[tuple[str, list[str], float]] = [

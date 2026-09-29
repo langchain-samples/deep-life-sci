@@ -8,11 +8,11 @@ import {
   UPLOAD_TYPES,
 } from "@/lib/multimodal-utils";
 
-// setup: everything deep_life_sci/middleware/uploads.py has a reader for. None of it is
+// Everything deep_life_sci/middleware/uploads.py has a reader for. None of it is
 // model context — the graph lifts the payload off the human message before the first model
 // call and materialises it in the sandbox at /workspace/uploads, so a table gets computed
 // over, a bibliography becomes a corpus, and a PDF or an image is read by a cheap subagent
-// instead of by the root model. See scripts/CLAUDE.md.
+// instead of by the root model. See frontend/CLAUDE.md.
 export const SUPPORTED_FILE_TYPES: string[] = [...UPLOAD_TYPES];
 
 // Every call site below tests these rather than the list, because a MIME-only check rejects

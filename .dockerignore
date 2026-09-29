@@ -2,9 +2,9 @@
 # context to langgraph.json's parent, then `ADD`s the lot), so what is listed here is what
 # stays out of the deploy image. Nothing else reads this file — local runs are unaffected.
 #
-# The entries that matter are the two big ones: .chat-ui (the dev-only Next frontend,
-# node_modules included) and data/ (20M+ of fetched abstracts, re-fetchable and
-# machine-local). .venv too — the image installs its own (scripts/deploy.py says from
+# The entries that matter are the two big ones: frontend/ (the Next chat UI, which the
+# agent server does not serve, node_modules included) and data/ (20M+ of fetched
+# abstracts, re-fetchable and machine-local). .venv too — the image installs its own (scripts/deploy.py says from
 # what), and a macOS venv would be wrong in a Linux image even if it were small.
 #
 # `**/` on anything that can appear at depth: unlike .gitignore, a bare `node_modules/`
@@ -15,9 +15,9 @@
 # deep_life_sci/ are the build inputs, ui/ and the two npm files are the artifact
 # components the graph bundles, the server reads models.yaml at run time, and pyproject
 # declares `readme = "README.md"`, so excluding it fails the build outright.
+frontend/
+# The chat UI's old home, a clone setup used to make; it may still be on disk.
 .chat-ui/
-# Frontend sources for that same dev-only app; setup copies them into .chat-ui/src.
-chat-ui-overlay/
 .venv/
 *.egg-info/
 # A host Node setup unpacked for the chat UI; the image never runs the UI.

@@ -3,7 +3,6 @@
     uv run scripts/dev.py                    # both, logs interleaved and prefixed
     uv run scripts/dev.py --remote <URL>     # only the chat UI, against a deployment
     NO_BROWSER=1 uv run scripts/dev.py       # don't open a browser tab
-    AGENT_CHAT_UI=~/src/acu uv run …         # a chat UI checkout of your own
 
 Both halves are required. :2024 serves graph.py; :3000 serves the frontend, and is the
 side carrying the `/ui/*` rewrite that lets artifact components load at all (see the
@@ -44,19 +43,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (
     REPO_ROOT,
     answering,
-    chat_ui_dir,
     die,
     env_value,
+    frontend_dir,
     listening,
     pnpm_or_die,
     require_setup,
     say,
     tool,
 )
-from setup import apply_patches, ensure_overlay, unapplied_patches
 
 # `hideToolCalls` is a nuqs query param, so opening the tab with it set is a default
-# without a patch: nuqs keeps it across thread switches, and the in-app toggle still
+# without a code change: nuqs keeps it across thread switches, and the in-app toggle still
 # turns it back off. Our root turns are almost all thinking + tool_use, so left on the
 # upstream default the transcript is mostly collapsed tool cards.
 UI_URL = "http://localhost:3000?hideToolCalls=true"
@@ -274,36 +272,17 @@ def main() -> int:
         die("dev", f"--remote wants the deployment's URL, starting https://; got {args.remote!r}")
 
     require_setup("dev")
-    ui_dir = chat_ui_dir()
-    if not ui_dir.is_dir():
-        say("dev", f"no chat UI at {ui_dir}")
-        die("dev", "install it (clone, /ui/* rewrite, pnpm install) with:  uv run scripts/setup.py")
+    ui_dir = frontend_dir()
+    # Checked rather than installed: starting the app must not install anything. A checkout
+    # from before frontend/ was in the repo lands here after its first pull.
+    if not (ui_dir / "node_modules").is_dir():
+        die("dev", "the chat UI's dependencies are not installed. Run:  uv run scripts/setup.py")
 
     # Resolved up front rather than at spawn time, where an unrunnable pnpm would surface
-    # only after the agent server had already claimed its port — and after the clone check,
-    # because the pin it matches lives in the clone. Re-resolved on every launch rather than
-    # recorded by setup: it is cheap once the first rung answers, and a path cached here
-    # would go stale the next time the user reinstalls node.
+    # only after the agent server had already claimed its port. Re-resolved on every launch
+    # rather than recorded by setup: it is cheap once the first rung answers, and a path
+    # cached here would go stale the next time the user reinstalls node.
     pnpm = pnpm_or_die("dev")
-
-    # The clone is gitignored, so a patch that is missing from it leaves no trace anywhere:
-    # the feature is simply absent while the repo looks like it shipped. Checking that setup
-    # *ran* does not catch that — a `git pull` bringing a new patch, or an upgraded clone,
-    # both land here already un-patched. Re-applying is cheap and each patch no-ops when its
-    # mark is present, so this is a check by doing rather than a prompt to go and re-run.
-    copied = ensure_overlay()
-    if copied:
-        say("dev", f"refreshed {len(copied)} overlay component(s) in the chat UI")
-
-    missing = unapplied_patches()
-    if missing:
-        say("dev", f"chat UI patches missing ({', '.join(missing)}) — reapplying…")
-        apply_patches()
-        still_missing = unapplied_patches()
-        if still_missing:
-            # The patch functions have already printed what could not be anchored and why.
-            say("dev", f"warning: still unpatched ({', '.join(still_missing)}); "
-                       "starting anyway — see the messages above.")
 
     # Reused only if it *answers*. `langgraph dev` can wedge — bound to the port, alive in
     # the process table, serving nothing — and a port check adopts that as a working

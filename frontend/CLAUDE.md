@@ -1,0 +1,41 @@
+# frontend/
+
+The chat UI: a Next app that began as agent-chat-ui and is now this repo's own code.
+`UPSTREAM.md` says where it came from; the two commits that added this directory are
+upstream as published and then this project's changes, so their diff is the whole of what
+we changed. Upstream is not tracked. Apply a later upstream fix by hand, and prefer
+changing a component outright to wrapping it: nothing re-applies edits here any more.
+
+Run from this directory:
+
+```bash
+npx pnpm@10.5.1 lint             # eslint; warnings only today
+npx pnpm@10.5.1 exec tsc --noEmit
+npx pnpm@10.5.1 build
+```
+
+`uv run scripts/dev.py` from the repo root starts this with `next dev` beside the agent
+server. It must not install anything: `scripts/setup.py` owns `pnpm install` here.
+
+## Contracts with the agent server
+
+- **`/ui/*` must be served from this app's own origin.** The server answers `/ui/<graph>`
+  with a script tag whose `src` is host-relative, so the browser resolves it against this
+  page. `next.config.mjs` rewrites `/ui/*` to the server; without it the artifact
+  components render as empty divs while the run is otherwise fine. The rewrite follows
+  `LANGGRAPH_API_URL`, the same variable the API passthrough in `src/app/api` reads, which
+  is how `dev.py --remote` points both at a deployment. Keep the two on one variable.
+- **The thread list requests a metadata projection** (`src/providers/Thread.tsx`), never
+  full thread values: QuickJS snapshots make each thread megabytes.
+- **The upload allowlist tracks `UPLOAD_KINDS`** in `deep_life_sci/middleware/uploads.py`.
+  `UPLOAD_SUFFIXES` (`src/lib/multimodal-utils.ts`) and `isSupportedUpload`
+  (`src/hooks/use-file-upload.tsx`) decide what the composer accepts, and
+  `tests/test_invariants.py` checks the suffix list against the server's. A type the UI
+  accepts that the graph has no reader for reaches the model as context and nothing else.
+  - Test the extension first and the MIME type second: Windows with Excel installed reports
+    a `.csv` as `application/vnd.ms-excel`, and some browsers report `""`.
+  - Keep `accept="*/*"` on the composer input, so an `.xls` reaches the toast asking the
+    user to re-save it instead of being greyed out of the picker.
+  - Every accepted upload is sent as a `type: "file"` block, images included. Upstream sent
+    images as `type: "image"` to put them in model context; here they are transport to the
+    sandbox.

@@ -98,14 +98,15 @@ class TestEveryProgressLabelNamesARealTool:
 
 class TestAnUploadFormatLivesInFourPlaces:
     """"An upload format lives in four places": `UPLOAD_KINDS`, a probe branch, a prompt
-    segment, and the composer's allowlist in `scripts/setup.py`.
+    segment, and the composer's allowlist in `frontend/src/lib/multimodal-utils.ts`.
     """
 
     @pytest.fixture
     def composer_suffixes(self) -> set[str]:
-        source = (REPO / "scripts" / "setup.py").read_text(encoding="utf-8")
+        path = REPO / "frontend" / "src" / "lib" / "multimodal-utils.ts"
+        source = path.read_text(encoding="utf-8")
         block = re.search(r"export const UPLOAD_SUFFIXES = \[(.*?)\];", source, re.S)
-        assert block, "no UPLOAD_SUFFIXES list found in scripts/setup.py"
+        assert block, f"no UPLOAD_SUFFIXES list found in {path}"
         return set(re.findall(r'"(\.[a-z0-9.]+)"', block.group(1)))
 
     @pytest.mark.parametrize("suffix", sorted(UPLOAD_KINDS))

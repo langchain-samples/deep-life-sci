@@ -1,7 +1,7 @@
 import { ContentBlock } from "@langchain/core/messages";
 import { toast } from "sonner";
 
-// setup: the attachments this agent can do something with. None of them stay in model
+// The attachments this agent can do something with. None of them stay in model
 // context — each rides in as a file block carrying its filename, and the graph takes the
 // payload back out and materialises it in the sandbox (deep_life_sci/middleware/uploads.py,
 // whose UPLOAD_KINDS is the server-side half of this list).
