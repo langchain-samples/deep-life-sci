@@ -112,10 +112,11 @@ This creates a deployment named `deep-life-sci-cloud`, or updates it if it exist
 another). Models are whatever `models.yaml` says when you deploy; edit it and deploy
 again to change them.
 
-*Cost:* the default is a Serverless Small deployment, about $62 a month at most, depending on usage. It scales to zero when idle, so the first request after
-a quiet spell is slower. The LangSmith Plus plan includes one deployment free. For an always-on, user-facing
-deployment at higher cost, use `--type dedicated`. Model calls and
-sandboxes are billed separately. See [pricing](https://www.langchain.com/pricing) for current rates.
+*Cost:* the default is a Dedicated Small deployment, always on, about $390 a month. For a cheaper
+deployment to try things out, use `--type serverless`: about $62 a month at most, depending on usage,
+and the LangSmith Plus plan includes one free. It scales to zero when idle, so the first request after
+a quiet spell is slower. Model calls and sandboxes are billed separately. See
+[pricing](https://www.langchain.com/pricing) for current rates.
 
 Chat with the deployment from your local chat UI, using the deployment URL shown on its
 LangSmith page:

@@ -2,7 +2,7 @@
 
     uv run scripts/deploy.py                  # create, or update, `deep-life-sci-cloud`
     uv run scripts/deploy.py --name my-lab    # a deployment of another name
-    uv run scripts/deploy.py --type dedicated # the type only applies when one is created
+    uv run scripts/deploy.py --type serverless  # cheaper; the type is fixed at creation
     uv run scripts/deploy.py --size m         # Small, Medium or Large; changeable later
     uv run scripts/deploy.py -- --verbose     # anything after `--` goes to `langgraph deploy`
 
@@ -39,6 +39,10 @@ this creates a new deployment itself, with the Deployments API's own name for th
 `--size` other than that is set once the first build has made a revision to resize. Builds
 are remote: a deployment created for uploaded source cannot take a locally built image.
 
+Dedicated is the default because the deployment is user-facing: a Serverless one that has
+scaled to zero makes the first person back wait for it to start. Serverless suits trying the
+agent out.
+
 Models are whatever models.yaml says when this runs. Editing it changes a deployment only on
 the next deploy; the hot reload is a local-server convenience.
 """
@@ -68,9 +72,11 @@ HOST_URL = "https://api.host.langchain.com"
 EU_HOST_URL = "https://eu.api.host.langchain.com"
 
 SIZES = ("s", "m", "l")
-# The Deployments API's `deployment_type` for each type. Serverless is what this workspace's
-# own Serverless deployments report; Dedicated is `prod`, the always-on type.
+# The Deployments API's `deployment_type` for each type. `dev_zero` is what this workspace's
+# own Serverless deployments report. `prod` for Dedicated is the always-on type's name, not
+# yet seen on a Dedicated deployment: `resize` warns if the platform disagrees.
 API_TYPES = {"serverless": "dev_zero", "dedicated": "prod"}
+DEFAULT_TYPE = "dedicated"
 
 
 def deploy_config() -> dict:
@@ -244,8 +250,8 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--name", default=DEFAULT_NAME, help="deployment name")
     parser.add_argument("--type", choices=tuple(API_TYPES),
-                        help="serverless (default) or dedicated; fixed once the deployment "
-                        "is created")
+                        help=f"dedicated or serverless (default {DEFAULT_TYPE}); fixed once the "
+                        "deployment is created")
     parser.add_argument("--size", choices=SIZES, type=str.lower,
                         help="Small, Medium or Large; without it a new deployment starts at "
                         "its type's default size and an existing one keeps its own")
@@ -286,7 +292,7 @@ def main() -> int:
     try:
         deployment = host.find(name)
         if deployment is None:
-            deployment_type = args.type or "serverless"
+            deployment_type = args.type or DEFAULT_TYPE
             say(TAG, f"creating {name} ({deployment_type})")
             deployment_id = host.create(name, deployment_type, secrets)
             # Read back rather than assumed: a new deployment starts at its type's default
@@ -297,9 +303,10 @@ def main() -> int:
             deployment_id = str(deployment["id"])
             deployment_type = type_of(deployment)
             created = False
-            if args.type and deployment_type and args.type != deployment_type:
-                say(TAG, f"warning: {name} is {deployment_type}, and a type cannot change; "
-                         f"deploy under another --name for {args.type}.")
+            asked = args.type or DEFAULT_TYPE
+            if deployment_type and asked != deployment_type:
+                say(TAG, f"warning: {name} is {deployment_type}, and a type cannot change, so "
+                         f"it stays {deployment_type}. Deploy under another --name for {asked}.")
     except Exception as exc:  # noqa: BLE001 - refused or unreachable, the same dead end
         die(TAG, f"the Deployments API refused: {exc}")
 
