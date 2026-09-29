@@ -138,6 +138,54 @@ class TestDeploySecrets:
             assert f'"{name}"' in source, name
 
 
+class TestTypeAndSize:
+    @pytest.fixture
+    def requests(self):
+        import httpx
+
+        seen = []
+
+        def handle(request):
+            seen.append(request)
+            if request.method == "POST":
+                return httpx.Response(201, json={"id": "dep-1"})
+            if request.method == "PATCH":
+                return httpx.Response(422, json={"detail": "tier not allowed"})
+            return httpx.Response(200, json={"resources": [
+                {"id": "dep-2", "name": "lab-x", "deployment_tier": "SERVERLESS_S"},
+                {"id": "dep-3", "name": "lab", "deployment_tier": "DEDICATED_M"},
+            ]})
+
+        transport = httpx.MockTransport(handle)
+        host = deploy.Host("https://host.example", "lsv2_key", transport=transport)
+        return host, seen
+
+    def test_a_new_deployment_is_created_under_the_api_type_for_a_remote_build(self, requests):
+        host, seen = requests
+        assert host.create("lab", "serverless", {"NCBI_TOOL": "t"}) == "dep-1"
+        body = json.loads(seen[-1].content)
+        assert body == {
+            "name": "lab",
+            "source": "internal_source",
+            "source_config": {"deployment_type": "dev_zero"},
+            "source_revision_config": {"langgraph_config_path": "langgraph.deploy.json"},
+            "secrets": [{"name": "NCBI_TOOL", "value": "t"}],
+        }
+        assert seen[-1].headers["x-api-key"] == "lsv2_key"
+
+    def test_lookup_is_by_exact_name_and_reads_the_type_off_the_tier(self, requests):
+        host, _ = requests
+        found = host.find("lab")
+        assert found["id"] == "dep-3" and deploy.type_of(found) == "dedicated"
+        assert host.find("la") is None
+        assert deploy.tier("serverless", "m") == "SERVERLESS_M"
+
+    def test_a_refused_tier_raises_with_the_platforms_reason(self, requests):
+        host, _ = requests
+        with pytest.raises(RuntimeError, match=r"422.*tier not allowed"):
+            host.set_tier("dep-1", "SERVERLESS_L")
+
+
 def test_sandbox_client_prefers_the_sandbox_key(monkeypatch):
     from deep_life_sci import sandbox
 
