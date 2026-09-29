@@ -25,6 +25,9 @@ server. It must not install anything: `scripts/setup.py` owns `pnpm install` her
   components render as empty divs while the run is otherwise fine. The rewrite follows
   `LANGGRAPH_API_URL`, the same variable the API passthrough in `src/app/api` reads, which
   is how `dev.py --remote` points both at a deployment. Keep the two on one variable.
+- **The browser never holds a LangSmith API key.** A local server needs none, and
+  `dev.py --remote` adds one server-side in the API passthrough. Upstream's key field,
+  which kept the key in `localStorage`, is removed; don't bring it back.
 - **The thread list requests a metadata projection** (`src/providers/Thread.tsx`), never
   full thread values: QuickJS snapshots make each thread megabytes.
 - **The upload allowlist tracks `UPLOAD_KINDS`** in `deep_life_sci/middleware/uploads.py`.

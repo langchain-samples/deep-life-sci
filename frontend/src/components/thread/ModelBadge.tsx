@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { Wrench } from "lucide-react";
-import { getApiKey } from "@/lib/api-key";
 
 /**
  * The main agent's model and effort, under the composer, with a wrench that lists every role.
@@ -70,8 +69,6 @@ function useModels(asked: number): Models | null {
     if (!url) return;
     const controller = new AbortController();
     const headers = new Headers();
-    const apiKey = getApiKey();
-    if (apiKey) headers.set("X-Api-Key", apiKey);
     if (scheme) headers.set("X-Auth-Scheme", scheme);
     let timer: ReturnType<typeof setTimeout> | undefined;
 
