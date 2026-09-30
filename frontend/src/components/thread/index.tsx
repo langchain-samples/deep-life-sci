@@ -16,6 +16,7 @@ import {
 } from "@/lib/ensure-tool-responses";
 import { BrandLogos as LangGraphLogoSVG } from "../icons/brand-logos";
 import { TooltipIconButton } from "./tooltip-icon-button";
+import { SignOutButton } from "./SignOutButton";
 import {
   ArrowDown,
   LoaderCircle,
@@ -281,6 +282,7 @@ export function Thread() {
                   </Button>
                 )}
               </div>
+              <SignOutButton />
             </div>
           )}
           {chatStarted && (
@@ -333,6 +335,7 @@ export function Thread() {
                 >
                   <SquarePen className="size-5" />
                 </TooltipIconButton>
+                <SignOutButton />
               </div>
 
               <div className="from-background to-background/0 absolute inset-x-0 top-full h-5 bg-gradient-to-b" />

@@ -11,6 +11,7 @@ import {
   SetStateAction,
 } from "react";
 import { createClient } from "./client";
+import { defaultApiUrl } from "@/lib/auth";
 
 interface ThreadContextType {
   getThreads: () => Promise<Thread[]>;
@@ -33,7 +34,7 @@ function getThreadSearchMetadata(
 }
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
-  const envApiUrl: string | undefined = process.env.NEXT_PUBLIC_API_URL;
+  const envApiUrl: string | undefined = defaultApiUrl();
   const envAssistantId: string | undefined =
     process.env.NEXT_PUBLIC_ASSISTANT_ID;
   const envAuthScheme: string | undefined = process.env.NEXT_PUBLIC_AUTH_SCHEME;

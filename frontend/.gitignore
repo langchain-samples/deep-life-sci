@@ -31,3 +31,6 @@ next-env.d.ts
 
 # TypeScript incremental build state, written by `tsc --noEmit`.
 *.tsbuildinfo
+
+# The static build `DEEP_LIFE_SCI_STATIC=1 pnpm build` writes.
+out/

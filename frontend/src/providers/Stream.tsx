@@ -4,6 +4,7 @@ import React, {
   ReactNode,
   useState,
   useEffect,
+  useMemo,
 } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
@@ -22,6 +23,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ArrowRight } from "lucide-react";
 import { useThreads } from "./Thread";
+import { createClient } from "./client";
+import { authFetch, defaultApiUrl } from "@/lib/auth";
 import { toast } from "sonner";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
@@ -73,9 +76,7 @@ async function checkGraphStatus(
     const headers = new Headers();
     if (authScheme) headers.set("X-Auth-Scheme", authScheme);
 
-    const res = await fetch(`${apiUrl}/info`, {
-      headers,
-    });
+    const res = await authFetch(`${apiUrl}/info`, { headers });
 
     return res.ok;
   } catch (e) {
@@ -98,14 +99,10 @@ const StreamSession = ({
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
   const [runProgress, setRunProgress] = useState<string | null>(null);
+  const client = useMemo(() => createClient(apiUrl, authScheme), [apiUrl, authScheme]);
   const streamValue = useTypedStream({
-    apiUrl,
+    client,
     assistantId,
-    ...(authScheme && {
-      defaultHeaders: {
-        "X-Auth-Scheme": authScheme,
-      },
-    }),
     threadId: threadId ?? null,
     fetchStateHistory: true,
     onCustomEvent: (event, options) => {
@@ -169,7 +166,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
   // Get environment variables
-  const envApiUrl: string | undefined = process.env.NEXT_PUBLIC_API_URL;
+  const envApiUrl: string | undefined = defaultApiUrl();
   const envAssistantId: string | undefined =
     process.env.NEXT_PUBLIC_ASSISTANT_ID;
   const envAuthScheme: string | undefined = process.env.NEXT_PUBLIC_AUTH_SCHEME;

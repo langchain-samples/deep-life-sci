@@ -17,6 +17,34 @@ npx pnpm@10.5.1 build
 `uv run scripts/dev.py` from the repo root starts this with `next dev` beside the agent
 server. It must not install anything: `scripts/setup.py` owns `pnpm install` here.
 
+## Two builds
+
+`next.config.mjs` makes two apps from one source tree:
+
+- **`next dev`** (local): a Node server with the `/ui/*` rewrite and the API passthrough
+  (`src/app/api/[..._path]/route.dev.ts`, picked up only through the dev `pageExtensions`).
+  No sign-in, against a local server that has no auth.
+- **`DEEP_LIFE_SCI_STATIC=1 pnpm build`** (the deployment image; `scripts/deploy.py`): plain
+  files under `/app`, served by the agent server itself (`deep_life_sci/webapp.py`), so the
+  page, the API and `/ui/*` share one origin. No rewrite, no route handler, no Node at run
+  time. Try it locally by building it and running a server with the deploy config;
+  `paths.UI_DIR` finds `frontend/out`.
+
+## Sign-in
+
+`src/lib/auth.ts` and `src/providers/Auth.tsx`. Only the static build signs in: it fetches
+`/app/config.json`, which the server fills from the deployment's `OIDC_*` settings, and signs
+in through the provider with the authorization-code flow (oidc-client-ts). The provider
+sends the browser back to `/app/auth/callback`.
+
+- **Every request to the agent server goes through `createClient` (`src/providers/client.ts`)
+  or `authFetch`**, which add the token per request. A new call made with plain `fetch` or a
+  `Client` of its own is unauthenticated and gets 401 once deployed.
+- **Tokens stay in memory** (`InMemoryWebStorage`). Don't move them to `localStorage` or
+  `sessionStorage`; a reload signs in again, silently while the provider session lasts.
+- The callback navigates client-side (`router.replace`), never by reload: a reload would
+  drop the token it just received.
+
 ## Contracts with the agent server
 
 - **`/ui/*` must be served from this app's own origin.** The server answers `/ui/<graph>`

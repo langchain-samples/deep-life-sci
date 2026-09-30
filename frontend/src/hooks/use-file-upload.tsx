@@ -37,12 +37,37 @@ interface UseFileUploadOptions {
   initialBlocks?: ContentBlock.Multimodal.Data[];
 }
 
+// A deployed agent refuses any request over 25 MB, and attachments travel inside the run
+// request as base64, a third larger than the files. Kept under that with room for the rest
+// of the message; a local server has no limit, but one rule is less surprising than two.
+const MAX_ATTACHMENT_BYTES = 24 * 1024 * 1024;
+
+function attachedBytes(blocks: ContentBlock.Multimodal.Data[]): number {
+  return blocks.reduce(
+    (total, b) => total + (typeof b.data === "string" ? b.data.length : 0),
+    0,
+  );
+}
+
 export function useFileUpload({
   initialBlocks = [],
 }: UseFileUploadOptions = {}) {
   const [contentBlocks, setContentBlocks] =
     useState<ContentBlock.Multimodal.Data[]>(initialBlocks);
   const dropRef = useRef<HTMLDivElement>(null);
+
+  // Checked against the blocks this render has, like the duplicate check below, so the
+  // toast is not fired from inside a state updater.
+  const addBlocks = (newBlocks: ContentBlock.Multimodal.Data[]) => {
+    if (attachedBytes([...contentBlocks, ...newBlocks]) > MAX_ATTACHMENT_BYTES) {
+      toast.error("Attachments too large", {
+        description:
+          "One message can carry about 18 MB of files in total. Send the rest in a follow-up message.",
+      });
+      return;
+    }
+    setContentBlocks((prev) => [...prev, ...newBlocks]);
+  };
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
 
@@ -97,7 +122,7 @@ export function useFileUpload({
     const newBlocks = uniqueFiles.length
       ? await Promise.all(uniqueFiles.map(fileToContentBlock))
       : [];
-    setContentBlocks((prev) => [...prev, ...newBlocks]);
+    addBlocks(newBlocks);
     e.target.value = "";
   };
 
@@ -157,7 +182,7 @@ export function useFileUpload({
       const newBlocks = uniqueFiles.length
         ? await Promise.all(uniqueFiles.map(fileToContentBlock))
         : [];
-      setContentBlocks((prev) => [...prev, ...newBlocks]);
+      addBlocks(newBlocks);
     };
     const handleWindowDragEnd = (e: DragEvent) => {
       dragCounter.current = 0;
@@ -275,7 +300,7 @@ export function useFileUpload({
     }
     if (uniqueFiles.length > 0) {
       const newBlocks = await Promise.all(uniqueFiles.map(fileToContentBlock));
-      setContentBlocks((prev) => [...prev, ...newBlocks]);
+      addBlocks(newBlocks);
     }
   };
 
