@@ -41,6 +41,11 @@ MODELS_FILE = REPO_ROOT / "models.yaml"
 
 DATA_DIR = Path(os.environ.get("DEEP_LIFE_SCI_DATA_DIR") or REPO_ROOT / "data")
 
+# The chat UI's static build, which a deployment's agent server serves under /app
+# (webapp.py). The deploy image builds it to DEEP_LIFE_SCI_UI_DIR; locally it is what
+# `DEEP_LIFE_SCI_STATIC=1 pnpm build` leaves in frontend/out, for testing that build.
+UI_DIR = Path(os.environ.get("DEEP_LIFE_SCI_UI_DIR") or REPO_ROOT / "frontend" / "out")
+
 ABSTRACT_CACHE = DATA_DIR / "abstracts"
 PMC_CACHE = DATA_DIR / "pmc"
 CTGOV_CACHE = DATA_DIR / "trials"
@@ -126,6 +131,7 @@ __all__ = [
     "PMC_CACHE",
     "REPO_ROOT",
     "TRIAL_FILES_DIR",
+    "UI_DIR",
     "UPLOAD_DERIVED_DIR",
     "UPLOAD_DIR",
     "WORKSPACE",

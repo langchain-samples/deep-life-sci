@@ -8,10 +8,12 @@ server has no auth at all. Two kinds of caller reach a deployment:
   configured by three settings rather than code:
 
   - `OIDC_ISSUER`: the provider's issuer URL, exactly as it appears in the tokens' `iss`.
-  - `OIDC_AUDIENCE`: comma-separated audiences a token may be for. An ID token's audience
-    is the app's client ID; an access token's is whatever API it was issued for (Okta's
-    custom authorization servers, Entra app registrations). Required: without it, any
-    token the provider issued for *any* app would be accepted.
+  - `OIDC_CLIENT_ID`: the app registered with the provider. The chat UI signs in as it
+    (webapp.py hands it the settings), and it is the audience of the ID tokens it sends.
+  - `OIDC_AUDIENCE` (optional): comma-separated audiences to accept instead, for a UI set
+    to send access tokens (`OIDC_TOKEN=access`) issued for an API, as Okta's custom
+    authorization servers and Entra app registrations do. One of the two is required:
+    without an audience, a token the provider issued for *any* app would be accepted.
   - `OIDC_ALLOWED_EMAIL_DOMAINS` (optional): comma-separated; a token must then carry a
     verified email in one of them.
 
@@ -125,14 +127,14 @@ _keys = _SigningKeys()
 async def verify(token: str) -> dict[str, Any]:
     """The token's claims, or an HTTP 401/403 saying what was wrong with it."""
     issuer = os.environ.get("OIDC_ISSUER", "").strip()
-    audiences = _list("OIDC_AUDIENCE")
+    audiences = _list("OIDC_AUDIENCE") or _list("OIDC_CLIENT_ID")
     if os.environ.get("DEEP_LIFE_SCI_AUTH", "").strip() != "oidc":
         raise _unauthorized("this deployment accepts LangSmith API keys only")
     if not issuer:
         raise _unauthorized("sign-in is not configured: OIDC_ISSUER is unset")
     if not audiences:
         # A deploy-time mistake, refused rather than half-honoured: see the module docstring.
-        raise _unauthorized("sign-in is not configured: OIDC_AUDIENCE is unset")
+        raise _unauthorized("sign-in is not configured: set OIDC_CLIENT_ID or OIDC_AUDIENCE")
 
     try:
         header = jwt.get_unverified_header(token)

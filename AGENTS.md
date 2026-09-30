@@ -115,6 +115,9 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   in-process state (rate limiters, caches, `_sandbox_names`) is per process, and the
   host `data/` cache is per replica. Deployments resolve Python dependencies from
   `pyproject.toml` bounds, not `uv.lock`; cap beta dependencies there.
+- With sign-in on, the agent server also serves the chat UI's static build at `/app`
+  (`webapp.py`), built into the image by `deploy.py`'s `dockerfile_lines`. Custom routes
+  are outside the platform's auth, so `webapp.py` checks tokens on `/models` itself.
 - Deployments load `deep_life_sci/auth.py`; local servers never do. Signed-in users are
   scoped to threads they own, LangSmith-key callers and Studio are not, and anything a
   signed-in user needs must be allowed there explicitly: the rest is denied by default.

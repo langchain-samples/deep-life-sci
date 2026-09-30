@@ -62,7 +62,16 @@ class TestTheImageCanInstallThePackage:
             "env": ".env.deploy",
             "auth": {"path": "./deep_life_sci/auth.py:auth", "allow_langsmith_api_keys": True},
             "http": {**CONFIG["http"], "disable_store": True},
+            "dockerfile_lines": deploy.DEPLOY_DOCKERFILE_LINES,
         }
+
+    def test_the_image_builds_the_ui_where_the_server_looks_for_it(self):
+        lines = deploy.DEPLOY_DOCKERFILE_LINES
+        assert f"ENV DEEP_LIFE_SCI_UI_DIR={deploy.UI_DIR_IN_IMAGE}" in lines
+        build = next(line for line in lines if "pnpm" in line)
+        assert "DEEP_LIFE_SCI_STATIC=1" in build and f"mv out {deploy.UI_DIR_IN_IMAGE}" in build
+        pin = json.loads(_read("frontend/package.json"))["packageManager"].split("+")[0]
+        assert pin in build, "the image's pnpm must match frontend's packageManager pin"
 
     def test_the_auth_handler_the_deploy_config_names_exists(self):
         module, _, name = deploy.DEPLOY_AUTH["path"].partition(":")
@@ -80,7 +89,7 @@ class TestTheImageCanInstallThePackage:
     @pytest.mark.parametrize(
         "needed",
         ["langgraph.json", "langgraph.deploy.json", "package.json", "package-lock.json",
-         "models.yaml", "pyproject.toml", "README.md", "deep_life_sci/", "ui/"],
+         "models.yaml", "pyproject.toml", "README.md", "deep_life_sci/", "ui/", "frontend/"],
     )
     def test_build_inputs_are_not_ignored(self, needed):
         entries = [line.strip() for line in _read(".dockerignore").splitlines()]
@@ -121,12 +130,12 @@ class TestDeploySecrets:
         }
 
     def test_oidc_settings_ship_only_in_oidc_mode(self, dotenv):
-        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_AUDIENCE="app")
+        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_CLIENT_ID="app")
         assert "OIDC_ISSUER" not in deploy.deploy_secrets("x", "langsmith")
         secrets = deploy.deploy_secrets("x", "oidc")
         assert secrets["DEEP_LIFE_SCI_AUTH"] == "oidc"
         assert secrets["OIDC_ISSUER"] == "https://idp.example"
-        assert secrets["OIDC_AUDIENCE"] == "app"
+        assert secrets["OIDC_CLIENT_ID"] == "app"
 
     def test_auth_mode_follows_env_and_refuses_half_a_provider(self, dotenv):
         dotenv(LANGSMITH_API_KEY="k")
@@ -134,7 +143,7 @@ class TestDeploySecrets:
         dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example")
         with pytest.raises(SystemExit):
             deploy.auth_mode(None)
-        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_AUDIENCE="a")
+        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_CLIENT_ID="a")
         assert deploy.auth_mode(None) == "oidc"
         assert deploy.auth_mode("langsmith") == "langsmith"
 
@@ -158,14 +167,16 @@ class TestDeploySecrets:
         reserved = pytest.importorskip("langgraph_cli.deploy").RESERVED_ENV_VARS
         dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="k", NCBI_EMAIL="e",
                LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u",
-               OIDC_ISSUER="i", OIDC_AUDIENCE="a", OIDC_ALLOWED_EMAIL_DOMAINS="d")
+               OIDC_ISSUER="i", OIDC_CLIENT_ID="c", OIDC_AUDIENCE="a", OIDC_SCOPE="s",
+               OIDC_TOKEN="id", OIDC_ALLOWED_EMAIL_DOMAINS="d")
         assert not set(deploy.deploy_secrets("x", "oidc")) & reserved
 
     def test_every_secret_is_read_by_the_package(self, dotenv):
         """A secret nothing reads is a setting that silently does nothing."""
         dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="k", NCBI_EMAIL="e",
                LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u",
-               OIDC_ISSUER="i", OIDC_AUDIENCE="a", OIDC_ALLOWED_EMAIL_DOMAINS="d")
+               OIDC_ISSUER="i", OIDC_CLIENT_ID="c", OIDC_AUDIENCE="a", OIDC_SCOPE="s",
+               OIDC_TOKEN="id", OIDC_ALLOWED_EMAIL_DOMAINS="d")
         source = "".join(
             path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
         )

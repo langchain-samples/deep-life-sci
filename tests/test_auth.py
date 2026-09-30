@@ -118,6 +118,14 @@ class TestSignIn:
         monkeypatch.delenv("OIDC_AUDIENCE")
         assert "OIDC_AUDIENCE" in await _refused(mint())
 
+    async def test_the_client_id_is_the_audience_when_none_is_set(self, idp, monkeypatch):
+        """The UI's ID tokens are for its own client ID; OIDC_AUDIENCE is for access tokens."""
+        mint, _ = idp
+        monkeypatch.delenv("OIDC_AUDIENCE")
+        monkeypatch.setenv("OIDC_CLIENT_ID", CLIENT_ID)
+        await _authenticate(mint())
+        await _refused(mint(aud="another-app"))
+
     async def test_email_domains_restrict_when_set(self, idp, monkeypatch):
         mint, _ = idp
         monkeypatch.setenv("OIDC_ALLOWED_EMAIL_DOMAINS", "example.edu, lab.example.org")

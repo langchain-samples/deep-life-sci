@@ -92,6 +92,24 @@ DEPLOY_AUTH = {"path": "./deep_life_sci/auth.py:auth", "allow_langsmith_api_keys
 # The store API would hand any signed-in user every thread's uploads; the graph's own store
 # calls do not go through it and are unaffected.
 DEPLOY_HTTP = {"disable_store": True}
+# The chat UI's static build, which webapp.py serves under /app when sign-in is on. Built in
+# every image, so the deploy config is the same in both auth modes; in `langsmith` mode it is
+# just not served. These lines run before the image installs Node or copies the repo in, so
+# they do both for themselves, and drop everything but the built files. Node 22 because the
+# UI's Next wants 20.9 or later. The pnpm pin is frontend/package.json's `packageManager`.
+UI_DIR_IN_IMAGE = "/opt/deep-life-sci-ui"
+DEPLOY_DOCKERFILE_LINES = [
+    "ENV NODE_VERSION=22",
+    "RUN /storage/install-node.sh",
+    "ADD frontend /opt/deep-life-sci-frontend",
+    "RUN cd /opt/deep-life-sci-frontend"
+    " && npx --yes pnpm@10.5.1 install --frozen-lockfile"
+    " && DEEP_LIFE_SCI_STATIC=1 npx --yes pnpm@10.5.1 build"
+    f" && mv out {UI_DIR_IN_IMAGE}"
+    " && cd / && rm -rf /opt/deep-life-sci-frontend"
+    " /root/.npm /root/.cache /root/.local/share/pnpm",
+    f"ENV DEEP_LIFE_SCI_UI_DIR={UI_DIR_IN_IMAGE}",
+]
 AUTH_MODES = ("oidc", "langsmith")
 
 
@@ -101,6 +119,7 @@ def deploy_config() -> dict:
     config["env"] = DEPLOY_ENV.name
     config["auth"] = DEPLOY_AUTH
     config["http"] = {**config.get("http", {}), **DEPLOY_HTTP}
+    config["dockerfile_lines"] = DEPLOY_DOCKERFILE_LINES
     return config
 
 
@@ -126,7 +145,8 @@ def snapshot_name(name: str) -> str:
     return f"pubmed-py-bio-{name}"
 
 
-OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_ALLOWED_EMAIL_DOMAINS")
+OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "OIDC_SCOPE", "OIDC_TOKEN",
+                 "OIDC_ALLOWED_EMAIL_DOMAINS")
 
 
 def deploy_secrets(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
@@ -163,7 +183,7 @@ def auth_mode(asked: str | None) -> str:
     """`--auth`, or `oidc` when .env configures a provider and `langsmith` when it doesn't."""
     mode = asked or ("oidc" if env_value("OIDC_ISSUER") else "langsmith")
     if mode == "oidc":
-        missing = [key for key in ("OIDC_ISSUER", "OIDC_AUDIENCE") if not env_value(key)]
+        missing = [key for key in ("OIDC_ISSUER", "OIDC_CLIENT_ID") if not env_value(key)]
         if missing:
             die(TAG, f"--auth oidc needs {' and '.join(missing)} in .env; see .env.example.")
     return mode
@@ -371,8 +391,11 @@ def main() -> int:
     if code == 0 and wanted and wanted != current and created:
         resize(host, name, deployment_id, wanted)
     if code == 0:
-        say(TAG, f"try it from the local chat UI:  uv run scripts/dev.py --remote "
-                 f"{deployment_url(host, name)}")
+        url = deployment_url(host, name)
+        if mode == "oidc":
+            say(TAG, f"open the chat UI:  {url}/app/")
+        else:
+            say(TAG, f"try it from the local chat UI:  uv run scripts/dev.py --remote {url}")
     return code
 
 
