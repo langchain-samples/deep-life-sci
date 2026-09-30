@@ -115,6 +115,9 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   in-process state (rate limiters, caches, `_sandbox_names`) is per process, and the
   host `data/` cache is per replica. Deployments resolve Python dependencies from
   `pyproject.toml` bounds, not `uv.lock`; cap beta dependencies there.
+- Deployments load `deep_life_sci/auth.py`; local servers never do. Signed-in users are
+  scoped to threads they own, LangSmith-key callers and Studio are not, and anything a
+  signed-in user needs must be allowed there explicitly: the rest is denied by default.
 - Artifact component dependencies install from the root `package.json` workspace; the
   deploy build runs npm only beside `langgraph.json`.
 - Blocking filesystem and SDK calls in async paths must run through `asyncio.to_thread`.

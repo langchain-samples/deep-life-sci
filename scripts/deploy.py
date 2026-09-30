@@ -4,6 +4,7 @@
     uv run scripts/deploy.py --name my-lab    # a deployment of another name
     uv run scripts/deploy.py --type serverless  # cheaper; the type is fixed at creation
     uv run scripts/deploy.py --size m         # Small, Medium or Large; changeable later
+    uv run scripts/deploy.py --auth langsmith # LangSmith API keys only, no sign-in
     uv run scripts/deploy.py -- --verbose     # anything after `--` goes to `langgraph deploy`
 
 Then point the local chat UI at it with `uv run scripts/dev.py --remote <deployment URL>`.
@@ -43,6 +44,12 @@ Dedicated is the default because the deployment is user-facing: a Serverless one
 scaled to zero makes the first person back wait for it to start. Serverless suits trying the
 agent out.
 
+**Auth** is `oidc` — people sign in with the institution's identity provider, configured by
+the OIDC_* settings in .env (see .env.example and deep_life_sci/auth.py) — when OIDC_ISSUER
+is set, and `langsmith` otherwise: only holders of a LangSmith API key for the workspace
+(Studio, scripts, `dev.py --remote`). LangSmith keys work in both. The deploy config always
+carries the auth handler; `DEEP_LIFE_SCI_AUTH` tells it which mode it is in.
+
 Models are whatever models.yaml says when this runs. Editing it changes a deployment only on
 the next deploy; the hot reload is a local-server convenience.
 """
@@ -79,10 +86,21 @@ API_TYPES = {"serverless": "dev_zero", "dedicated": "prod"}
 DEFAULT_TYPE = "dedicated"
 
 
+# What a deployment adds to `langgraph.json`. None of it applies to a local server, which
+# stays without auth: see deep_life_sci/auth.py for the handler and its two modes.
+DEPLOY_AUTH = {"path": "./deep_life_sci/auth.py:auth", "allow_langsmith_api_keys": True}
+# The store API would hand any signed-in user every thread's uploads; the graph's own store
+# calls do not go through it and are unaffected.
+DEPLOY_HTTP = {"disable_store": True}
+AUTH_MODES = ("oidc", "langsmith")
+
+
 def deploy_config() -> dict:
-    """`langgraph.json`, with `env` naming the file this script writes."""
+    """`langgraph.json`, with `env` naming the file this script writes, plus auth."""
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
     config["env"] = DEPLOY_ENV.name
+    config["auth"] = DEPLOY_AUTH
+    config["http"] = {**config.get("http", {}), **DEPLOY_HTTP}
     return config
 
 
@@ -108,7 +126,10 @@ def snapshot_name(name: str) -> str:
     return f"pubmed-py-bio-{name}"
 
 
-def deploy_secrets(name: str) -> dict[str, str]:
+OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_ALLOWED_EMAIL_DOMAINS")
+
+
+def deploy_secrets(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
     """Everything the deployed server reads from its environment, and nothing else.
 
     Empty values are dropped, as `langgraph deploy` would drop them. Model settings are
@@ -130,8 +151,22 @@ def deploy_secrets(name: str) -> dict[str, str]:
         "NCBI_TOOL": f"{local_tool}_{name.replace('-', '_')}",
         "NCBI_EMAIL": env_value("NCBI_EMAIL"),
         "NCBI_API_KEY": env_value("NCBI_API_KEY"),
+        "DEEP_LIFE_SCI_AUTH": auth_mode,
     }
+    if auth_mode == "oidc":
+        secrets |= {key: env_value(key) for key in OIDC_SETTINGS}
     return {key: value for key, value in secrets.items() if value}
+
+
+
+def auth_mode(asked: str | None) -> str:
+    """`--auth`, or `oidc` when .env configures a provider and `langsmith` when it doesn't."""
+    mode = asked or ("oidc" if env_value("OIDC_ISSUER") else "langsmith")
+    if mode == "oidc":
+        missing = [key for key in ("OIDC_ISSUER", "OIDC_AUDIENCE") if not env_value(key)]
+        if missing:
+            die(TAG, f"--auth oidc needs {' and '.join(missing)} in .env; see .env.example.")
+    return mode
 
 
 def write_deploy_env(secrets: dict[str, str]) -> None:
@@ -255,6 +290,9 @@ def main() -> int:
     parser.add_argument("--size", choices=SIZES, type=str.lower,
                         help="Small, Medium or Large; without it a new deployment starts at "
                         "its type's default size and an existing one keeps its own")
+    parser.add_argument("--auth", choices=AUTH_MODES,
+                        help="oidc (sign-in; the default when .env sets OIDC_ISSUER) or "
+                        "langsmith (API keys only)")
     parser.add_argument("--yes", "-y", action="store_true", help="build a missing snapshot "
                         "without asking")
     parser.add_argument("passthrough", nargs=argparse.REMAINDER,
@@ -277,7 +315,10 @@ def main() -> int:
                  "a deployment creates a tracing project of its own name. Pick another --name.")
 
     sync_deploy_config()
-    secrets = deploy_secrets(name)
+    mode = auth_mode(args.auth)
+    say(TAG, "auth: " + ("sign-in with " + env_value("OIDC_ISSUER") if mode == "oidc"
+                         else "LangSmith API keys only"))
+    secrets = deploy_secrets(name, mode)
     write_deploy_env(secrets)
     say(TAG, f"wrote {DEPLOY_ENV.name}: {', '.join(secrets)}")
     if "NCBI_API_KEY" not in secrets:

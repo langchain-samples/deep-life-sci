@@ -10,7 +10,8 @@
     "agent": "./ui/ui.tsx"
   },
   "http": {
-    "app": "./deep_life_sci/webapp.py:app"
+    "app": "./deep_life_sci/webapp.py:app",
+    "disable_store": true
   },
   "store": {
     "ttl": {
@@ -26,5 +27,9 @@
       "sweep_interval_minutes": 60
     }
   },
-  "env": ".env.deploy"
+  "env": ".env.deploy",
+  "auth": {
+    "path": "./deep_life_sci/auth.py:auth",
+    "allow_langsmith_api_keys": true
+  }
 }

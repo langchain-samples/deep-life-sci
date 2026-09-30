@@ -118,6 +118,11 @@ and the LangSmith Plus plan includes one free. It scales to zero when idle, so t
 a quiet spell is slower. Model calls and sandboxes are billed separately. See
 [pricing](https://www.langchain.com/pricing) for current rates.
 
+*Sign-in:* set `OIDC_ISSUER` and `OIDC_AUDIENCE` in `.env` (see `.env.example`) before
+deploying to let people sign in with your organization's identity provider: Entra ID, Okta,
+Google, or any other OpenID Connect provider. Each person sees only their own conversations.
+Without them, the deployment accepts only LangSmith API keys from your workspace.
+
 Chat with the deployment from your local chat UI, using the deployment URL shown on its
 LangSmith page:
 

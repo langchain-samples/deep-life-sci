@@ -53,9 +53,23 @@ class TestTheImageCanInstallThePackage:
             locked = lock["packages"][workspace]["dependencies"]
             assert locked == ui_manifest["dependencies"], "package-lock.json is stale"
 
-    def test_deploy_config_is_langgraph_json_with_the_deploy_env(self):
+    def test_deploy_config_is_langgraph_json_plus_the_deploy_only_keys(self):
+        """A local server stays without auth; only the deployment gets the handler."""
         assert json.loads(_read("langgraph.deploy.json")) == deploy.deploy_config()
-        assert deploy.deploy_config() == {**CONFIG, "env": ".env.deploy"}
+        assert "auth" not in CONFIG
+        assert deploy.deploy_config() == {
+            **CONFIG,
+            "env": ".env.deploy",
+            "auth": {"path": "./deep_life_sci/auth.py:auth", "allow_langsmith_api_keys": True},
+            "http": {**CONFIG["http"], "disable_store": True},
+        }
+
+    def test_the_auth_handler_the_deploy_config_names_exists(self):
+        module, _, name = deploy.DEPLOY_AUTH["path"].partition(":")
+        assert (REPO / module).is_file()
+        from deep_life_sci import auth
+
+        assert getattr(auth, name) is auth.auth
 
     def test_secrets_files_stay_out_of_the_image(self):
         ignored = set(_read(".dockerignore").split("\n"))
@@ -103,7 +117,26 @@ class TestDeploySecrets:
             "SANDBOX_NAME_PREFIX": "my-lab",
             "NCBI_TOOL": "deep_life_sci_ab12cd34_my_lab",
             "NCBI_EMAIL": "me@example.org",
+            "DEEP_LIFE_SCI_AUTH": "langsmith",
         }
+
+    def test_oidc_settings_ship_only_in_oidc_mode(self, dotenv):
+        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_AUDIENCE="app")
+        assert "OIDC_ISSUER" not in deploy.deploy_secrets("x", "langsmith")
+        secrets = deploy.deploy_secrets("x", "oidc")
+        assert secrets["DEEP_LIFE_SCI_AUTH"] == "oidc"
+        assert secrets["OIDC_ISSUER"] == "https://idp.example"
+        assert secrets["OIDC_AUDIENCE"] == "app"
+
+    def test_auth_mode_follows_env_and_refuses_half_a_provider(self, dotenv):
+        dotenv(LANGSMITH_API_KEY="k")
+        assert deploy.auth_mode(None) == "langsmith"
+        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example")
+        with pytest.raises(SystemExit):
+            deploy.auth_mode(None)
+        dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_AUDIENCE="a")
+        assert deploy.auth_mode(None) == "oidc"
+        assert deploy.auth_mode("langsmith") == "langsmith"
 
     def test_overrides_in_env_win_over_the_main_key(self, dotenv):
         dotenv(
@@ -124,17 +157,19 @@ class TestDeploySecrets:
     def test_no_secret_is_one_the_platform_reserves(self, dotenv):
         reserved = pytest.importorskip("langgraph_cli.deploy").RESERVED_ENV_VARS
         dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="k", NCBI_EMAIL="e",
-               LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u")
-        assert not set(deploy.deploy_secrets("x")) & reserved
+               LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u",
+               OIDC_ISSUER="i", OIDC_AUDIENCE="a", OIDC_ALLOWED_EMAIL_DOMAINS="d")
+        assert not set(deploy.deploy_secrets("x", "oidc")) & reserved
 
     def test_every_secret_is_read_by_the_package(self, dotenv):
         """A secret nothing reads is a setting that silently does nothing."""
         dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="k", NCBI_EMAIL="e",
-               LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u")
+               LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u",
+               OIDC_ISSUER="i", OIDC_AUDIENCE="a", OIDC_ALLOWED_EMAIL_DOMAINS="d")
         source = "".join(
             path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
         )
-        for name in deploy.deploy_secrets("x"):
+        for name in deploy.deploy_secrets("x", "oidc"):
             assert f'"{name}"' in source, name
 
 

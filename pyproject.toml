@@ -37,6 +37,8 @@ dependencies = [
     # is named so the sandbox transport stays declared if that ever moves behind it.
     "langsmith[sandbox]>=0.10.15",
     "python-dotenv>=1.2.2",
+    # Verifying sign-in tokens from any OIDC provider (auth.py). [crypto] for RSA/EC keys.
+    "pyjwt[crypto]>=2.13.0",
     # models.yaml, the per-role model settings (models.py).
     "pyyaml>=6.0.3",
 ]
