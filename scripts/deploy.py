@@ -16,7 +16,7 @@ A wrapper rather than `langgraph deploy` alone, for three reasons:
    belong to one developer's machine: model overrides for an eval sweep, a cache path, this
    install's NCBI `tool`. So a deploy reads `langgraph.deploy.json` instead — the same config
    with `env` pointed at `.env.deploy` — and this script writes `.env.deploy` from the
-   allowlist in `deploy_secrets`, and nothing else.
+   allowlist in `deploy_settings`, and nothing else.
 2. **Keys.** The platform injects a `LANGSMITH_API_KEY` of its own under a reserved name,
    and nothing documents whether it may call the LLM gateway or create sandboxes. Both get
    an explicit key instead, so a deployment never depends on it.
@@ -149,7 +149,7 @@ OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "OIDC_SCOPE",
                  "OIDC_ALLOWED_EMAIL_DOMAINS")
 
 
-def deploy_secrets(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
+def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
     """Everything the deployed server reads from its environment, and nothing else.
 
     Empty values are dropped, as `langgraph deploy` would drop them. Model settings are
@@ -160,7 +160,7 @@ def deploy_secrets(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
     # One `tool` per deployment, derived from this install's own so that two people who
     # both keep the default deployment name are still two callers to NCBI.
     local_tool = env_value("NCBI_TOOL") or "deep_life_sci"
-    secrets = {
+    settings = {
         "LANGSMITH_GATEWAY_API_KEY": env_value("LANGSMITH_GATEWAY_API_KEY") or langsmith_key,
         "LANGSMITH_GATEWAY_ANTHROPIC_URL": env_value("LANGSMITH_GATEWAY_ANTHROPIC_URL"),
         "LANGSMITH_GATEWAY_BASE_URL": env_value("LANGSMITH_GATEWAY_BASE_URL"),
@@ -174,8 +174,8 @@ def deploy_secrets(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
         "DEEP_LIFE_SCI_AUTH": auth_mode,
     }
     if auth_mode == "oidc":
-        secrets |= {key: env_value(key) for key in OIDC_SETTINGS}
-    return {key: value for key, value in secrets.items() if value}
+        settings |= {key: env_value(key) for key in OIDC_SETTINGS}
+    return {key: value for key, value in settings.items() if value}
 
 
 
@@ -189,11 +189,11 @@ def auth_mode(asked: str | None) -> str:
     return mode
 
 
-def write_deploy_env(secrets: dict[str, str]) -> None:
+def write_deploy_env(settings: dict[str, str]) -> None:
     lines = [
         "# Written by scripts/deploy.py on every deploy; edits here are overwritten.",
         "# Every entry becomes a secret on the LangSmith deployment.",
-        *(f"{key}={value}" for key, value in secrets.items()),
+        *(f"{key}={value}" for key, value in settings.items()),
     ]
     DEPLOY_ENV.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -338,10 +338,12 @@ def main() -> int:
     mode = auth_mode(args.auth)
     say(TAG, "auth: " + ("sign-in with " + env_value("OIDC_ISSUER") if mode == "oidc"
                          else "LangSmith API keys only"))
-    secrets = deploy_secrets(name, mode)
-    write_deploy_env(secrets)
-    say(TAG, f"wrote {DEPLOY_ENV.name}: {', '.join(secrets)}")
-    if "NCBI_API_KEY" not in secrets:
+    # Named `settings` rather than `secrets`: most are not secret, and every one of them
+    # becomes a deployment secret. Only their names are ever printed.
+    settings = deploy_settings(name, mode)
+    write_deploy_env(settings)
+    say(TAG, f"wrote {DEPLOY_ENV.name}: {', '.join(sorted(settings))}")
+    if "NCBI_API_KEY" not in settings:
         say(TAG, "warning: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
                  "every user, and without a key that caller is held to 3 requests/sec.")
 
@@ -355,7 +357,7 @@ def main() -> int:
         if deployment is None:
             deployment_type = args.type or DEFAULT_TYPE
             say(TAG, f"creating {name} ({deployment_type})")
-            deployment_id = host.create(name, deployment_type, secrets)
+            deployment_id = host.create(name, deployment_type, settings)
             # Read back rather than assumed: a new deployment starts at its type's default
             # size, and that is the size the platform reports, not one we pick.
             deployment = host.find(name) or {"id": deployment_id}
@@ -379,7 +381,7 @@ def main() -> int:
         current = resize(host, name, deployment_id, wanted) or current
     # After the Deployments API has accepted the name, so that a refusal costs seconds rather
     # than the snapshot build that would otherwise come first.
-    ensure_snapshot(secrets["SANDBOX_SNAPSHOT_NAME"], secrets["LANGSMITH_SANDBOX_API_KEY"],
+    ensure_snapshot(snapshot_name(name), settings["LANGSMITH_SANDBOX_API_KEY"],
                     args.yes)
     say(TAG, f"deploying {name} ({current or 'its default size'})")
 

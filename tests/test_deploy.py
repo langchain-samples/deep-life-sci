@@ -118,7 +118,7 @@ class TestDeploySecrets:
             DEEP_LIFE_SCI_DATA_DIR="/tmp/cache",
             NCBI_API_KEY="",
         )
-        secrets = deploy.deploy_secrets("my-lab")
+        secrets = deploy.deploy_settings("my-lab")
         assert secrets == {
             "LANGSMITH_GATEWAY_API_KEY": "lsv2_personal",
             "LANGSMITH_SANDBOX_API_KEY": "lsv2_personal",
@@ -131,8 +131,8 @@ class TestDeploySecrets:
 
     def test_oidc_settings_ship_only_in_oidc_mode(self, dotenv):
         dotenv(LANGSMITH_API_KEY="k", OIDC_ISSUER="https://idp.example", OIDC_CLIENT_ID="app")
-        assert "OIDC_ISSUER" not in deploy.deploy_secrets("x", "langsmith")
-        secrets = deploy.deploy_secrets("x", "oidc")
+        assert "OIDC_ISSUER" not in deploy.deploy_settings("x", "langsmith")
+        secrets = deploy.deploy_settings("x", "oidc")
         assert secrets["DEEP_LIFE_SCI_AUTH"] == "oidc"
         assert secrets["OIDC_ISSUER"] == "https://idp.example"
         assert secrets["OIDC_CLIENT_ID"] == "app"
@@ -153,14 +153,14 @@ class TestDeploySecrets:
             LANGSMITH_GATEWAY_API_KEY="lsv2_gateway",
             LANGSMITH_SANDBOX_API_KEY="lsv2_sandbox",
         )
-        secrets = deploy.deploy_secrets("x")
+        secrets = deploy.deploy_settings("x")
         assert secrets["LANGSMITH_GATEWAY_API_KEY"] == "lsv2_gateway"
         assert secrets["LANGSMITH_SANDBOX_API_KEY"] == "lsv2_sandbox"
 
     def test_sandbox_prefix_stays_short(self, dotenv):
         dotenv(LANGSMITH_API_KEY="lsv2_personal")
         name = deploy.normalize("A Very Long Deployment Name For Our Lab")
-        prefix = deploy.deploy_secrets(name)["SANDBOX_NAME_PREFIX"]
+        prefix = deploy.deploy_settings(name)["SANDBOX_NAME_PREFIX"]
         assert len(prefix) <= 20 and not prefix.endswith("-")
 
     def test_no_secret_is_one_the_platform_reserves(self, dotenv):
@@ -169,7 +169,7 @@ class TestDeploySecrets:
                LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u",
                OIDC_ISSUER="i", OIDC_CLIENT_ID="c", OIDC_AUDIENCE="a", OIDC_SCOPE="s",
                OIDC_TOKEN="id", OIDC_ALLOWED_EMAIL_DOMAINS="d")
-        assert not set(deploy.deploy_secrets("x", "oidc")) & reserved
+        assert not set(deploy.deploy_settings("x", "oidc")) & reserved
 
     def test_every_secret_is_read_by_the_package(self, dotenv):
         """A secret nothing reads is a setting that silently does nothing."""
@@ -180,7 +180,7 @@ class TestDeploySecrets:
         source = "".join(
             path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
         )
-        for name in deploy.deploy_secrets("x", "oidc"):
+        for name in deploy.deploy_settings("x", "oidc"):
             assert f'"{name}"' in source, name
 
 
