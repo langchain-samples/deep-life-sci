@@ -195,6 +195,14 @@ class TestAccess:
                                  {"metadata": {"owner": "user-2"}})
         assert value["metadata"]["owner"] == "user-1"
 
+    @pytest.mark.parametrize("action", ["create", "read", "search", "update", "delete"])
+    async def test_signed_in_users_cannot_schedule_crons(self, action):
+        """A scheduled run fires without the user's token being checked again, so a cron
+        would outlive the sign-in that made it; the UI never needs one."""
+        with pytest.raises(Auth.exceptions.HTTPException) as caught:
+            await _decide(SIGNED_IN, "crons", action, {"metadata": {}})
+        assert caught.value.status_code == 403
+
     async def test_signed_in_users_may_read_the_assistant_but_not_change_it(self):
         assert (await _decide(SIGNED_IN, "assistants", "read"))[0] is None
         assert (await _decide(SIGNED_IN, "assistants", "search"))[0] is None

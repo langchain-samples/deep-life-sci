@@ -333,9 +333,9 @@ async def own_threads(ctx: Auth.types.AuthContext, value: dict[str, Any]) -> dic
     return _owned(ctx, value) if _is_signed_in_user(ctx) else None
 
 
-@auth.on.crons
-async def own_crons(ctx: Auth.types.AuthContext, value: dict[str, Any]) -> dict | None:
-    return _owned(ctx, value) if _is_signed_in_user(ctx) else None
+# Crons are left to `deny_by_default`: the chat UI never schedules one, and a scheduled run
+# fires without the user's token being checked again, so a signed-in user's cron would go
+# on running agents after their sign-in has expired or their account has been removed.
 
 
 # The chat UI reads the graph's assistant to run it; changing assistants is the workspace's
