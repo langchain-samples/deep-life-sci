@@ -20,10 +20,12 @@ are exactly the three with no portable shell spelling.
 
 `--remote` is for a server made by `scripts/deploy.py`. The UI then talks to it through
 the upstream app's own API passthrough (`src/app/api/[..._path]`), which adds this .env's
-LangSmith key server-side so the key never reaches the browser. The `/ui/*` rewrite follows
-the same `LANGGRAPH_API_URL`; the server serves those assets without authentication. A
-deployment still needs its key, so this is for your own use from localhost, not a way to
-publish the UI.
+LangSmith key server-side so the key never reaches the browser. That makes the passthrough
+as good as the key, so it serves this machine's own page and nothing else: the UI listens on
+127.0.0.1 only, and the route refuses requests from any other origin, so neither another
+machine on the network nor another website open in the browser can borrow it. The `/ui/*`
+rewrite follows the same `LANGGRAPH_API_URL`; the server serves those assets without
+authentication. This is for your own use from localhost, not a way to publish the UI.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (
     REPO_ROOT,
     answering,
+    deps_current,
     die,
     env_value,
     frontend_dir,
@@ -274,9 +277,18 @@ def main() -> int:
     require_setup("dev")
     ui_dir = frontend_dir()
     # Checked rather than installed: starting the app must not install anything. A checkout
-    # from before frontend/ was in the repo lands here after its first pull.
+    # from before frontend/ was in the repo lands here after its first pull, and so does one
+    # whose pull changed a lockfile since setup last installed from it. The artifact
+    # components are bundled by the local agent server, so `--remote` needs only the UI's.
     if not (ui_dir / "node_modules").is_dir():
         die("dev", "the chat UI's dependencies are not installed. Run:  uv run scripts/setup.py")
+    needed = [(ui_dir / "node_modules", ui_dir / "pnpm-lock.yaml")]
+    if not args.remote:
+        needed.append((REPO_ROOT / "node_modules", REPO_ROOT / "package-lock.json"))
+    stale = [lockfile for modules, lockfile in needed if not deps_current(modules, lockfile)]
+    if stale:
+        names = " and ".join(str(lockfile.relative_to(REPO_ROOT)) for lockfile in stale)
+        die("dev", f"{names} changed since setup installed from it. Run:  uv run scripts/setup.py")
 
     # Resolved up front rather than at spawn time, where an unrunnable pnpm would surface
     # only after the agent server had already claimed its port. Re-resolved on every launch

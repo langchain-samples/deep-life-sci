@@ -24,7 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { ArrowRight } from "lucide-react";
 import { useThreads } from "./Thread";
 import { createClient } from "./client";
-import { authFetch, defaultApiUrl } from "@/lib/auth";
+import { authFetch, defaultApiUrl, pinnedConnection } from "@/lib/auth";
 import { toast } from "sonner";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
@@ -190,10 +190,13 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   // No API key field: the browser never holds a LangSmith key. A local server needs none,
   // and `dev.py --remote` adds one server-side in the API passthrough (src/app/api).
 
-  // Determine final values to use, prioritizing URL params then env vars
-  const finalApiUrl = apiUrl || envApiUrl;
-  const finalAssistantId = assistantId || envAssistantId;
-  const finalAuthScheme = authScheme || envAuthScheme || "";
+  // Determine final values to use, prioritizing URL params then env vars. A build the agent
+  // server serves takes none of them from the URL: a link could otherwise point it at
+  // another server, and send the signed-in user's token there (lib/auth.ts).
+  const pinned = pinnedConnection();
+  const finalApiUrl = pinned?.apiUrl ?? (apiUrl || envApiUrl);
+  const finalAssistantId = pinned?.assistantId ?? (assistantId || envAssistantId);
+  const finalAuthScheme = pinned ? "" : authScheme || envAuthScheme || "";
 
   // Show the form if we: don't have an API URL, or don't have an assistant ID
   if (!finalApiUrl || !finalAssistantId) {

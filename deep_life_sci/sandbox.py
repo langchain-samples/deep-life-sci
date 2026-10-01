@@ -75,9 +75,9 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_NAME = os.environ.get("SANDBOX_SNAPSHOT_NAME", "pubmed-py-bio")
 
 # Sandbox names are global to a LangSmith workspace, and thread-keyed ones (`graph.py`) are
-# derived from the thread id alone. A deployment gets a prefix of its own from
-# `scripts/deploy.py`, so its sandboxes, a local server's, and a second deployment's never
-# answer to the same name.
+# derived from the thread id (and its signed-in owner, if any). A deployment gets a prefix of
+# its own from `scripts/deploy.py`, unique to its name, so its sandboxes, a local server's,
+# and a second deployment's never answer to the same name.
 NAME_PREFIX = os.environ.get("SANDBOX_NAME_PREFIX", "").strip() or "pubmed"
 
 

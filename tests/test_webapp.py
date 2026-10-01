@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from langgraph_sdk import Auth
-from starlette.testclient import TestClient
 
-from deep_life_sci import auth, models, paths, webapp
+from deep_life_sci import models, paths
+
+# Starlette ships with the agent server (the dev group), not with this package or the test
+# group, so a test-only install skips this module rather than failing to collect.
+TestClient = pytest.importorskip("starlette.testclient").TestClient
+webapp = pytest.importorskip("deep_life_sci.webapp")
 
 
 @pytest.fixture
@@ -63,16 +66,13 @@ def test_the_config_passes_the_access_token_choice_and_nothing_else(client_for, 
     assert client_for("oidc").get("/app/config.json").json()["token"] == "id"
 
 
-def test_models_needs_a_signed_in_user_when_sign_in_is_on(client_for, monkeypatch):
-    async def authenticate(authorization):
-        if authorization != "Bearer good":
-            raise Auth.exceptions.HTTPException(status_code=401, detail="no")
-        return {"identity": "u"}
-
-    monkeypatch.setattr(auth, "authenticate", authenticate)
-    client = client_for("oidc")
-    assert client.get("/models").status_code == 401
-    assert client.get("/models", headers={"Authorization": "Bearer good"}).status_code == 200
+@pytest.mark.parametrize("headers", [{}, {"X-Api-Key": "lsv2_pt_x"}, {"Authorization": "Bearer t"}],
+                         ids=["anonymous", "langsmith-key", "bearer"])
+def test_models_answers_every_caller_with_sign_in_on(client_for, headers):
+    """`dev.py --remote` sends a LangSmith key, which this route cannot verify; what it says
+    is public anyway, so it answers in both modes alike rather than refusing that caller."""
+    response = client_for("oidc").get("/models", headers=headers)
+    assert response.json() == {"roles": [{"role": r} for r in models.CHAT_ROLES]}
 
 
 def test_an_image_without_the_ui_says_so(client_for):

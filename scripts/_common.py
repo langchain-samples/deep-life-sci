@@ -9,9 +9,11 @@ Nothing here imports `deep_life_sci`: these run before `uv sync` has necessarily
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -119,25 +121,52 @@ def answering(port: int, path: str = "/ok", timeout: float = 5.0) -> bool:
         return False
 
 
+# One .env assignment, read the way python-dotenv reads it, since that is how the server, the
+# CLI and `langgraph deploy` read the same file: leading whitespace and `export ` are allowed,
+# and spaces around `=`; a value may be quoted; an unquoted value ends at a ` #` comment.
+# A line uncommented by deleting only its `#` keeps its indent, and must still count.
+_ASSIGNMENT = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.*)")
+_QUOTED = {"'": re.compile(r"'((?:\\'|[^'])*)'"), '"': re.compile(r'"((?:\\"|[^"])*)"')}
+_ESCAPES = {"'": re.compile(r"\\([\\'])"), '"': re.compile(r'\\([\\"nt])')}
+
+
+def _assignment(line: str) -> tuple[str, str] | None:
+    """`(key, value)` if the line assigns one, else None."""
+    match = _ASSIGNMENT.fullmatch(line)
+    if not match:
+        return None
+    key, raw = match.groups()
+    quoted = _QUOTED.get(raw[:1])
+    found = quoted.match(raw) if quoted else None
+    if found is None:
+        return key, re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+    unescape = {"n": "\n", "t": "\t"}
+    return key, _ESCAPES[raw[0]].sub(lambda m: unescape.get(m[1], m[1]), found[1])
+
+
 def env_value(key: str) -> str:
     """The value of `key` in .env — empty if unset, or still the placeholder.
 
-    `.env.example` ships `KEY=lsv2_sk_...` as a hint, so a trailing `...` counts as unset.
+    `.env.example` ships `KEY=lsv2_sk_...` as a hint, so a trailing `...` counts as unset. A
+    key assigned twice has its last value, as python-dotenv gives it.
     """
     if not ENV_FILE.exists():
         return ""
+    value = ""
     for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        if line.startswith(f"{key}="):
-            value = line[len(key) + 1 :].strip()
-            return "" if value.endswith("...") else value
-    return ""
+        found = _assignment(line)
+        if found and found[0] == key:
+            value = found[1]
+    return "" if value.endswith("...") else value
 
 
 def set_env(key: str, value: str) -> None:
-    """Rewrite the `key=` line in .env, or append it, leaving comments untouched."""
+    """Rewrite the line assigning `key` in .env (the last, which is the one that counts), or
+    append one, leaving comments untouched."""
     lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
-    for i, line in enumerate(lines):
-        if line.startswith(f"{key}="):
+    for i in reversed(range(len(lines))):
+        found = _assignment(lines[i])
+        if found and found[0] == key:
             lines[i] = f"{key}={value}"
             break
     else:
@@ -148,6 +177,30 @@ def set_env(key: str, value: str) -> None:
 def frontend_dir() -> Path:
     """The chat UI, a Next app kept in this repo (see frontend/UPSTREAM.md)."""
     return REPO_ROOT / "frontend"
+
+
+# Written into a node_modules by setup once an install from the lockfile beside it succeeds:
+# that lockfile's digest. A pull that changes the lockfile no longer matches it, which is how
+# setup knows to install again and dev.py knows to say so, rather than either trusting a
+# node_modules that merely exists and starting a UI that fails on a module it lacks.
+DEPS_STAMP = ".deep-life-sci-lockfile"
+
+
+def _lockfile_digest(lockfile: Path) -> str:
+    return hashlib.sha256(lockfile.read_bytes()).hexdigest()
+
+
+def deps_current(node_modules: Path, lockfile: Path) -> bool:
+    """Whether `node_modules` was installed by setup from `lockfile` as it is now."""
+    try:
+        stamp = (node_modules / DEPS_STAMP).read_text(encoding="utf-8").strip()
+        return stamp == _lockfile_digest(lockfile)
+    except OSError:
+        return False
+
+
+def stamp_deps(node_modules: Path, lockfile: Path) -> None:
+    (node_modules / DEPS_STAMP).write_text(_lockfile_digest(lockfile) + "\n", encoding="utf-8")
 
 
 class Pnpm(NamedTuple):

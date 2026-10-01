@@ -41,6 +41,7 @@ from langgraph_sdk.runtime import ServerRuntime
 from deep_life_sci import models
 from deep_life_sci.agent import build_agent
 from deep_life_sci.middleware.perf import install_logging
+from deep_life_sci.ownership import thread_scope
 from deep_life_sci.sandbox import (
     NAME_PREFIX,
     SNAPSHOT_NAME,
@@ -64,26 +65,34 @@ models.report_web_search_problem()
 
 _client = make_client()
 
-# thread_id -> sandbox name. The sandbox itself is looked up fresh each turn, because
+# thread scope -> sandbox name. The sandbox itself is looked up fresh each turn, because
 # the TTL may have reaped it while the user was away and a cached handle would then be
 # pointing at nothing.
 _sandbox_names: dict[str, str] = {}
 
 
-def _sandbox_name(thread_id: str) -> str:
-    """A stable, name-safe sandbox id derived from the thread id."""
-    slug = re.sub(r"[^a-zA-Z0-9-]", "-", thread_id)[:40].strip("-")
+def _sandbox_name(scope: str) -> str:
+    """A stable, name-safe sandbox id derived from a thread's scope (`thread_scope`).
+
+    A thread with a signed-in owner also carries the owner's tag, so a deleted thread's id
+    created again by someone else boots a sandbox of its own. Its dashes are dropped to
+    keep the name within 63 characters behind deploy.py's 16-character prefix.
+    """
+    thread, _, tag = scope.partition(".")
+    slug = re.sub(r"[^a-zA-Z0-9-]", "-", thread)[:40].strip("-")
+    if tag:
+        return f"{NAME_PREFIX}-{slug.replace('-', '')[:32]}-{tag}"
     return f"{NAME_PREFIX}-{slug or 'default'}"
 
 
-def _acquire(thread_id: str):
+def _acquire(scope: str):
     """Return this thread's sandbox, rebooting it if the TTL already reaped it.
 
     Warms a container that is cold before handing it back — the imports run inside it
     while this process is still assembling the graph, so the run's first real command
     finds the libraries already faulted in. See `sandbox.warm` for the measurements.
     """
-    name = _sandbox_names.get(thread_id) or _sandbox_name(thread_id)
+    name = _sandbox_names.get(scope) or _sandbox_name(scope)
 
     try:
         sandbox = _client.get_sandbox(name)
@@ -113,7 +122,7 @@ def _acquire(thread_id: str):
     if cold:
         warm(sandbox)
 
-    _sandbox_names[thread_id] = name
+    _sandbox_names[scope] = name
     return sandbox
 
 
@@ -189,7 +198,8 @@ async def make_graph(config: RunnableConfig, runtime: ServerRuntime):
     if not thread_id or runtime.execution_runtime is None:
         return _build(ResilientSandbox(sandbox=_UnboundSandbox()))
 
-    key = str(thread_id)
+    # The thread id, plus its signed-in owner's tag on a deployment with sign-in.
+    key = thread_scope(config)
     # Self-gated to once per TTL window, so this is a no-op on all but one turn in ten
     # minutes. This is the long-lived process of the three, and the only one where an
     # unbounded cache would accumulate across many threads rather than one run.

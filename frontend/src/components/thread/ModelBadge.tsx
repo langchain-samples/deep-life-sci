@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { Wrench } from "lucide-react";
-import { authFetch, defaultApiUrl } from "@/lib/auth";
+import { authFetch, defaultApiUrl, pinnedConnection } from "@/lib/auth";
 
 /**
  * The main agent's model and effort, under the composer, with a wrench that lists every role.
@@ -62,8 +62,9 @@ function useModels(asked: number): Models | null {
   // chat is talking to.
   const [apiUrl] = useQueryState("apiUrl");
   const [authScheme] = useQueryState("authScheme");
-  const url = apiUrl || defaultApiUrl();
-  const scheme = authScheme || process.env.NEXT_PUBLIC_AUTH_SCHEME;
+  const pinned = pinnedConnection();
+  const url = pinned?.apiUrl ?? (apiUrl || defaultApiUrl());
+  const scheme = pinned ? undefined : authScheme || process.env.NEXT_PUBLIC_AUTH_SCHEME;
   const [models, setModels] = useState<Models | null>(null);
 
   useEffect(() => {

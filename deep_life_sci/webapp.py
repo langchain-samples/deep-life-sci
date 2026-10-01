@@ -16,8 +16,11 @@ what lets those scripts load at all, with no proxy and no CORS. `/app/config.jso
 page its sign-in settings at run time, so one build works with any provider.
 
 Custom routes are outside the platform's auth (`enable_custom_route_auth` would lock the
-sign-in page too), so `/models` checks the bearer token itself when sign-in is on. Without
-sign-in the UI is not served: a browser holds no LangSmith key to reach the API with.
+sign-in page too), and `/models` asks for none in either mode. What it says — which models
+the agent runs, at what effort — is what README.md says too, and a route checking only the
+signed-in half of the platform's callers refused the other half: a LangSmith key, as
+`dev.py --remote` sends one, cannot be verified here. Without sign-in the UI is not served:
+a browser holds no LangSmith key to reach the API with.
 
 Starlette is not declared by this package because nothing outside the API server imports
 this module, and the server always ships it.
@@ -26,14 +29,13 @@ this module, and the server always ships it.
 import asyncio
 import os
 
-from langgraph_sdk import Auth
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from deep_life_sci import auth, models, paths
+from deep_life_sci import models, paths
 
 UI_PATH = "/app"
 
@@ -42,12 +44,7 @@ def _signing_in() -> bool:
     return os.environ.get("DEEP_LIFE_SCI_AUTH", "").strip() == "oidc"
 
 
-async def models_route(request: Request) -> JSONResponse:
-    if _signing_in():
-        try:
-            await auth.authenticate(request.headers.get("authorization"))
-        except Auth.exceptions.HTTPException as exc:
-            return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+async def models_route(_: Request) -> JSONResponse:
     try:
         await asyncio.to_thread(models.refresh)
         # The judge is left out: it grades evals and never runs behind the chat UI.

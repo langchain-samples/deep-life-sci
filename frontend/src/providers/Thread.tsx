@@ -11,7 +11,7 @@ import {
   SetStateAction,
 } from "react";
 import { createClient } from "./client";
-import { defaultApiUrl } from "@/lib/auth";
+import { defaultApiUrl, pinnedConnection } from "@/lib/auth";
 
 interface ThreadContextType {
   getThreads: () => Promise<Thread[]>;
@@ -39,13 +39,18 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     process.env.NEXT_PUBLIC_ASSISTANT_ID;
   const envAuthScheme: string | undefined = process.env.NEXT_PUBLIC_AUTH_SCHEME;
 
-  const [apiUrl] = useQueryState("apiUrl", {
+  const [queryApiUrl] = useQueryState("apiUrl", {
     defaultValue: envApiUrl || "",
   });
-  const [assistantId] = useQueryState("assistantId");
-  const [authScheme] = useQueryState("authScheme", {
+  const [queryAssistantId] = useQueryState("assistantId");
+  const [queryAuthScheme] = useQueryState("authScheme", {
     defaultValue: envAuthScheme || "",
   });
+  // As in providers/Stream.tsx: the build the agent server serves ignores the URL's.
+  const pinned = pinnedConnection();
+  const apiUrl = pinned?.apiUrl ?? queryApiUrl;
+  const assistantId = pinned?.assistantId ?? queryAssistantId;
+  const authScheme = pinned ? "" : queryAuthScheme;
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
 
