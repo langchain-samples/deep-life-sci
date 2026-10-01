@@ -16,14 +16,14 @@
   "store": {
     "ttl": {
       "refresh_on_read": true,
-      "default_ttl": 43200,
+      "default_ttl": 129600,
       "sweep_interval_minutes": 60
     }
   },
   "checkpointer": {
     "ttl": {
       "strategy": "delete",
-      "default_ttl": 43200,
+      "default_ttl": 129600,
       "sweep_interval_minutes": 60
     }
   },

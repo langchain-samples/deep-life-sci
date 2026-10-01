@@ -81,6 +81,14 @@ IDLE_TTL_SECONDS = 600
 # 48h leaves a stopped thread recoverable for a working day either side of a weekend.
 DELETE_AFTER_STOP_SECONDS = 172_800
 
+# How long a deployment keeps a conversation after it was last used, in minutes: 90 days.
+#
+# The server's `delete` TTL (langgraph.json's `checkpointer.ttl`, which must be this same
+# number) counts from a thread's creation and does not refresh with use, so on its own it
+# would delete a conversation someone was still working in. graph.py sets the thread's TTL
+# to this again at the start of every run, which makes it count from the last use instead.
+THREAD_TTL_MINUTES = 90 * 24 * 60
+
 # How long a container may take to boot before we give up on it.
 #
 # A slow boot is a failure, not something to wait out: the user is watching a spinner and
@@ -130,6 +138,7 @@ __all__ = [
     "OUT_DIR",
     "PMC_CACHE",
     "REPO_ROOT",
+    "THREAD_TTL_MINUTES",
     "TRIAL_FILES_DIR",
     "UI_DIR",
     "UPLOAD_DERIVED_DIR",

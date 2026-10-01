@@ -73,6 +73,19 @@ class TestTheImageCanInstallThePackage:
         pin = json.loads(_read("frontend/package.json"))["packageManager"].split("+")[0]
         assert pin in build, "the image's pnpm must match frontend's packageManager pin"
 
+    @pytest.mark.parametrize("config", ["langgraph.json", "langgraph.deploy.json"])
+    def test_the_thread_ttl_is_the_one_each_run_restarts(self, config):
+        """graph.py sets a thread's TTL to `paths.THREAD_TTL_MINUTES` at every run; the
+        config's TTL is what a new thread starts with, so the two must agree. A thread's
+        uploads, in the store, are kept as long as the thread is (README.md)."""
+        settings = json.loads(_read(config))
+        ttl = settings["checkpointer"]["ttl"]
+        assert ttl["strategy"] == "delete"
+        assert ttl["default_ttl"] == paths.THREAD_TTL_MINUTES
+        store = settings["store"]["ttl"]
+        assert store["refresh_on_read"] is True
+        assert store["default_ttl"] == paths.THREAD_TTL_MINUTES
+
     def test_the_auth_handler_the_deploy_config_names_exists(self):
         module, _, name = deploy.DEPLOY_AUTH["path"].partition(":")
         assert (REPO / module).is_file()

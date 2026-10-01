@@ -33,12 +33,14 @@ being blank.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 
 from langchain_core.runnables import RunnableConfig
+from langgraph_sdk import get_client
 from langgraph_sdk.runtime import ServerRuntime
 
-from deep_life_sci import models
+from deep_life_sci import models, paths
 from deep_life_sci.agent import build_agent
 from deep_life_sci.middleware.perf import install_logging
 from deep_life_sci.ownership import thread_scope
@@ -55,6 +57,8 @@ from deep_life_sci.sandbox import (
 from deep_life_sci.sources import cache_io
 
 install_logging()
+
+logger = logging.getLogger(__name__)
 
 # Read and check models.yaml at server start, so a mistake in it stops the server with its
 # message rather than surfacing on the first request.
@@ -136,6 +140,27 @@ def _config_error(exc: SystemExit) -> RuntimeError:
     return RuntimeError(str(exc))
 
 
+# The agent server's own client, made on first use: at import the server may not be up.
+_server = None
+
+
+async def _keep_thread(thread_id: str) -> None:
+    """Restart the thread's TTL, so a deployment deletes it 90 days after its last use
+    rather than after its creation (`paths.THREAD_TTL_MINUTES`).
+
+    Through the server's in-process client, which is not asked for credentials. A failure is
+    logged and the run goes on: the thread is only kept for less long than it should be.
+    A local server enforces no TTL, so there this changes nothing.
+    """
+    global _server
+    try:
+        _server = _server or get_client()
+        await _server.threads.update(thread_id, metadata={}, ttl=paths.THREAD_TTL_MINUTES,
+                                     return_minimal=True)
+    except Exception as exc:  # noqa: BLE001 - housekeeping beside the run, never in its way
+        logger.warning("could not restart the TTL of thread %s: %s", thread_id, exc)
+
+
 def _build(backend):
     try:
         return build_agent(backend)
@@ -204,7 +229,10 @@ async def make_graph(config: RunnableConfig, runtime: ServerRuntime):
     # minutes. This is the long-lived process of the three, and the only one where an
     # unbounded cache would accumulate across many threads rather than one run.
     await cache_io.sweep_if_due()
-    sandbox = await asyncio.to_thread(_acquire, key)
+    # Each run is a use of the thread, which restarts its TTL; beside the sandbox lookup
+    # rather than before it, so it adds no wait.
+    sandbox, _ = await asyncio.gather(asyncio.to_thread(_acquire, key),
+                                      _keep_thread(str(thread_id)))
     # `_acquire` is both the initial lookup and the recovery path: it re-creates the
     # sandbox under the same thread-derived name if the container is gone. Handing it to
     # the backend lets a connection failure mid-run be repaired without the model ever

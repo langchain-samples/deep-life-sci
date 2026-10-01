@@ -133,6 +133,10 @@ uv run scripts/dev.py --remote https://<your-deployment>.langgraph.app
 A deployment accepts requests only with a LangSmith API key from your workspace, so this is
 for your own use.
 
+*Retention:* a deployment deletes conversations after
+90 days without use. To change, change `THREAD_TTL_MINUTES` in `deep_life_sci/paths.py`
+and both `checkpointer.ttl` and `store.ttl` in `langgraph.json` together.
+
 ## Coming soon
 
 * Additional scientific data sources
