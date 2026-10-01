@@ -121,20 +121,10 @@ a quiet spell is slower. Model calls and sandboxes are billed separately. See
 *Sign-in:* set `OIDC_ISSUER` and `OIDC_CLIENT_ID` in `.env` (see `.env.example`) before
 deploying, and the deployment serves the chat UI at `<deployment URL>/app/`, where people
 sign in with your organization's identity provider: Entra ID, Okta, or any other OpenID
-Connect provider. Each person sees only their own conversations. Without them, the
-deployment accepts only LangSmith API keys from your workspace, and you chat with it from
-the local chat UI as below.
+Connect provider. Each person sees only their own conversations.
 
-Registering the app with your identity provider is usually a job for IT. What to ask for:
-
-> An OpenID Connect **single-page application** (authorization code with PKCE, no client
-> secret) with sign-in redirect URI `https://<deployment URL>/app/auth/callback`, sign-out
-> redirect URI `https://<deployment URL>/app/`, and the deployment's URL as a trusted origin
-> (CORS), assigned to the people who should have access. Please send back the client ID and
-> the issuer URL.
-
-Chat with the deployment from your local chat UI, using the deployment URL shown on its
-LangSmith page:
+Without them, the deployment accepts only LangSmith API keys from your workspace, and you chat with it 
+from the local chat UI using the deployment URL shown on its LangSmith page:
 
 ```bash
 uv run scripts/dev.py --remote https://<your-deployment>.langgraph.app
@@ -145,7 +135,6 @@ for your own use.
 
 ## Coming soon
 
-* User authentication for deployments, and a hosted chat UI
 * Additional scientific data sources
 
 ## Disclaimer
