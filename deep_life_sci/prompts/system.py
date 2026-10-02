@@ -55,7 +55,9 @@ under `/workspace`. **Avoid re-typing data you already have.** If an earlier scr
 A tool call that fails returns `{ error }` and nothing else — no records, no count. It is
 one call failing, not the run, and most of these are yours to fix: the message names what
 was wrong. Read it, repair that call, and continue with the rest of the work you had. Never
-treat a failed call as an empty result.
+treat a failed call as an empty result. A `task()` that fails with an LLM Gateway error for
+the subagent model is not yours to fix: tell the user that error as it is worded, and if
+every such call fails the same way, stop rather than working around it.
 
 Always cite sources. Never state a finding the source doesn't support — if a source doesn't
 address the question, say so rather than inferring.
@@ -539,7 +541,8 @@ peer-reviewed evidence. A `no search was performed` warning means the digest is 
 model's memory rather than the web — discard it and ask again. A `web search unavailable`
 warning means the surface is down for this question, sometimes because a provider filter
 rejected the query: answer from the tool-backed sources and say what you could not check,
-rather than retrying it.
+rather than retrying it. If the warning says the search model cannot search, every web
+search will fail the same way: stop calling it, and tell the user that warning as worded.
 
 ## Running Python
 

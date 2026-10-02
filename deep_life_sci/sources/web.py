@@ -45,7 +45,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from deep_life_sci.models import describe, web_search_model
+from deep_life_sci.models import WebSearchUnavailable, describe, web_search_model
 
 # Cost and latency, not politeness — see the module docstring. Eight concurrent searches
 # is already a wide question; more usually means the model is enumerating rather than
@@ -201,11 +201,28 @@ def _warnings(blocks: list[dict], answer: str) -> list[str]:
             status = block.get("status")
             if status not in (None, "completed"):
                 out.append(f"search {status}")
-    if not _searched(blocks):
+    # A search call that names no query still ran. All three searches here report their
+    # queries today (Bedrock's GPT search verified 2026-09-25), but a call without them is
+    # still a search, and calling that "unsourced" would tell the root to discard a sourced
+    # answer.
+    ran = any(b.get("type") in ("web_search_call", "web_search_tool_result") for b in blocks)
+    if not (_searched(blocks) or ran):
         out.append("no search was performed; the answer is unsourced")
     if len(answer) > MAX_ANSWER_CHARS:
         out.append(f"answer truncated to {MAX_ANSWER_CHARS} chars")
     return out
+
+
+def _search_setting() -> str:
+    """`describe('search')` for a failure message, never raising in place of the failure.
+
+    The setting can change mid-call into one that cannot work, and `describe` then raises
+    SystemExit; that is the next call's warning, not this one's.
+    """
+    try:
+        return describe("search")
+    except SystemExit:
+        return "search"
 
 
 @tool
@@ -240,16 +257,23 @@ async def web_search(query: str) -> dict:
     if not (query := query.strip()):
         return _failed(query, "web_search needs a question; an empty query is not one")
 
-    model = web_search_model()
     try:
+        # Inside the `try`: building the model can fail too, and must not kill the run.
+        model = web_search_model()
         async with _SEMAPHORE:
             message = await model.ainvoke(
                 _PROMPT.format(today=date.today().isoformat(), query=query)
             )
+    except (WebSearchUnavailable, SystemExit) as exc:
+        # The search model cannot search at all, or the setting cannot work: models.yaml
+        # hot-reloads, so an edit mid-run reaches here after this run's checks passed, and a
+        # SystemExit out of a PTC tool ends the server's event loop rather than this call.
+        # Either message already names the setting and what works instead.
+        return _failed(query, str(exc))
     except Exception as exc:  # noqa: BLE001 - a failed search must not kill the run
         return _failed(
             query,
-            f"{describe('search')} failed: {exc}. Not every model supports its provider's "
+            f"{_search_setting()} failed: {exc}. Not every model supports its provider's "
             "server-side web search, and a provider content filter can reject a query "
             "outright; if this is a 400, one of those is the likely cause.",
         )

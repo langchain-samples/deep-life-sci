@@ -29,6 +29,13 @@ os.environ["LANGSMITH_OTEL_ENABLED"] = "false"
 # Prevent entry-point imports from loading a developer's configuration during collection.
 os.environ["PYTHON_DOTENV_DISABLED"] = "true"
 
+# Model defaults come from a pinned copy, not the models.yaml a user is told to edit: some
+# assertions assume the shipped OpenAI root, and switching the real file to Claude would
+# fail them for no fault in the code. `TestLoadModelsYaml` still checks the shipped file.
+from deep_life_sci import paths
+
+paths.MODELS_FILE = Path(__file__).parent / "fixtures" / "models.yaml"
+
 
 def pytest_configure(config) -> None:
     """Keep tracing disabled before collection starts."""
@@ -51,6 +58,16 @@ _PROJECT_ENV = (
     "NCBI_TOOL",
     "EVALS_DATASET_PREFIX",
     "SANDBOX_SNAPSHOT_NAME",
+    "SANDBOX_NAME_PREFIX",
+    "LANGSMITH_SANDBOX_API_KEY",
+    "DEEP_LIFE_SCI_AUTH",
+    "OIDC_ISSUER",
+    "OIDC_CLIENT_ID",
+    "OIDC_AUDIENCE",
+    "OIDC_SCOPE",
+    "OIDC_TOKEN",
+    "DEEP_LIFE_SCI_UI_DIR",
+    "OIDC_ALLOWED_EMAIL_DOMAINS",
     "PERF_PROBE",
 )
 

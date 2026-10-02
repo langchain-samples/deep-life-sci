@@ -19,8 +19,8 @@ ClinicalTrials.gov, web search, specialist subagents, and sandboxed analysis.
 
 - Read `tests/test_invariants.py` for contracts that span multiple files.
 - Before changing source clients, read `deep_life_sci/sources/CLAUDE.md`.
-- Before changing setup or the chat stack, read `scripts/CLAUDE.md`; for overlay
-  components, also read `chat-ui-overlay/CLAUDE.md`. These files apply to any coding agent.
+- Before changing setup or the launcher, read `scripts/CLAUDE.md`; before changing the chat
+  UI, read `frontend/CLAUDE.md`. These files apply to any coding agent.
 - Keep `README.md` focused on human setup. Module docstrings explain implementation;
   avoid duplicating them here. See `tests/__init__.py` and `evals/README.md` for test scope.
 
@@ -31,12 +31,15 @@ Run from the repository root:
 ```bash
 uv run scripts/setup.py                # initial setup: environment, deps, snapshot, UI
 uv run scripts/dev.py                  # start API and chat UI; NO_BROWSER=1 skips browser
+uv run scripts/deploy.py               # create or update a LangSmith deployment
+uv run scripts/dev.py --remote <URL>   # local chat UI against a deployment
 uv run agent ["question"]              # one-shot CLI; no question uses the demo
 uv run scripts/build_snapshot.py       # rebuild the scientific Python sandbox image
 uv run langgraph dev                   # API only, port 2024
 uv run --group test pytest             # offline tests
 uv run --group test pytest tests/test_pubmed.py  # example focused check
 uv run ruff check .                    # repository lint configuration in pyproject.toml
+(cd frontend && npx pnpm@10.5.1 lint && npx pnpm@10.5.1 exec tsc --noEmit)  # chat UI checks
 uv run python -m evals.run --structural --limit 3  # live evaluation, no judge model
 uv run python -m evals.sync             # publish dataset seeds to LangSmith
 ```
@@ -63,8 +66,8 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   belong together: the read timeout measures gaps between streamed chunks.
 - Define host paths in `paths.py`, anchored to the repository root. Preserve
   `DEEP_LIFE_SCI_DATA_DIR` overrides and scope cache sweeps to the named cache roots.
-- `.chat-ui/` is an ignored upstream clone patched by setup. Make persistent UI changes
-  in `chat-ui-overlay/` or the setup patches, not only in the generated clone.
+- `frontend/` is the chat UI, this repo's own code since it moved in from agent-chat-ui
+  (`frontend/UPSTREAM.md`). A `.chat-ui/` left on disk is the old clone and is unused.
 
 ## Agent and tool contracts
 
@@ -111,13 +114,33 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 ## Lifecycle and deployment pitfalls
 
 - Graph runs reuse a sandbox by `thread_id`. Graph reads, including reads with a thread
-  ID, use `_UnboundSandbox`; inspecting history must not boot a container.
+  ID, use `_UnboundSandbox`; inspecting history must not boot a container. The factory
+  tells them apart by `ServerRuntime.execution_runtime`, so keep its `runtime` annotated.
+- Deploys go through `scripts/deploy.py`, which reads `langgraph.deploy.json` (keep it
+  equal to `langgraph.json` apart from `env`) and uploads only its secret allowlist. A
+  new runtime setting needs an entry there as well as in `.env.example`.
+- Deployed, API servers and queue workers are separate processes on separate replicas:
+  in-process state (rate limiters, caches, `_sandbox_names`) is per process, and the
+  host `data/` cache is per replica. Deployments resolve Python dependencies from
+  `pyproject.toml` bounds, not `uv.lock`; cap beta dependencies there.
+- With sign-in on, the agent server also serves the chat UI's static build at `/app`
+  (`webapp.py`), built into the image by `deploy.py`'s `dockerfile_lines`. Custom routes
+  are outside the platform's auth, so `webapp.py` checks tokens on `/models` itself.
+- Deployments load `deep_life_sci/auth.py`; local servers never do. Signed-in users are
+  scoped to threads they own, LangSmith-key callers and Studio are not, and anything a
+  signed-in user needs must be allowed there explicitly: the rest is denied by default.
+- Artifact component dependencies install from the root `package.json` workspace; the
+  deploy build runs npm only beside `langgraph.json`.
 - Blocking filesystem and SDK calls in async paths must run through `asyncio.to_thread`.
   Otherwise they stall concurrent runs and can fail under the development server.
 - Preserve per-source rate limits and API guards; they prevent silent wrong answers.
   Read their rationale in the source module before changing them.
 - Cache expiry and sandbox idle lifetime share `paths.py:IDLE_TTL_SECONDS`. Evaluation
   runs can disable cache expiry with `DEEP_LIFE_SCI_CACHE_TTL=off`.
+- A deployment's thread TTL (`checkpointer.ttl`, strategy `delete`) counts from a thread's
+  creation, so `make_graph` restarts it at every run. The store TTL (uploads) is
+  idle-based and refreshed as each run reads them. Both equal `paths.THREAD_TTL_MINUTES`;
+  neither applies under `langgraph dev`. README.md states this to users; keep it in step.
 - `ResilientSandbox` retries assume idempotent commands. Route operations that must run
   exactly once around the retry wrapper. Keep cleanup on failed boots and session exits.
 - Provision scientific libraries through the snapshot. Without one, startup provisioning
@@ -125,6 +148,6 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 - Artifact UI scripts use host-relative URLs. Frontends must proxy `/ui/*` through their
   own origin. Check `/ui/<graph>/entrypoint.js` when artifact cards fail to render.
 - Thread lists must request metadata projections rather than full state: QuickJS snapshots
-  can make each thread response megabytes. Preserve the `patch_thread_search` behavior.
+  can make each thread response megabytes. Preserve the search in `frontend/src/providers/Thread.tsx`.
 - QuickJS middleware and dynamic subagent APIs are beta. Exercise the real compiled-agent
   integration test when changing their wiring or upgrading those dependencies.

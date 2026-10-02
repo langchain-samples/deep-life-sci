@@ -13,20 +13,21 @@ tracing. `scripts/setup.py` prompts once and writes both, so setting them apart 
 edit that later setup runs leave alone. Either way the key is what the OpenAI SDK would
 call an api_key, so it is passed explicitly rather than through the environment.
 
-Each role is configured by three independent env vars, defaulting to the twelve
-constants below:
+Each role is configured by three independent env vars, defaulting to the role's entry in
+`models.yaml` at the repository root (the reasons for those defaults are recorded below):
 
     ROOT_MODEL      SUBAGENT_MODEL      SEARCH_MODEL      JUDGE_MODEL      model id
     ROOT_PROVIDER   SUBAGENT_PROVIDER   SEARCH_PROVIDER   JUDGE_PROVIDER   anthropic|openai
-    ROOT_EFFORT     SUBAGENT_EFFORT     SEARCH_EFFORT     JUDGE_EFFORT     low..max
+    ROOT_EFFORT     SUBAGENT_EFFORT     SEARCH_EFFORT     JUDGE_EFFORT     see `_check_effort`
 
 `search` is the role behind `sources/web.py`'s `web_search` tool: a model with the
 provider's own server-side web search bound to it, called from inside the tool so its
 output lands in the JS heap rather than in root context. It is a role of its own rather
 than a reuse of `subagent` because web search is the one capability that is not uniform
-across ids — the spec differs per gateway path (`WEB_SEARCH_SPECS`), a leaf swap must not
-be able to take the tool out with it, and one search legitimately runs 4x longer than the
-30s a leaf gets (`SEARCH_TIMEOUT_SECONDS`).
+across ids — the spec differs per gateway path (`WEB_SEARCH_SPECS`) and, on Bedrock, per
+model (`_web_search_spec`), a leaf swap must not be able to take the tool out with it,
+and one search legitimately runs 4x longer than the 30s a leaf gets
+(`SEARCH_TIMEOUT_SECONDS`).
 
 Three axes rather than one named profile because they vary independently, and a name that
 covers combinations needs one entry per combination — a root swap, a leaf swap and a
@@ -53,75 +54,28 @@ Two things to know about the native path:
     `/anthropic/v1/v1/messages` returns 501 "path not allow-listed".
   - Model ids are bare there (`claude-sonnet-4-6`). The `anthropic/`-prefixed form is
     only for the OpenAI-compatible path.
+
+Amazon Bedrock is reached through the same gateway and key, with a `bedrock/` prefix and
+the workspace's `AWS_BEARER_TOKEN_BEDROCK` Provider Secret; nothing here holds AWS
+credentials. Claude on Bedrock takes the Anthropic Messages format on the gateway's
+standard endpoint (`_messages_base_url`), so caching and effort work as they do natively;
+every other Bedrock model takes the OpenAI-compatible path. Effort is checked against the
+profile of the model behind the Bedrock id. Bedrock's web search serves only its GPT
+models; any other search model leaves the agent running and each web search returning
+that as its warning (`_web_search_spec`).
 """
 
 import os
+import threading
+from pathlib import Path
+from typing import NamedTuple, get_args
 
 import httpx
+import yaml
+from langchain_core.exceptions import ContextOverflowError
 
 ANTHROPIC_BASE_URL = "https://gateway.smith.langchain.com/anthropic"
 OPENAI_BASE_URL = "https://gateway.smith.langchain.com/v1"
-
-# --- The twelve model settings: four roles x three axes ----------------------------
-# Each is overridden by the identically named env var, so `ROOT_EFFORT=high uv run agent`
-# needs no code change. `""` means unset, which is not the same thing on both paths: on an
-# Anthropic model it is *no thinking at all* rather than a default level (see `_effort`),
-# while an OpenAI model falls back to whatever the provider does by default. A provider
-# belongs to the model beside it: swap the model in the environment without naming a path
-# and the path comes from the new id's form instead (see `_resolve`).
-
-ROOT_MODEL = "openai/gpt-5.6-terra"
-ROOT_PROVIDER = "openai"
-ROOT_EFFORT = "high"
-
-SUBAGENT_MODEL = "openai/gpt-5.6-luna"
-SUBAGENT_PROVIDER = "openai"
-SUBAGENT_EFFORT = "low"
-
-SEARCH_MODEL = "openai/gpt-5.6-luna"
-SEARCH_PROVIDER = "openai"
-SEARCH_EFFORT = "low"
-
-JUDGE_MODEL = "openai/gpt-5.6-terra"
-JUDGE_PROVIDER = "openai"
-JUDGE_EFFORT = "low"
-
-# 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves
-# held fixed: identical 10/15 rubric, same failure set (base-editing-t-cells-convergence,
-# fmt-cdiff-placebo-trials, mrna-vaccines-lung-cancer-trials,
-# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot). terra-high found
-# citations sol-low missed on 3 of 10 citation-checked seeds (egan-ulk1-ampk-sites,
-# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot), going 10/10 vs 7/10 —
-# a citation-completeness win at equal rubric score, hence the default.
-#
-# Earlier baseline evaluations, before switching the root off Sonnet: terra and Sonnet 5
-# hit 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie
-# on quality makes it a cost decision, and every head-to-head so far puts terra far ahead
-# per paper. `ROOT_MODEL=claude-sonnet-5` is the previous default's model,
-# `claude-sonnet-4-6` the one before it, and both share these leaves, so either isolates
-# the root — but watch root context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6
-# there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s -> 76s on
-# semaglutide-weightloss-boxplot).
-#
-# The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
-# dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
-# as terra-low/haiku-4.5 -- every seed, all three evaluators -- for ~40% less on 21% fewer
-# tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
-# rather than a constant: it is one run of 11 examples with no repeats.
-#
-# What did *not* move across sol-low, terra-low and terra-high: the same core rubric seeds
-# fail regardless of root model or effort. That points at a prompt, tool or criteria
-# problem rather than a model-selection one.
-#
-# The older latency measurements above were taken against Haiku leaves.
-# `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
-# has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
-# gateway answers the parameter with a 400.
-#
-# The judge is pinned so that a score change is attributable to the pair under test rather
-# than to the grader, and it is terra rather than luna because luna failed
-# psilocybin-depression-unpublished on two claims that were both false about the answer in
-# front of it. A grader that misreads the answer is a worse confound than a costlier one.
 
 # Per-socket deadlines on the root model's streaming call. Components, not a scalar:
 # the read timeout is the gap *between* chunks, not the whole request, so `read` is a
@@ -221,38 +175,220 @@ WEB_SEARCH_SPECS = {
     "openai": {"type": "web_search", **_SEARCH_TOOL},
 }
 
-# Effort levels the gateway accepts on some model. Validated here only to catch a typo
-# before a sweep boots nine containers; whether a *given* model supports the level is the
-# API's call (Haiku 4.5 rejects the parameter outright, Sonnet 4.6 has no `xhigh`).
-EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Bedrock's own search, for its GPT models on the OpenAI-compatible path, which it takes
+# in place of that path's spec (`_web_search_spec`). Same tool type as OpenAI's.
+# `external_web_access: False` keeps retrieval inside Bedrock's index and cache: left at
+# its default, every page fetch fails unless the key's IAM identity also holds
+# `bedrock-websearch:ExternalWebAccess`, which AmazonBedrockFullAccess does not grant, and
+# the answer degrades without saying so.
+_BEDROCK_WEB_SEARCH_SPEC = {"type": "web_search", "external_web_access": False}
 
 # The two gateway paths, which is all a provider selects here — see the module docstring.
+# `anthropic` is the Anthropic Messages format, `openai` the OpenAI-compatible one; Bedrock
+# is a vendor reached through either (see `_bedrock_parts`), not a path of its own.
 PROVIDERS = ("anthropic", "openai")
 
-# The twelve settings above, indexed for lookup by role and axis.
-DEFAULTS = {
-    "root": {"model": ROOT_MODEL, "provider": ROOT_PROVIDER, "effort": ROOT_EFFORT},
-    "subagent": {
-        "model": SUBAGENT_MODEL,
-        "provider": SUBAGENT_PROVIDER,
-        "effort": SUBAGENT_EFFORT,
-    },
-    "search": {
-        "model": SEARCH_MODEL,
-        "provider": SEARCH_PROVIDER,
-        "effort": SEARCH_EFFORT,
-    },
-    "judge": {"model": JUDGE_MODEL, "provider": JUDGE_PROVIDER, "effort": JUDGE_EFFORT},
-}
+# Bedrock's web search serves its GPT models from this version on, by bare id (so
+# `gpt-5.7-luna` and `gpt-6` pass, `gpt-oss-120b` does not). Claude has none on Bedrock.
+_BEDROCK_SEARCH_MIN_GPT = (5, 4)
+
+# The Bedrock model makers whose ids change anything here: Claude takes the anthropic path,
+# and GPT models are the only ones with Bedrock's web search.
+_BEDROCK_MAKERS = ("anthropic", "openai")
+
+# Why models.yaml's defaults are what they are. Kept here rather than in the file a user
+# edits, so that file stays short.
+#
+# 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves
+# held fixed: identical 10/15 rubric, same failure set (base-editing-t-cells-convergence,
+# fmt-cdiff-placebo-trials, mrna-vaccines-lung-cancer-trials,
+# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot). terra-high found
+# citations sol-low missed on 3 of 10 citation-checked seeds (egan-ulk1-ampk-sites,
+# psilocybin-depression-unpublished, semaglutide-weightloss-boxplot), going 10/10 vs 7/10 —
+# a citation-completeness win at equal rubric score, hence the default.
+#
+# Earlier baseline evaluations, before switching the root off Sonnet: terra and Sonnet 5
+# hit 7/11 rubric and 8/9 citations, failing the same four rubric seeds as each other. A tie
+# on quality makes it a cost decision, and every head-to-head so far puts terra far ahead
+# per paper. `ROOT_MODEL=claude-sonnet-5` is the previous default's model,
+# `claude-sonnet-4-6` the one before it, and both share these leaves, so either isolates
+# the root — but watch root context when you do, because Sonnet 5 costs 1.9-2.6x Sonnet 4.6
+# there (fmt-cdiff 86k -> 214k chars) for fan-outs 22-62% faster (198s -> 76s on
+# semaglutide-weightloss-boxplot).
+#
+# The leaves are luna rather than Haiku 4.5 on cost, with quality held flat. Over the same
+# dataset with the judge pinned, terra-low/luna-low scored the same *cell for cell*
+# as terra-low/haiku-4.5 -- every seed, all three evaluators -- for ~40% less on 21% fewer
+# tokens, at +5s median latency (31.0s -> 36.2s). Read that cost delta as a direction
+# rather than a constant: it is one run of 11 examples with no repeats.
+#
+# What did *not* move across sol-low, terra-low and terra-high: the same core rubric seeds
+# fail regardless of root model or effort. That points at a prompt, tool or criteria
+# problem rather than a model-selection one.
+#
+# The older latency measurements above were taken against Haiku leaves.
+# `SUBAGENT_MODEL=claude-haiku-4-5-20251001` restores them in one variable, but note it also
+# has to drop the effort (`SUBAGENT_EFFORT=`) -- Haiku 4.5 has no effort scale and the
+# gateway answers the parameter with a 400.
+#
+# The judge is pinned so that a score change is attributable to the pair under test rather
+# than to the grader, and it is terra rather than luna because luna failed
+# psilocybin-depression-unpublished on two claims that were both false about the answer in
+# front of it. A grader that misreads the answer is a worse confound than a costlier one.
+
+# The four roles, in the order `summary()` lists them. The first three run behind the chat
+# UI; the judge only grades evals.
+ROLES = ("root", "subagent", "search", "judge")
+CHAT_ROLES = ROLES[:3]
+
+_AXES = ("model", "provider", "effort")
 
 # Every env var this module reads, so `cli.py` and `evals/run.py` can preserve them across
 # their `load_dotenv(override=True)` without hand-maintaining a second copy of the list —
 # a copy that drifts is how a `ROOT_MODEL=...` on the command line silently loses to .env.
-ENV_VARS = tuple(
-    f"{role.upper()}_{axis.upper()}"
-    for role in DEFAULTS
-    for axis in ("model", "provider", "effort")
-)
+# Built from names alone: both entry points import this before `.env` is loaded, so
+# importing this module must not read models.yaml or import `paths` (see `refresh`).
+ENV_VARS = tuple(f"{role.upper()}_{axis.upper()}" for role in ROLES for axis in _AXES)
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a repeated key rather than keeping the last one.
+
+    A second `root:` block pasted under the first would otherwise replace it whole, and a
+    repeated `effort:` would quietly win: the same silent wrong model that `_load` refuses
+    unknown keys to prevent.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                repeated = key in seen
+            except TypeError:  # unhashable; the base class reports that itself
+                continue
+            if repeated:
+                raise yaml.constructor.ConstructorError(
+                    "while reading a mapping", node.start_mark,
+                    f"found `{key}` twice; keep one", key_node.start_mark,
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
+def _text(role: str, axis: str, value: object) -> str:
+    """One scalar out of models.yaml, as the string the env var would have held.
+
+    Empty or absent is `""`, which on the effort axis is a value (no effort), not an
+    omission. A YAML boolean is refused rather than coerced: unquoted `off` or `no` parses
+    as False, and silently reading that as "no effort" would hide a typo for `low`.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        empty = "" if axis == "model" else ", or leave it empty for none"
+        raise SystemExit(
+            f"models.yaml: {role}.{axis} is {value!r}; write it as text (quote it){empty}."
+        )
+    return value.strip().lower() if axis != "model" else value.strip()
+
+
+def _load(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    """(per-role defaults, display labels) from one models.yaml, refused legibly if malformed.
+
+    Structure only. Whether a role's model, gateway path and effort work together is
+    `_resolve`'s check, because env overrides take part in it. Unknown and repeated keys
+    are errors rather than ignored, since a misspelt `subagents:` or a pasted second
+    `root:` would otherwise run the wrong model silently.
+    """
+    try:
+        raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader) or {}
+    except FileNotFoundError:
+        raise SystemExit(f"{path} is missing; it names the model each role runs.") from None
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"{path} is not valid YAML: {exc}") from None
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{path.name} must be a mapping of roles to models.")
+    if unknown := set(raw) - {*ROLES, "labels"}:
+        raise SystemExit(
+            f"{path.name}: unknown key(s) {', '.join(sorted(map(str, unknown)))}. "
+            f"Expected {', '.join(ROLES)} and labels."
+        )
+
+    defaults = {}
+    for role in ROLES:
+        entry = raw.get(role)
+        if not isinstance(entry, dict) or not _text(role, "model", entry.get("model")):
+            raise SystemExit(
+                f"{path.name}: `{role}` needs a `model`, e.g. `model: openai/gpt-5.6-luna`."
+            )
+        if unknown := set(entry) - set(_AXES):
+            raise SystemExit(
+                f"{path.name}: {role} has unknown key(s) "
+                f"{', '.join(sorted(map(str, unknown)))}. Expected {', '.join(_AXES)}."
+            )
+        defaults[role] = {axis: _text(role, axis, entry.get(axis)) for axis in _AXES}
+
+    labels = raw.get("labels") or {}
+    if not isinstance(labels, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
+    ):
+        raise SystemExit(f"{path.name}: `labels` must map model ids to display names.")
+    return defaults, labels
+
+
+class _Config(NamedTuple):
+    stamp: tuple[int, int] | None  # (mtime_ns, size) of the file this was read from
+    defaults: dict[str, dict[str, str]]
+    labels: dict[str, str]
+
+
+_config_state: _Config | None = None
+_config_lock = threading.Lock()
+
+
+def refresh() -> None:
+    """Re-read models.yaml if it changed since the last read. Blocking file I/O.
+
+    The server calls this before every graph build (`graph.make_graph`) and every
+    `GET /models`, through `asyncio.to_thread`, so an edit applies to the next run and to
+    the badge without a restart; the graph is rebuilt per run anyway. Env overrides need a
+    restart only because the process environment does. Everything else reads the file on
+    first use and keeps it (`_config`), so a CLI run or an eval sweep sees one
+    configuration throughout.
+
+    `paths` is imported here rather than at module level because it reads
+    DEEP_LIFE_SCI_DATA_DIR at import, and `cli.py` imports this module before `.env`.
+    """
+    global _config_state
+    from deep_life_sci import paths
+
+    path = paths.MODELS_FILE
+    with _config_lock:
+        try:
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except FileNotFoundError:
+            stamp = None
+        if _config_state is not None and stamp is not None and stamp == _config_state.stamp:
+            return
+        defaults, labels = _load(path)
+        _config_state = _Config(stamp, defaults, labels)
+
+
+def _config() -> _Config:
+    if _config_state is None:
+        refresh()
+    return _config_state
+
+
+def __getattr__(name: str):
+    """`DEFAULTS` and `LABELS`, read from models.yaml on first use rather than at import."""
+    if name == "DEFAULTS":
+        return _config().defaults
+    if name == "LABELS":
+        return _config().labels
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def gateway_key() -> str:
@@ -287,6 +423,60 @@ def check_gateway_config() -> None:
         )
 
 
+def _bedrock_parts(model: str) -> tuple[str, str] | None:
+    """(model maker, bare id) for a `bedrock/` id, or None for any other id.
+
+    Bedrock ids name their maker and carry a version, and cross-region inference profiles
+    add a region: `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0` is
+    ("anthropic", "claude-sonnet-4-5-20250929"), `bedrock/openai.gpt-5.6-terra` is
+    ("openai", "gpt-5.6-terra"). The bare id is what the maker's langchain profile is
+    keyed by, and the maker decides the gateway path.
+
+    The maker is found by name rather than by stripping known regions, so a new region
+    prefix needs no change here, and an ARN is read by the profile or model id it ends in.
+    Only `_BEDROCK_MAKERS` are named; any other id, like `bedrock/amazon.nova-pro-v1:0`, is
+    ("", the id).
+    """
+    vendor, _, rest = model.partition("/")
+    if vendor != "bedrock" or not rest:
+        return None
+    name = rest.rpartition("/")[2]
+    for maker in _BEDROCK_MAKERS:
+        if name.startswith(f"{maker}."):
+            bare = name.removeprefix(f"{maker}.")
+        elif f".{maker}." in name:
+            bare = name.partition(f".{maker}.")[2]
+        else:
+            continue
+        return maker, _without_version(bare)
+    return "", name
+
+
+def _without_version(bare: str) -> str:
+    """A Bedrock model name without its `-v1` or `-v1:0` version suffix."""
+    stem, sep, version = bare.rpartition("-v")
+    number, _, revision = version.partition(":")
+    if sep and number.isdigit() and (not revision or revision.isdigit()):
+        return stem
+    return bare
+
+
+def _bedrock_names_no_model(model: str) -> bool:
+    """A `bedrock/` id with no `maker.model` in it, which only AWS can resolve.
+
+    An application inference profile's ARN ends in an opaque id
+    (`.../application-inference-profile/a1b2c3d4e5f6`), so nothing here can tell Claude
+    from GPT behind it; the id's form says nothing, and the provider setting decides.
+    """
+    parts = _bedrock_parts(model)
+    return parts is not None and not parts[0] and "." not in parts[1]
+
+
+def _is_bedrock_claude(model: str) -> bool:
+    parts = _bedrock_parts(model)
+    return parts is not None and parts[0] == "anthropic"
+
+
 def _infer_provider(model: str) -> str:
     """Which gateway path a model id looks like, or "" when it says nothing.
 
@@ -294,15 +484,30 @@ def _infer_provider(model: str) -> str:
     usually says which one it is: bare ids like `claude-sonnet-4-6` are the
     Anthropic-native path, `provider/model` ids like `openai/gpt-5.6-terra` are the
     OpenAI-compatible one.
+
+    Claude on Bedrock (`bedrock/...anthropic.claude-...`) is the exception: it takes the
+    Anthropic Messages format through the gateway's standard endpoint, which keeps what
+    only `ChatAnthropic` does — prompt caching through `cache_control`, and effort mapped
+    to `output_config` — where the OpenAI-compatible path would drop the first. A Bedrock
+    id that names no model says nothing (`_bedrock_names_no_model`).
     """
+    if _bedrock_names_no_model(model):
+        return ""
     if "/" in model:
-        return "openai"
+        return "anthropic" if _is_bedrock_claude(model) else "openai"
     if model.startswith("claude-"):
         return "anthropic"
     return ""
 
 
-def _provider_for(role: str, model: str, declared: str) -> str:
+def _provider_for(
+    role: str,
+    model: str,
+    declared: str,
+    *,
+    model_source: str = "",
+    provider_source: str = "",
+) -> str:
     """Validate one role's gateway path against the form of its model id.
 
     A named path wins where the form says nothing, which is the escape hatch: a model id in
@@ -310,50 +515,63 @@ def _provider_for(role: str, model: str, declared: str) -> str:
     Where the form *does* say something and the two disagree, that is an error rather than
     a preference — sending an id down the wrong path returns a 501 that reads like an
     outage, or silently drops prompt caching.
+
+    The sources name where each value came from (`models.yaml root.model`, or the env var),
+    so the error points at the line to fix; they default to the env var names.
     """
+    model_source = model_source or f"{role.upper()}_MODEL"
+    provider_source = provider_source or f"{role.upper()}_PROVIDER"
     inferred = _infer_provider(model)
     if declared:
         if declared not in PROVIDERS:
             raise SystemExit(
-                f"{role.upper()}_PROVIDER={declared!r} is not a gateway path. "
+                f"{provider_source}={declared!r} is not a gateway path. "
                 f"Choose one of: {', '.join(PROVIDERS)}"
+            )
+        if inferred and inferred != declared and _is_bedrock_claude(model):
+            raise SystemExit(
+                f"{model_source}={model!r} is Claude on Bedrock, which takes the anthropic "
+                f"path, but {provider_source} says {declared!r}. The OpenAI-compatible path "
+                "drops its prompt caching. Unset the provider, or set it to anthropic."
             )
         if inferred and inferred != declared:
             raise SystemExit(
-                f"{role.upper()}_MODEL={model!r} is a {inferred!r} id but "
-                f"{role.upper()}_PROVIDER says {declared!r}. The paths take different id "
-                "forms: anthropic wants a bare id ('claude-sonnet-5'), openai a prefixed "
-                "one ('openai/gpt-5.6-terra'). Fix one or the other, or unset the "
-                "provider and let the form decide."
+                f"{model_source}={model!r} is a {inferred!r} id but {provider_source} "
+                f"says {declared!r}. The paths take different id forms: anthropic wants a "
+                "bare id ('claude-sonnet-5'), openai a prefixed one ('openai/gpt-5.6-terra'). "
+                "Fix one or the other, or unset the provider and let the form decide."
             )
         return declared
     if inferred:
         return inferred
     raise SystemExit(
-        f"Cannot tell which gateway path {role.upper()}_MODEL={model!r} needs. "
+        f"Cannot tell which gateway path {model_source}={model!r} needs. "
         "Anthropic-native ids are bare ('claude-sonnet-5'); everything else must carry a "
-        f"provider prefix ('openai/gpt-5.6-terra'). Or set {role.upper()}_PROVIDER "
-        f"explicitly to one of: {', '.join(PROVIDERS)}"
+        f"provider prefix ('openai/gpt-5.6-terra'). Or set {provider_source} explicitly to "
+        f"one of: {', '.join(PROVIDERS)}"
     )
 
 
 def _setting(role: str, axis: str) -> str:
-    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else the default.
+    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else models.yaml.
 
     An env var set to whitespace reads as unset rather than as an empty model id. That
     is why `_effort` does **not** go through here: on that axis an explicit empty value
     is a value, not an omission. Only `model` is left, so this reads narrower than it
     looks — do not fold the effort axis back into it.
     """
-    return os.environ.get(f"{role.upper()}_{axis.upper()}", "").strip() or DEFAULTS[role][axis]
+    value = os.environ.get(f"{role.upper()}_{axis.upper()}", "").strip()
+    return value or _config().defaults[role][axis]
+
+
+def _model_source(role: str) -> str:
+    """Where `_setting(role, "model")` came from, for messages that name the line to fix."""
+    name = f"{role.upper()}_MODEL"
+    return name if os.environ.get(name, "").strip() else f"models.yaml {role}.model"
 
 
 def _effort(role: str) -> str:
-    """`{ROLE}_EFFORT`, validated locally.
-
-    Validated here only to catch a typo before a sweep boots nine containers; whether a
-    *given* model supports the level is the API's call (Haiku 4.5 rejects the parameter
-    outright, Sonnet 4.6 has no `xhigh`).
+    """`{ROLE}_EFFORT`, else the role's models.yaml effort. `_check_effort` validates it.
 
     On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
     defaults `thinking` to adaptive whenever effort is set, setting it also turns thinking
@@ -370,29 +588,226 @@ def _effort(role: str) -> str:
     `low` and 400'd, with nothing anywhere saying the clear had been ignored.
     """
     raw = os.environ.get(f"{role.upper()}_EFFORT")
-    effort = (DEFAULTS[role]["effort"] if raw is None else raw).strip().lower()
-    if effort and effort not in EFFORT_LEVELS:
+    return (_config().defaults[role]["effort"] if raw is None else raw).strip().lower()
+
+
+# Every effort level any model here takes. A value outside it is a typo whatever the model.
+_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _profile_levels(model: str, provider: str) -> tuple[str, ...] | None:
+    """The effort levels langchain's model profile lists for this id, or None if unknown.
+
+    Profiles are keyed by the vendor's bare id, so `openai/gpt-5.6-terra` is looked up as
+    `gpt-5.6-terra` in langchain-openai's table and `claude-*` in langchain-anthropic's.
+    Any other vendor has no table. A profile that lists no levels also counts as unknown
+    rather than as "takes no effort": o3's lists none, and o3 takes low through high.
+    """
+    vendor, _, bare = model.rpartition("/")
+    if not vendor and provider == "anthropic":
+        vendor = "anthropic"
+    if bedrock := _bedrock_parts(model):
+        vendor, bare = bedrock
+    levels = _default_profile(vendor, bare).get("reasoning_effort_levels")
+    return tuple(levels) if levels else None
+
+
+def _default_profile(vendor: str, bare: str) -> dict:
+    """langchain's model profile for a vendor's bare id, or {} for any other vendor or id."""
+    try:
+        if vendor == "openai":
+            from langchain_openai.chat_models.base import _get_default_model_profile
+        elif vendor == "anthropic":
+            from langchain_anthropic.chat_models import _get_default_model_profile
+        else:
+            return {}
+        return _get_default_model_profile(bare) or {}
+    except Exception:  # noqa: BLE001 - a private helper; if it moves, there is no profile
+        return {}
+
+
+def _anthropic_efforts() -> tuple[str, ...]:
+    """The levels `ChatAnthropic` accepts at all, read off its `reasoning_effort` Literal.
+
+    Pydantic checks that Literal when the model is built, so anything else fails there
+    with a bare ValidationError naming neither the role nor models.yaml.
+    """
+    from langchain_anthropic import ChatAnthropic
+
+    annotation = ChatAnthropic.model_fields["reasoning_effort"].annotation
+    return tuple(v for arg in get_args(annotation) for v in get_args(arg)) or _EFFORT_LEVELS
+
+
+def _check_effort(model: str, provider: str, effort: str, source: str) -> None:
+    """Refuse an effort this model cannot take, before anything is built or booted.
+
+    Most specific first: the levels the id's langchain profile lists (Sonnet 4.6 has no
+    `xhigh`; GPT-5.6 takes `none`); on the Anthropic-native path, what `ChatAnthropic`
+    accepts at all; otherwise every known level, which still catches a typo before an
+    eval sweep boots a container per example. What none of these knows — a model with no
+    profile that takes no effort, like Haiku 4.5 — is left to the provider, and its 400
+    reaches the user through `middleware/model_errors.py`.
+    """
+    if not effort:
+        return
+    levels, scope = _profile_levels(model, provider), f"for {model!r}"
+    if levels is None and provider == "anthropic":
+        levels, scope = _anthropic_efforts(), "on the Anthropic path"
+    if levels is None:
+        levels, scope = _EFFORT_LEVELS, "for any model"
+    if effort not in levels:
         raise SystemExit(
-            f"{role.upper()}_EFFORT={effort!r} is not an effort level. "
-            f"Choose one of: {', '.join(EFFORT_LEVELS)}"
+            f"{source}={effort!r} is not an effort level {scope}. Choose one of: "
+            f"{', '.join(levels)}; or leave it empty to omit it."
         )
-    return effort
+
+
+def rejection_message(role: str, exc: BaseException) -> str | None:
+    """A provider's HTTP error on one role's model call, as text the user will see.
+
+    None for anything without a status code, so our own bugs stay as they are, and for a
+    context overflow, which deepagents' summarization middleware catches as
+    `ContextOverflowError` to compact the history and retry; a rewrapped one would end the
+    run instead. Everything else is reported as the provider worded it, with the role's
+    settings beside it and no guess at the cause: a 400 is as often a content filter or an
+    unreadable image as a setting. Both SDKs' `APIStatusError` carry `status_code`, so no
+    provider import is needed. Reads the settings without `_resolve`'s checks, so this
+    cannot raise in place of the error it reports.
+    """
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int) or isinstance(exc, ContextOverflowError):
+        return None
+    return (
+        f"The LLM Gateway returned an error for the {role} model's request ({status}): "
+        f"{exc}\n\n({role} role: model {_setting(role, 'model')!r}, effort "
+        f"{_effort(role) or '(none)'!r}, from models.yaml or {role.upper()}_* env vars.)"
+    )
 
 
 def _resolve(role: str) -> tuple[str, str, str]:
-    """(model id, gateway path, effort) for one role, from the env or the defaults above."""
+    """(model id, gateway path, effort) for one role, from the env or models.yaml.
+
+    Refuses any combination that cannot work, naming where each value came from.
+    """
+    upper, defaults = role.upper(), _config().defaults[role]
     model = _setting(role, "model")
-    provider = os.environ.get(f"{role.upper()}_PROVIDER", "").strip().lower()
+    model_source = _model_source(role)
+    from_env = model_source == f"{upper}_MODEL"
+    provider = os.environ.get(f"{upper}_PROVIDER", "").strip().lower()
+    provider_source = f"{upper}_PROVIDER"
     if not provider:
         # A default provider describes the default model it sits beside, so it does not
-        # survive that model being replaced: `ROOT_MODEL=openai/gpt-5.6-terra` alone would
-        # otherwise contradict ROOT_PROVIDER and refuse to run.
-        provider = (
-            DEFAULTS[role]["provider"]
-            if model == DEFAULTS[role]["model"]
-            else _infer_provider(model)
-        )
-    return model, _provider_for(role, model, provider), _effort(role)
+        # survive that model being replaced: `ROOT_MODEL=claude-sonnet-5` alone would
+        # otherwise contradict a models.yaml `provider: openai` and refuse to run.
+        provider = defaults["provider"] if model == defaults["model"] else _infer_provider(model)
+        if not from_env:
+            provider_source = f"models.yaml {role}.provider"
+    provider = _provider_for(
+        role, model, provider, model_source=model_source, provider_source=provider_source
+    )
+    effort = _effort(role)
+    effort_source = (
+        f"{upper}_EFFORT" if f"{upper}_EFFORT" in os.environ else f"models.yaml {role}.effort"
+    )
+    _check_effort(model, provider, effort, effort_source)
+    return model, provider, effort
+
+
+class WebSearchUnavailable(ValueError):
+    """The search role's model has no server-side web search; the message says what does.
+
+    Raised per search rather than at startup: a search model that cannot search takes out
+    web search only, and each `web_search` call returns this as its warning for the root
+    to relay, while the rest of the agent runs.
+    """
+
+
+def _web_search_spec(model: str, provider: str) -> dict:
+    """The server-side web search tool for the search role's model, or why it has none.
+
+    The spec follows the vendor, not only the path: Bedrock serves GPT models on the
+    OpenAI-compatible path with a search of its own, and Claude on Bedrock has no
+    server-side search at all, so the search role cannot run on it.
+    """
+    bedrock = _bedrock_parts(model)
+    if bedrock is None:
+        return WEB_SEARCH_SPECS[provider]
+    maker, bare = bedrock
+    if maker == "openai" and (_gpt_version(bare) or (0, 0)) >= _BEDROCK_SEARCH_MIN_GPT:
+        return _BEDROCK_WEB_SEARCH_SPEC
+    raise WebSearchUnavailable(
+        f"{_model_source('search')}={model!r} cannot be the search model: Bedrock's web "
+        "search runs only on its OpenAI GPT models from GPT-5.4 on (e.g. "
+        "'bedrock/openai.gpt-5.6-luna', in us-east-1, us-east-2 or us-west-2), and Claude "
+        "has no server-side search on Bedrock. Use one of those, or a model on OpenAI or "
+        "Anthropic directly."
+    )
+
+
+def _gpt_version(bare: str) -> tuple[int, int] | None:
+    """(major, minor) of a GPT model name: `gpt-5.6-luna` is (5, 6), `gpt-6` is (6, 0)."""
+    if not bare.startswith("gpt-"):
+        return None
+    major, _, minor = bare.removeprefix("gpt-").partition("-")[0].partition(".")
+    if major.isdigit() and (minor.isdigit() or not minor):
+        return int(major), int(minor or 0)
+    return None
+
+
+def web_search_problem() -> str | None:
+    """Why the search role cannot search, or None. For a warning at startup, not a refusal."""
+    model, provider, _ = _resolve("search")
+    try:
+        _web_search_spec(model, provider)
+    except WebSearchUnavailable as exc:
+        return str(exc)
+    return None
+
+
+_reported_search_problem: str | None = None
+
+
+def report_web_search_problem() -> None:
+    """Log `web_search_problem()` once per distinct reason, on every graph build.
+
+    Per build because models.yaml hot-reloads: a check only at server start misses an edit
+    that takes search out, and the CLI and evals never start the server. Once per reason
+    because reads build the graph too, on every page of a thread's history.
+    """
+    global _reported_search_problem
+    problem = web_search_problem()
+    if problem and problem != _reported_search_problem:
+        print(f"[models] warning: web search is unavailable. {problem}")
+    _reported_search_problem = problem
+
+
+def validate(*roles: str) -> None:
+    """Resolve each role now (all four by default), so a bad setting fails before a boot."""
+    for role in roles or ROLES:
+        _resolve(role)
+
+
+def _messages_base_url(model: str) -> str:
+    """Where an Anthropic Messages request for this id goes.
+
+    A bare Claude id takes the direct `/anthropic` path. A prefixed one (Claude on Bedrock)
+    takes the gateway's standard endpoint, the same host as the OpenAI-compatible `/v1`
+    without it, which accepts `<provider>/<model>` in the Messages format too. The SDK
+    appends `/v1/messages` either way.
+    """
+    if "/" not in model:
+        return _gateway_url("LANGSMITH_GATEWAY_ANTHROPIC_URL", ANTHROPIC_BASE_URL)
+    base = _gateway_url("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL).rstrip("/")
+    return base.removesuffix("/v1")
+
+
+def _gateway_url(name: str, default: str) -> str:
+    """A gateway URL from the environment, else the default.
+
+    Whitespace reads as unset, as in `gateway_key`: both SDKs treat an empty base URL as
+    none and fall back to the provider's own API, which would send it the LangSmith key.
+    """
+    return os.environ.get(name, "").strip() or default
 
 
 def _build(model: str, provider: str, **kwargs):
@@ -401,9 +816,24 @@ def _build(model: str, provider: str, **kwargs):
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
+        # ChatAnthropic types `timeout` as a float and refuses an httpx.Timeout, which is
+        # what ROOT_TIMEOUT is, so an Anthropic root could not be built at all. Its `read`
+        # is the part that matters (the gap between streamed chunks); a float applies that
+        # one value to every phase, so connect and pool wait 30s here rather than 5s.
+        # ChatOpenAI takes the components as they are, so only this path collapses them.
+        if isinstance(timeout := kwargs.get("timeout"), httpx.Timeout):
+            kwargs["timeout"] = timeout.read
+        # langchain-anthropic keys its profiles by bare id, so a Bedrock id matches none,
+        # and without one ChatAnthropic caps output at 4096 tokens and leaves thinking off
+        # when effort is set. It is the same model, so it takes the bare id's profile.
+        # `max_tokens` too: ChatAnthropic reads that default from the model name alone.
+        if (bedrock := _bedrock_parts(model)) and (profile := _default_profile(*bedrock)):
+            kwargs.setdefault("profile", profile)
+            if max_output := profile.get("max_output_tokens"):
+                kwargs.setdefault("max_tokens", max_output)
         return ChatAnthropic(
             model=model,
-            base_url=os.environ.get("LANGSMITH_GATEWAY_ANTHROPIC_URL", ANTHROPIC_BASE_URL),
+            base_url=_messages_base_url(model),
             api_key=key,
             **kwargs,
         )
@@ -412,7 +842,7 @@ def _build(model: str, provider: str, **kwargs):
 
     return ChatOpenAI(
         model=model,
-        base_url=os.environ.get("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL),
+        base_url=_gateway_url("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL),
         api_key=key,
         # Chat Completions cannot carry an image, and `read_file` on a figure returns one:
         # a tool result is a `tool`-role message whose content is text, so the block goes
@@ -476,8 +906,9 @@ def web_search_model(**kwargs):
     """The `search` role, with the provider's server-side web search already bound.
 
     Returns a Runnable rather than a bare chat model, because which spec to bind is
-    decided by the resolved gateway path (see `WEB_SEARCH_SPECS`) and that resolution
-    lives here. `sources/web.py` therefore never has to know which provider it is on.
+    decided by the resolved gateway path and the model behind it (see `_web_search_spec`)
+    and that resolution lives here. `sources/web.py` therefore never has to know which
+    provider it is on.
 
     Binding in this module is also what keeps a provider swap from silently sending the
     wrong spec: `SEARCH_PROVIDER` is an env axis like every other, so a hard-coded spec
@@ -490,14 +921,16 @@ def web_search_model(**kwargs):
     kwargs.setdefault("timeout", SEARCH_TIMEOUT_SECONDS)
     if effort:
         kwargs.setdefault("reasoning_effort", effort)
-    return _build(model, provider, **kwargs).bind_tools([WEB_SEARCH_SPECS[provider]])
+    spec = _web_search_spec(model, provider)
+    return _build(model, provider, **kwargs).bind_tools([spec])
 
 
 def judge_model(**kwargs):
     """The eval judge's model — configured independently of the pair under test.
 
-    See JUDGE_MODEL for why it is pinned. JUDGE_MODEL in the environment overrides it,
-    which is how you check whether a verdict is the answer's fault or the grader's.
+    See the defaults' rationale above for why it is pinned. JUDGE_MODEL in the environment
+    overrides it, which is how you check whether a verdict is the answer's fault or the
+    grader's.
     """
     kwargs.setdefault("timeout", JUDGE_TIMEOUT_SECONDS)
     return _model_for("judge", **kwargs)
@@ -519,6 +952,25 @@ def describe(*roles: str) -> str:
         model, provider, effort = _resolve(role)
         parts.append(f"{role}={model} ({provider}" + (f", {effort})" if effort else ")"))
     return " ".join(parts)
+
+
+def summary(*roles: str) -> list[dict[str, str]]:
+    """Each role's resolved model, for the chat UI's model badge (`webapp.py`).
+
+    Resolved rather than read from models.yaml, so the UI shows what this process actually
+    runs, environment overrides included. `label` falls back to the model id.
+    """
+    rows = []
+    for role in roles or ROLES:
+        model, provider, effort = _resolve(role)
+        rows.append({
+            "role": role,
+            "model": model,
+            "label": _config().labels.get(model) or model,
+            "provider": provider,
+            "effort": effort,
+        })
+    return rows
 
 
 def slug() -> str:

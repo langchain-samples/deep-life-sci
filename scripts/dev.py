@@ -1,8 +1,8 @@
 """Start the local stack: the agent server and the chat UI that renders its artifacts.
 
     uv run scripts/dev.py                    # both, logs interleaved and prefixed
+    uv run scripts/dev.py --remote <URL>     # only the chat UI, against a deployment
     NO_BROWSER=1 uv run scripts/dev.py       # don't open a browser tab
-    AGENT_CHAT_UI=~/src/acu uv run …         # a chat UI checkout of your own
 
 Both halves are required. :2024 serves graph.py; :3000 serves the frontend, and is the
 side carrying the `/ui/*` rewrite that lets artifact components load at all (see the
@@ -17,10 +17,20 @@ still gets the old behaviour of never stopping what this script did not start.
 Python rather than bash because this is the one command Windows users cannot avoid, and
 the three things it needs — a port check, a browser, and killing a process tree on Ctrl-C —
 are exactly the three with no portable shell spelling.
+
+`--remote` is for a server made by `scripts/deploy.py`. The UI then talks to it through
+the upstream app's own API passthrough (`src/app/api/[..._path]`), which adds this .env's
+LangSmith key server-side so the key never reaches the browser. That makes the passthrough
+as good as the key, so it serves this machine's own page and nothing else: the UI listens on
+127.0.0.1 only, and the route refuses requests from any other origin, so neither another
+machine on the network nor another website open in the browser can borrow it. The `/ui/*`
+rewrite follows the same `LANGGRAPH_API_URL`; the server serves those assets without
+authentication. This is for your own use from localhost, not a way to publish the UI.
 """
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import os
 import signal
@@ -35,18 +45,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (
     REPO_ROOT,
     answering,
-    chat_ui_dir,
+    deps_current,
     die,
+    env_value,
+    frontend_dir,
     listening,
     pnpm_or_die,
     require_setup,
     say,
     tool,
 )
-from setup import apply_patches, ensure_overlay, unapplied_patches
 
 # `hideToolCalls` is a nuqs query param, so opening the tab with it set is a default
-# without a patch: nuqs keeps it across thread switches, and the in-app toggle still
+# without a code change: nuqs keeps it across thread switches, and the in-app toggle still
 # turns it back off. Our root turns are almost all thinking + tool_use, so left on the
 # upstream default the transcript is mostly collapsed tool cards.
 UI_URL = "http://localhost:3000?hideToolCalls=true"
@@ -55,7 +66,7 @@ WINDOWS = os.name == "nt"
 _started: list[tuple[str, subprocess.Popen[str]]] = []
 
 
-def spawn(name: str, cwd, argv: list[str]) -> None:
+def spawn(name: str, cwd, argv: list[str], env: dict[str, str] | None = None) -> None:
     """Start a server, its own process group, output pumped through a prefixing thread."""
     exe = tool(argv[0])
     if exe is None:
@@ -76,6 +87,7 @@ def spawn(name: str, cwd, argv: list[str]) -> None:
         text=True,
         bufsize=1,  # line buffered: the prefix appears as the server logs it, not at exit
         errors="replace",
+        env={**os.environ, **env} if env else None,
         **group,
     )
     _started.append((name, proc))
@@ -240,45 +252,58 @@ def _take_over(port: int, label: str, healthy: bool, kill_hint: str) -> bool:
     return _kill_holder(port, holder[0])
 
 
+def remote_ui_env(url: str) -> dict[str, str]:
+    """What the chat UI needs to talk to a deployment instead of :2024.
+
+    Environment rather than `.env.local`, which setup wrote for the local server and which
+    Next reads only for names the environment has not already set.
+    """
+    return {
+        "LANGGRAPH_API_URL": url.rstrip("/"),
+        "LANGSMITH_API_KEY": env_value("LANGSMITH_API_KEY"),
+        "NEXT_PUBLIC_API_URL": "http://localhost:3000/api",
+        "NEXT_PUBLIC_ASSISTANT_ID": "agent",
+    }
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(prog="uv run scripts/dev.py")
+    parser.add_argument("--remote", metavar="URL",
+                        help="start only the chat UI, against this deployment")
+    args = parser.parse_args()
+    if args.remote and not args.remote.startswith(("http://", "https://")):
+        die("dev", f"--remote wants the deployment's URL, starting https://; got {args.remote!r}")
+
     require_setup("dev")
-    ui_dir = chat_ui_dir()
-    if not ui_dir.is_dir():
-        say("dev", f"no chat UI at {ui_dir}")
-        die("dev", "install it (clone, /ui/* rewrite, pnpm install) with:  uv run scripts/setup.py")
+    ui_dir = frontend_dir()
+    # Checked rather than installed: starting the app must not install anything. A checkout
+    # from before frontend/ was in the repo lands here after its first pull, and so does one
+    # whose pull changed a lockfile since setup last installed from it. The artifact
+    # components are bundled by the local agent server, so `--remote` needs only the UI's.
+    if not (ui_dir / "node_modules").is_dir():
+        die("dev", "the chat UI's dependencies are not installed. Run:  uv run scripts/setup.py")
+    needed = [(ui_dir / "node_modules", ui_dir / "pnpm-lock.yaml")]
+    if not args.remote:
+        needed.append((REPO_ROOT / "node_modules", REPO_ROOT / "package-lock.json"))
+    stale = [lockfile for modules, lockfile in needed if not deps_current(modules, lockfile)]
+    if stale:
+        names = " and ".join(str(lockfile.relative_to(REPO_ROOT)) for lockfile in stale)
+        die("dev", f"{names} changed since setup installed from it. Run:  uv run scripts/setup.py")
 
     # Resolved up front rather than at spawn time, where an unrunnable pnpm would surface
-    # only after the agent server had already claimed its port — and after the clone check,
-    # because the pin it matches lives in the clone. Re-resolved on every launch rather than
-    # recorded by setup: it is cheap once the first rung answers, and a path cached here
-    # would go stale the next time the user reinstalls node.
+    # only after the agent server had already claimed its port. Re-resolved on every launch
+    # rather than recorded by setup: it is cheap once the first rung answers, and a path
+    # cached here would go stale the next time the user reinstalls node.
     pnpm = pnpm_or_die("dev")
-
-    # The clone is gitignored, so a patch that is missing from it leaves no trace anywhere:
-    # the feature is simply absent while the repo looks like it shipped. Checking that setup
-    # *ran* does not catch that — a `git pull` bringing a new patch, or an upgraded clone,
-    # both land here already un-patched. Re-applying is cheap and each patch no-ops when its
-    # mark is present, so this is a check by doing rather than a prompt to go and re-run.
-    copied = ensure_overlay()
-    if copied:
-        say("dev", f"refreshed {len(copied)} overlay component(s) in the chat UI")
-
-    missing = unapplied_patches()
-    if missing:
-        say("dev", f"chat UI patches missing ({', '.join(missing)}) — reapplying…")
-        apply_patches()
-        still_missing = unapplied_patches()
-        if still_missing:
-            # The patch functions have already printed what could not be anchored and why.
-            say("dev", f"warning: still unpatched ({', '.join(still_missing)}); "
-                       "starting anyway — see the messages above.")
 
     # Reused only if it *answers*. `langgraph dev` can wedge — bound to the port, alive in
     # the process table, serving nothing — and a port check adopts that as a working
     # server: every request from the chat UI then hangs, so the window shows its thinking
     # indicator forever with no error to explain it. `_take_over` asks before stopping
     # anything, so a :2024 of your own still survives a run of this.
-    if listening(2024) and not _take_over(
+    if args.remote:
+        say("dev", f"agent server: {args.remote}")
+    elif listening(2024) and not _take_over(
         2024, "the agent server", answering(2024),
         'pkill -f "langgraph dev"   '
         '(add -9 if it survives; Windows: taskkill /F /IM langgraph.exe)',
@@ -307,16 +332,21 @@ def main() -> int:
     # timeout: Next compiles that route on first request, so a healthy but cold server can
     # take well over 5s, and calling it dead sends the user off to kill a server that was
     # about to work.
+    ui_kill_hint = (
+        "lsof -ti tcp:3000 | xargs kill   (add -9 if it survives; Windows: npx kill-port 3000)"
+    )
     if listening(3000) and not _take_over(
-        3000, "the chat UI", answering(3000, path="/", timeout=20.0),
-        "lsof -ti tcp:3000 | xargs kill   "
-        "(add -9 if it survives; Windows: npx kill-port 3000)",
+        3000, "the chat UI", answering(3000, path="/", timeout=20.0), ui_kill_hint,
     ):
+        if args.remote:
+            # Reusing it would chat with whichever server it was started against.
+            die("dev", f"a chat UI is already on :3000; stop it to use --remote:  {ui_kill_hint}")
         say("dev", ":3000 already serving — reusing it")
         if not os.environ.get("NO_BROWSER"):
             webbrowser.open(UI_URL)
     else:
-        spawn("ui", ui_dir, [*pnpm.argv, "dev"])
+        spawn("ui", ui_dir, [*pnpm.argv, "dev"],
+              env=remote_ui_env(args.remote) if args.remote else None)
         open_ui_when_ready()
 
     # Both already up. Nothing to supervise and nothing this script may stop — the servers

@@ -1,10 +1,28 @@
 {
+  "python_version": "3.12",
   "dependencies": ["."],
   "graphs": {
     "agent": "./deep_life_sci/graph.py:make_graph"
   },
   "ui": {
     "agent": "./ui/ui.tsx"
+  },
+  "http": {
+    "app": "./deep_life_sci/webapp.py:app"
+  },
+  "store": {
+    "ttl": {
+      "refresh_on_read": true,
+      "default_ttl": 129600,
+      "sweep_interval_minutes": 60
+    }
+  },
+  "checkpointer": {
+    "ttl": {
+      "strategy": "delete",
+      "default_ttl": 129600,
+      "sweep_interval_minutes": 60
+    }
   },
   "env": ".env"
 }
