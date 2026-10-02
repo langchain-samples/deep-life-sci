@@ -5,6 +5,7 @@ import React, {
   useState,
   useEffect,
   useMemo,
+  useCallback,
 } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
@@ -48,6 +49,12 @@ function isProgressEvent(event: unknown): event is ProgressEvent {
 // hook's return, and spreading it to add one would fix whatever it computes per render.
 const RunProgressContext = createContext<string | null>(null);
 export const useRunProgress = (): string | null => useContext(RunProgressContext);
+
+// Stop the run on the server, not just the stream. Runs are submitted to continue when the
+// page disconnects, so a reload, a sign-in redirect or a dropped connection never ends one;
+// Cancel is the only thing that does.
+const CancelRunContext = createContext<() => Promise<void>>(async () => {});
+export const useCancelRun = () => useContext(CancelRunContext);
 
 const useTypedStream = useStream<
   StateType,
@@ -105,6 +112,11 @@ const StreamSession = ({
     assistantId,
     threadId: threadId ?? null,
     fetchStateHistory: true,
+    // Rejoin a run still going after the page reloads: a sign-in renewal that falls back to
+    // a redirect, a refresh, or a stream past the platform's 1-hour connection limit. The run
+    // continues server-side regardless; without this the page shows it stalled until it
+    // ends. Keeps only the run's id, per thread, in sessionStorage.
+    reconnectOnMount: true,
     onCustomEvent: (event, options) => {
       if (isProgressEvent(event)) {
         setRunProgress(event.text);
@@ -148,10 +160,21 @@ const StreamSession = ({
     if (!streamValue.isLoading) setRunProgress(null);
   }, [streamValue.isLoading]);
 
+  // Every active run on the thread rather than the one this page started, so a run it
+  // rejoined after a reload can be cancelled too.
+  const cancelRun = useCallback(async () => {
+    await streamValue.stop();
+    if (!threadId) return;
+    for (const status of ["running", "pending"] as const) {
+      const runs = await client.runs.list(threadId, { status }).catch(() => []);
+      await Promise.all(runs.map((run) => client.runs.cancel(threadId, run.run_id)));
+    }
+  }, [client, streamValue, threadId]);
+
   return (
     <StreamContext.Provider value={streamValue}>
       <RunProgressContext.Provider value={runProgress}>
-        {children}
+        <CancelRunContext.Provider value={cancelRun}>{children}</CancelRunContext.Provider>
       </RunProgressContext.Provider>
     </StreamContext.Provider>
   );

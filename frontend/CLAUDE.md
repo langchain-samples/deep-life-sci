@@ -27,8 +27,10 @@ server. It must not install anything: `scripts/setup.py` owns `pnpm install` her
 - **`DEEP_LIFE_SCI_STATIC=1 pnpm build`** (the deployment image; `scripts/deploy.py`): plain
   files under `/app`, served by the agent server itself (`deep_life_sci/webapp.py`), so the
   page, the API and `/ui/*` share one origin. No rewrite, no route handler, no Node at run
-  time. Try it locally by building it and running a server with the deploy config;
-  `paths.UI_DIR` finds `frontend/out`.
+  time. Try it locally by building it and running a server with the deploy config minus
+  `dockerfile_lines` and `allow_langsmith_api_keys`; `paths.UI_DIR` finds `frontend/out`.
+  The second matters: without the platform's LangSmith auth behind it, that option lets
+  requests with no token through.
 
 ## Sign-in
 
@@ -40,6 +42,11 @@ sends the browser back to `/app/auth/callback`.
 - **Every request to the agent server goes through `createClient` (`src/providers/client.ts`)
   or `authFetch`**, which add the token per request. A new call made with plain `fetch` or a
   `Client` of its own is unauthenticated and gets 401 once deployed.
+- **A run outlives the page.** Submits use `onDisconnect: "continue"`, and the stream
+  rejoins on load (`reconnectOnMount`, which keeps only the run id in `sessionStorage`), so
+  a reload, a sign-in redirect or a dropped connection never ends a run. Cancel ends it on
+  the server through `useCancelRun`, which cancels the thread's active runs. Never go back
+  to `onDisconnect: "cancel"`: it cancels on every disconnect, not just on Cancel.
 - **Tokens stay in memory** (`InMemoryWebStorage`). Don't move them to `localStorage` or
   `sessionStorage`; a reload signs in again, silently while the provider session lasts.
 - The callback navigates client-side (`router.replace`), never by reload: a reload would
