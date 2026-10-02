@@ -15,6 +15,7 @@ What it returns is chosen by what evaluators actually need to judge:
   the regression that matters here.
 * `root_context_chars` — the number CLAUDE.md tracks as the cost proxy. A prompt change
   that quietly starts reading PNGs back into context shows up here first.
+* `source_trace` — compact source operations and identifiers observed in this run.
 
 Sandbox isolation is per-call by default. An evaluator scoring twenty questions against
 one shared container would let question three's leftover files be swept and published
@@ -30,6 +31,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from deep_life_sci.agent import build_agent
+from deep_life_sci.middleware.source_trace import research_trace
 from deep_life_sci.sandbox import sandbox_session
 from deep_life_sci.sources import cache_io
 
@@ -45,6 +47,7 @@ class RunResult:
     root_context_chars: int = 0
     root_turns: int = 0
     tool_calls: list[str] = field(default_factory=list)
+    source_trace: dict[str, Any] = field(default_factory=dict)
     duration_seconds: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
@@ -57,6 +60,7 @@ class RunResult:
             "root_context_chars": self.root_context_chars,
             "root_turns": self.root_turns,
             "tool_calls": self.tool_calls,
+            "source_trace": self.source_trace,
             "duration_seconds": round(self.duration_seconds, 2),
         }
 
@@ -110,7 +114,8 @@ async def run_once(question: str, *, backend=None, quiet: bool = True) -> RunRes
 async def _run(question: str, backend) -> RunResult:
     started = time.monotonic()
     agent = build_agent(backend)
-    state = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})
+    with research_trace() as trace:
+        state = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})
     elapsed = time.monotonic() - started
 
     messages = state.get("messages", [])
@@ -124,5 +129,6 @@ async def _run(question: str, backend) -> RunResult:
         root_context_chars=chars,
         root_turns=turns,
         tool_calls=calls,
+        source_trace=trace.as_dict(),
         duration_seconds=elapsed,
     )
