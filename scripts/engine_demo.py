@@ -194,7 +194,7 @@ def install_counters() -> None:
     in `web.py`'s globals at call time, so this catches every call however the tool was
     bound into the agent — including from inside a subagent or the QuickJS bridge.
 
-    `web_search_model()` is called once per attempt and sits *outside* the tool's try block;
+    `web_search_model()` is called once per attempt, first thing inside the tool's try block;
     `_failed()` is the containment path. Counting both is what separates "every search
     failed" from "the agent never searched", which are very different demo outcomes and
     look identical if you only count failures.

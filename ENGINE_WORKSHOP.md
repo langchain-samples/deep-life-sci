@@ -362,8 +362,8 @@ which is a narrow target. A dead tool needs neither.
 ### How the verdict works
 
 `scripts/engine_demo.py` measures the failure at the tool boundary, not in the answer text.
-`install_counters()` wraps `web.web_search_model` (called once per attempt, outside the
-tool's try block) and `web._failed` (the containment path), tallying both per run through a
+`install_counters()` wraps `web.web_search_model` (called once per attempt, first thing
+inside the tool's try block) and `web._failed` (the containment path), tallying both per run through a
 `ContextVar` so concurrent runs do not mix. A run passes only when `failures == attempts > 0`
 and every reason carries the spec 400.
 
