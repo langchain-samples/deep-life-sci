@@ -101,6 +101,9 @@ def graph_module(monkeypatch):
     monkeypatch.setattr(graph, "_client", Mock())
     monkeypatch.setattr(graph, "_sandbox_names", {})
     monkeypatch.setattr(graph, "warm", Mock())
+    # The agent server's own client, for the TTL each run restarts: no server here.
+    monkeypatch.setattr(graph, "_server", SimpleNamespace(threads=SimpleNamespace(
+        update=AsyncMock())))
     return graph
 
 
@@ -148,6 +151,32 @@ async def test_graph_run_acquires_off_loop_and_retains_recovery_callback(graph_m
     backend = await graph.make_graph({"configurable": {"thread_id": 42}}, RUN)
     assert backend._sandbox is raw
     assert await backend._arebind(0) is True
+
+
+async def test_every_run_restarts_its_threads_ttl_and_a_read_does_not(graph_module, monkeypatch):
+    """The server's `delete` TTL counts from a thread's creation; restarting it at each
+    run makes a deployment delete a conversation 90 days after its last use instead."""
+    from deep_life_sci import paths
+
+    graph = graph_module
+    monkeypatch.setattr(graph, "_acquire", lambda key: SimpleNamespace())
+    monkeypatch.setattr(graph, "build_agent", lambda backend: backend)
+    update = graph._server.threads.update
+    await graph.make_graph({"configurable": {"thread_id": "t-1"}}, RUN)
+    update.assert_awaited_once_with("t-1", metadata={}, ttl=paths.THREAD_TTL_MINUTES,
+                                    return_minimal=True)
+    await graph.make_graph({"configurable": {"thread_id": "t-1"}}, READ)
+    assert update.await_count == 1
+
+
+async def test_a_ttl_that_cannot_be_restarted_does_not_stop_the_run(graph_module, monkeypatch):
+    graph = graph_module
+    raw = SimpleNamespace()
+    monkeypatch.setattr(graph, "_acquire", lambda key: raw)
+    monkeypatch.setattr(graph, "build_agent", lambda backend: backend)
+    graph._server.threads.update.side_effect = RuntimeError("server busy")
+    backend = await graph.make_graph({"configurable": {"thread_id": "t-1"}}, RUN)
+    assert backend._sandbox is raw
 
 
 async def test_a_setting_that_cannot_work_fails_the_run_before_any_sandbox_boots(

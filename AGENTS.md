@@ -132,6 +132,10 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   Read their rationale in the source module before changing them.
 - Cache expiry and sandbox idle lifetime share `paths.py:IDLE_TTL_SECONDS`. Evaluation
   runs can disable cache expiry with `DEEP_LIFE_SCI_CACHE_TTL=off`.
+- A deployment's thread TTL (`checkpointer.ttl`, strategy `delete`) counts from a thread's
+  creation, so `make_graph` restarts it at every run. The store TTL (uploads) is
+  idle-based and refreshed as each run reads them. Both equal `paths.THREAD_TTL_MINUTES`;
+  neither applies under `langgraph dev`. README.md states this to users; keep it in step.
 - `ResilientSandbox` retries assume idempotent commands. Route operations that must run
   exactly once around the retry wrapper. Keep cleanup on failed boots and session exits.
 - Provision scientific libraries through the snapshot. Without one, startup provisioning

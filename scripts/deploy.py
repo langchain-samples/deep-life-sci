@@ -57,6 +57,7 @@ the next deploy; the hot reload is a local-server convenience.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -145,6 +146,17 @@ def snapshot_name(name: str) -> str:
     return f"pubmed-py-bio-{name}"
 
 
+def sandbox_prefix(name: str) -> str:
+    """The deployment's sandbox name prefix: at most 16 characters, and unique to its name.
+
+    Short, because it leads names that also carry a thread id and an owner tag (graph.py).
+    Unique, because a cut-off name alone would give `deep-life-sci-cloud` and
+    `deep-life-sci-cloud-staging` one prefix, and their sandboxes would answer to each
+    other's thread ids; the digest also keeps it from ever equalling the local `pubmed`.
+    """
+    return f"{name[:7].rstrip('-')}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
+
+
 # Read by the Agent Server, not this package. A redeploy stops a revision's queue workers,
 # and a run still going when the grace period ends is resumed on the new revision from its
 # last checkpoint, re-running the step it was in. The default is 180s; research runs often
@@ -174,8 +186,7 @@ def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
         "LANGSMITH_GATEWAY_BASE_URL": env_value("LANGSMITH_GATEWAY_BASE_URL"),
         "LANGSMITH_SANDBOX_API_KEY": env_value("LANGSMITH_SANDBOX_API_KEY") or langsmith_key,
         "SANDBOX_SNAPSHOT_NAME": snapshot_name(name),
-        # Short, because it leads every sandbox name ahead of a 36-character thread id.
-        "SANDBOX_NAME_PREFIX": name[:20].rstrip("-"),
+        "SANDBOX_NAME_PREFIX": sandbox_prefix(name),
         "NCBI_TOOL": f"{local_tool}_{name.replace('-', '_')}",
         "NCBI_EMAIL": env_value("NCBI_EMAIL"),
         "NCBI_API_KEY": env_value("NCBI_API_KEY"),
@@ -347,6 +358,13 @@ def main() -> int:
     mode = auth_mode(args.auth)
     say(TAG, "auth: " + ("sign-in with " + env_value("OIDC_ISSUER") if mode == "oidc"
                          else "LangSmith API keys only"))
+    if mode == "oidc":
+        # Said out loud, because a restriction that did not make it into .env.deploy is
+        # otherwise silent: the deployment just lets every account in.
+        domains = env_value("OIDC_ALLOWED_EMAIL_DOMAINS")
+        say(TAG, "sign-in is open to " + (f"emails at {domains}" if domains else
+                                          "every account the provider will sign in "
+                                          "(OIDC_ALLOWED_EMAIL_DOMAINS is unset)"))
     # Named `settings` rather than `secrets`: most are not secret, and every one of them
     # becomes a deployment secret. Only their names are ever printed.
     settings = deploy_settings(name, mode)

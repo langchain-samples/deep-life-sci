@@ -86,6 +86,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
+from deep_life_sci.ownership import thread_scope
 from deep_life_sci.paths import UPLOAD_DERIVED_DIR, UPLOAD_DIR
 
 logger = logging.getLogger(__name__)
@@ -264,15 +265,17 @@ def _suffix(name: str) -> str:
 
 
 def _thread_key() -> str:
-    """Store namespace scope. Falls back to a constant for the CLI, which has no thread.
+    """Store namespace scope: the thread, and its signed-in owner when it has one (see
+    ownership.py). Falls back to a constant for the CLI, which has no thread.
 
     `Runtime` deliberately carries no `config` (unlike the `ToolRuntime` the tool-call
     hooks get), so the thread id has to come from the ambient runnable config.
     """
     try:
-        return str((get_config().get("configurable") or {}).get("thread_id") or "default")
+        config = get_config()
     except Exception:  # noqa: BLE001 - outside a runnable context entirely
         return "default"
+    return thread_scope(config)
 
 
 def _human_size(size: Any) -> str:

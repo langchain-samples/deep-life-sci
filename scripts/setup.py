@@ -44,6 +44,7 @@ from _common import (
     ENV_FILE,
     LOCAL_NODE_DIR,
     REPO_ROOT,
+    deps_current,
     die,
     env_value,
     frontend_dir,
@@ -51,6 +52,7 @@ from _common import (
     run,
     say,
     set_env,
+    stamp_deps,
     tool,
     use_local_node,
 )
@@ -339,7 +341,7 @@ def ensure_snapshot() -> None:
 #
 # The frontend is this repo's own `frontend/`, a Next app that began as agent-chat-ui (see
 # frontend/UPSTREAM.md). Setup only installs its dependencies and points it at the local
-# server; the deploy image leaves it out (.dockerignore).
+# server; the deploy image builds it for itself (scripts/deploy.py).
 
 
 def node_major() -> int | None:
@@ -457,11 +459,16 @@ def ensure_frontend() -> None:
         say(TAG, "note: .chat-ui/ is the old cloned chat UI and is no longer used; "
                  "delete it whenever you like.")
 
-    if (ui_dir / "node_modules").is_dir():
+    # Installed again whenever the lockfile has changed since the last install, not only
+    # when there is none: a pull that adds a dependency must reach node_modules too.
+    modules, lockfile = ui_dir / "node_modules", ui_dir / "pnpm-lock.yaml"
+    if deps_current(modules, lockfile):
         return
     pnpm = pnpm_or_die(TAG)
-    say(TAG, "installing frontend dependencies (~1 min)…")
+    say(TAG, "updating frontend dependencies…" if modules.is_dir()
+        else "installing frontend dependencies (~1 min)…")
     run([*pnpm.argv, "install", "--frozen-lockfile", "--silent"], cwd=ui_dir)
+    stamp_deps(modules, lockfile)
 
 
 def ensure_artifact_deps() -> None:
@@ -476,12 +483,14 @@ def ensure_artifact_deps() -> None:
     beside langgraph.json and nowhere else, so that is where the lockfile has to be for the
     image to get these too.
     """
-    if (REPO_ROOT / "node_modules" / "xlsx").is_dir():
+    modules, lockfile = REPO_ROOT / "node_modules", REPO_ROOT / "package-lock.json"
+    if deps_current(modules, lockfile):
         return
     # `--silent` below prints nothing at all until it finishes, so without the duration
     # this is a dead terminal for minutes at the very last step of setup.
     say(TAG, "installing artifact component dependencies (a few minutes)…")
     run(["npm", "ci", "--silent"], cwd=REPO_ROOT)
+    stamp_deps(modules, lockfile)
 
 
 def main() -> int:

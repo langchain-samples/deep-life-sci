@@ -6,10 +6,11 @@ export function createClient(apiUrl: string, authScheme: string | undefined) {
     apiUrl,
     // Never an API key from the environment: the browser holds none (frontend/CLAUDE.md).
     apiKey: null,
-    // Read per request, so a token renewed mid-session is the one sent.
-    onRequest: (_url, init) => ({
+    // Read per request, so a token renewed mid-session is the one sent, and added only for
+    // a request to this page's own origin (lib/auth.ts).
+    onRequest: async (url, init) => ({
       ...init,
-      headers: withAuthHeader(new Headers(init.headers)),
+      headers: await withAuthHeader(url, new Headers(init.headers)),
     }),
     ...(authScheme && {
       defaultHeaders: {

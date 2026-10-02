@@ -73,6 +73,19 @@ class TestTheImageCanInstallThePackage:
         pin = json.loads(_read("frontend/package.json"))["packageManager"].split("+")[0]
         assert pin in build, "the image's pnpm must match frontend's packageManager pin"
 
+    @pytest.mark.parametrize("config", ["langgraph.json", "langgraph.deploy.json"])
+    def test_the_thread_ttl_is_the_one_each_run_restarts(self, config):
+        """graph.py sets a thread's TTL to `paths.THREAD_TTL_MINUTES` at every run; the
+        config's TTL is what a new thread starts with, so the two must agree. A thread's
+        uploads, in the store, are kept as long as the thread is (README.md)."""
+        settings = json.loads(_read(config))
+        ttl = settings["checkpointer"]["ttl"]
+        assert ttl["strategy"] == "delete"
+        assert ttl["default_ttl"] == paths.THREAD_TTL_MINUTES
+        store = settings["store"]["ttl"]
+        assert store["refresh_on_read"] is True
+        assert store["default_ttl"] == paths.THREAD_TTL_MINUTES
+
     def test_the_auth_handler_the_deploy_config_names_exists(self):
         module, _, name = deploy.DEPLOY_AUTH["path"].partition(":")
         assert (REPO / module).is_file()
@@ -123,7 +136,7 @@ class TestDeploySecrets:
             "LANGSMITH_GATEWAY_API_KEY": "lsv2_personal",
             "LANGSMITH_SANDBOX_API_KEY": "lsv2_personal",
             "SANDBOX_SNAPSHOT_NAME": "pubmed-py-bio-my-lab",
-            "SANDBOX_NAME_PREFIX": "my-lab",
+            "SANDBOX_NAME_PREFIX": deploy.sandbox_prefix("my-lab"),
             "NCBI_TOOL": "deep_life_sci_ab12cd34_my_lab",
             "NCBI_EMAIL": "me@example.org",
             "DEEP_LIFE_SCI_AUTH": "langsmith",
@@ -162,7 +175,17 @@ class TestDeploySecrets:
         dotenv(LANGSMITH_API_KEY="lsv2_personal")
         name = deploy.normalize("A Very Long Deployment Name For Our Lab")
         prefix = deploy.deploy_settings(name)["SANDBOX_NAME_PREFIX"]
-        assert len(prefix) <= 20 and not prefix.endswith("-")
+        assert len(prefix) <= 16 and not prefix.startswith("-")
+
+    def test_sandbox_prefixes_differ_wherever_names_do(self):
+        """Cut short, `deep-life-sci-cloud-staging` was `deep-life-sci-cloud`, and the two
+        deployments' sandboxes answered to each other's thread ids."""
+        names = ["deep-life-sci-cloud", "deep-life-sci-cloud-staging", "deep-life-sci-cloud-2",
+                 "pubmed", "pubmed-agent-production", "pubmed-agent-production-2"]
+        prefixes = {deploy.sandbox_prefix(name) for name in names}
+        assert len(prefixes) == len(names)
+        # Nor ever the prefix a local server uses.
+        assert "pubmed" not in prefixes
 
     def test_no_secret_is_one_the_platform_reserves(self, dotenv):
         reserved = pytest.importorskip("langgraph_cli.deploy").RESERVED_ENV_VARS
@@ -271,3 +294,34 @@ def test_thread_sandboxes_carry_the_name_prefix(monkeypatch):
 
     monkeypatch.setattr(graph, "NAME_PREFIX", "my-lab")
     assert graph._sandbox_name("01a0eec7-8e09") == "my-lab-01a0eec7-8e09"
+
+
+def test_a_signed_in_owners_sandbox_names_fit_and_differ_by_owner(monkeypatch):
+    """Thread ids are client-chosen, and a deleted thread's id can be created again by
+    someone else; that must not reach the sandbox the first owner left behind."""
+    import langsmith.sandbox
+
+    from deep_life_sci import ownership, sandbox
+
+    monkeypatch.setattr(langsmith.sandbox, "SandboxClient", Mock())
+    monkeypatch.setattr(sandbox, "SandboxClient", Mock())
+    from deep_life_sci import graph
+
+    monkeypatch.setattr(graph, "NAME_PREFIX", deploy.sandbox_prefix("deep-life-sci-cloud"))
+    thread = "0f6b2b0e-3c1a-4c2e-9e57-6a8e5d1b2c3d"
+
+    def scope(caller: str | None, *, signed_in: bool = True, **metadata: str) -> str:
+        configurable = {"thread_id": thread}
+        if caller:
+            configurable["langgraph_auth_user_id"] = caller
+            configurable["langgraph_auth_permissions"] = [ownership.USER] if signed_in else []
+        return ownership.thread_scope({"configurable": configurable, "metadata": metadata})
+
+    alice, bob = graph._sandbox_name(scope("alice")), graph._sandbox_name(scope("bob"))
+    assert len({alice, bob, graph._sandbox_name(scope(None))}) == 3
+    assert len(alice) <= 63 and "alice" not in alice
+    # A workspace member running alice's thread keeps to alice's sandbox; a signed-in user
+    # cannot claim it by naming her as owner in the run's metadata.
+    member = scope("studio-user", signed_in=False, owner="alice")
+    assert graph._sandbox_name(member) == alice
+    assert graph._sandbox_name(scope("bob", owner="alice")) == bob

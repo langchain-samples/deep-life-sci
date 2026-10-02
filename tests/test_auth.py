@@ -9,7 +9,11 @@ settings to import, so it is not used here.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -191,6 +195,14 @@ class TestAccess:
                                  {"metadata": {"owner": "user-2"}})
         assert value["metadata"]["owner"] == "user-1"
 
+    @pytest.mark.parametrize("action", ["create", "read", "search", "update", "delete"])
+    async def test_signed_in_users_cannot_schedule_crons(self, action):
+        """A scheduled run fires without the user's token being checked again, so a cron
+        would outlive the sign-in that made it; the UI never needs one."""
+        with pytest.raises(Auth.exceptions.HTTPException) as caught:
+            await _decide(SIGNED_IN, "crons", action, {"metadata": {}})
+        assert caught.value.status_code == 403
+
     async def test_signed_in_users_may_read_the_assistant_but_not_change_it(self):
         assert (await _decide(SIGNED_IN, "assistants", "read"))[0] is None
         assert (await _decide(SIGNED_IN, "assistants", "search"))[0] is None
@@ -213,3 +225,166 @@ class TestAccess:
         filters, value = await _decide(caller, resource, action, {"metadata": {}})
         assert filters is None
         assert value == {"metadata": {}}
+
+
+# --- the provider's keys: cache, outages, and keys or tokens that do not fit ---------------
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def provider(monkeypatch):
+    """An issuer whose availability and published keys a test controls, cached on a clock
+    the test moves. `calls` records every request that reaches it."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    state = SimpleNamespace(keys=[_jwk(key, "k1")], down=False, calls=[], discovery=None,
+                            clock=_Clock(), key=key)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        state.calls.append(request.url.path)
+        if state.down:
+            return httpx.Response(503)
+        if request.url.path == "/.well-known/openid-configuration":
+            return state.discovery or httpx.Response(
+                200, json={"issuer": ISSUER, "jwks_uri": f"{ISSUER}/jwks"})
+        return httpx.Response(200, json={"keys": state.keys})
+
+    monkeypatch.setattr(auth, "_keys", auth._SigningKeys(
+        transport=httpx.MockTransport(handle), clock=state.clock))
+    monkeypatch.setenv("DEEP_LIFE_SCI_AUTH", "oidc")
+    monkeypatch.setenv("OIDC_ISSUER", ISSUER)
+    monkeypatch.setenv("OIDC_AUDIENCE", CLIENT_ID)
+
+    def mint(signing_key=key, kid="k1", algorithm="RS256") -> str:
+        now = int(time.time())
+        body = {"iss": ISSUER, "aud": CLIENT_ID, "sub": "user-1", "iat": now, "exp": now + 300}
+        return jwt.encode(body, signing_key, algorithm=algorithm, headers={"kid": kid})
+
+    state.mint = mint
+    return state
+
+
+def _forged(header: dict[str, Any]) -> str:
+    """A token with this header and a signature nobody made."""
+    def part(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    payload = {"iss": ISSUER, "aud": CLIENT_ID, "sub": "x", "exp": int(time.time()) + 300}
+    return ".".join([part(json.dumps(header).encode()), part(json.dumps(payload).encode()),
+                     part(b"not a signature")])
+
+
+class TestSigningKeys:
+    async def test_an_outage_past_the_ttl_keeps_signed_in_users_signed_in(self, provider):
+        await _authenticate(provider.mint())
+        provider.clock.now += auth.KEYS_TTL_SECONDS + 1
+        provider.down, provider.calls[:] = True, []
+        users = await asyncio.gather(*(_authenticate(provider.mint()) for _ in range(10)))
+        assert all(user["identity"] == "user-1" for user in users)
+        # One attempt for all ten, not one each in turn behind a lock.
+        assert len(provider.calls) == 1
+        await _authenticate(provider.mint())
+        assert len(provider.calls) == 1
+
+    async def test_failed_refreshes_are_throttled_like_successful_ones(self, provider):
+        provider.down = True
+        for _ in range(3):
+            assert "could not fetch" in await _refused(provider.mint())
+        assert len(provider.calls) == 1
+        provider.clock.now += auth.REFETCH_SECONDS
+        provider.down = False
+        await _authenticate(provider.mint())
+
+    async def test_forged_key_ids_in_an_outage_cost_one_request_a_window(self, provider):
+        await _authenticate(provider.mint())
+        provider.clock.now += auth.REFETCH_SECONDS + 1
+        provider.down, provider.calls[:] = True, []
+        forged = [provider.mint(kid=f"forged-{i}") for i in range(10)]
+        for outcome in await asyncio.gather(*(_authenticate(t) for t in forged),
+                                            return_exceptions=True):
+            assert isinstance(outcome, Auth.exceptions.HTTPException)
+            assert outcome.status_code == 401
+        assert len(provider.calls) == 1
+        await _authenticate(provider.mint())  # the real key still verifies
+
+    async def test_a_key_rotated_out_stops_verifying_once_a_refresh_succeeds(self, provider):
+        await _authenticate(provider.mint())
+        newer = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        provider.keys = [_jwk(newer, "k2")]
+        provider.clock.now += auth.KEYS_TTL_SECONDS + 1
+        assert "does not publish" in await _refused(provider.mint())
+        await _authenticate(provider.mint(signing_key=newer, kid="k2"))
+
+    async def test_cached_keys_give_out_after_a_day_of_outage(self, provider):
+        await _authenticate(provider.mint())
+        provider.clock.now += auth.MAX_STALE_SECONDS + 1
+        provider.down = True
+        assert "could not fetch" in await _refused(provider.mint())
+
+    async def test_keys_pyjwt_cannot_load_are_skipped_not_fatal(self, provider):
+        provider.keys = [
+            {"kty": "OKP", "crv": "X25519", "kid": "ecdh", "x": "aGVsbG8"},
+            {"kty": "OKP", "crv": "Ed448", "kid": "ed448-no-x"},
+            {"kty": "RSA", "kid": "x5c-only", "x5c": ["MIIBIjANBg"]},
+            {"kid": "no-kty"},
+            {"kty": "EC", "crv": "P-256", "kid": "garbled", "x": "!!", "y": "!!"},
+            "not even an object",
+            *provider.keys,
+        ]
+        await _authenticate(provider.mint())
+
+    @pytest.mark.parametrize("discovery", [
+        httpx.Response(200, text="<html>Sign in</html>"),
+        httpx.Response(200, json=["not", "an", "object"]),
+        httpx.Response(200, json={"issuer": ISSUER}),
+        httpx.Response(200, json={"issuer": ISSUER, "jwks_uri": "not a url"}),
+    ], ids=["html", "a-list", "no-jwks-uri", "bad-jwks-uri"])
+    async def test_a_discovery_document_that_cannot_be_used_is_a_401(self, provider, discovery):
+        provider.discovery = discovery
+        assert "could not fetch" in await _refused(provider.mint())
+
+    async def test_no_algorithm_and_key_pairing_escapes_as_an_error(self, provider):
+        """Every algorithm against every kind of key, with and without the key naming its
+        own algorithm: a 401 unless the token really is signed with that key."""
+        from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519
+
+        private = {
+            "rsa": provider.key,
+            "p256": ec.generate_private_key(ec.SECP256R1()),
+            "p384": ec.generate_private_key(ec.SECP384R1()),
+            "p521": ec.generate_private_key(ec.SECP521R1()),
+            "ed25519": ed25519.Ed25519PrivateKey.generate(),
+            "ed448": ed448.Ed448PrivateKey.generate(),
+        }
+        signs_with = {"rsa": "RS256", "p256": "ES256", "p384": "ES384", "p521": "ES512",
+                      "ed25519": "EdDSA", "ed448": "EdDSA"}
+        family = {"RS": jwt.algorithms.RSAAlgorithm, "ES": jwt.algorithms.ECAlgorithm,
+                  "Ed": jwt.algorithms.OKPAlgorithm}
+        published = []
+        for name, key in private.items():
+            jwk = family[signs_with[name][:2]].to_jwk(key.public_key(), as_dict=True)
+            published.append({**jwk, "kid": name})
+            published.append({**jwk, "kid": f"{name}-alg", "alg": signs_with[name]})
+        provider.keys = published
+        for kid in [entry["kid"] for entry in published]:
+            for algorithm in auth.ALGORITHMS:
+                await _refused(_forged({"alg": algorithm, "kid": kid}))
+        for name, key in private.items():
+            for kid in (name, f"{name}-alg"):
+                token = provider.mint(signing_key=key, kid=kid, algorithm=signs_with[name])
+                if kid == "ed448":
+                    # PyJWT cannot tell an Ed448 key's algorithm unless the key names it, so
+                    # that one is skipped as unloadable rather than failing the whole set.
+                    assert "does not publish" in await _refused(token)
+                else:
+                    await _authenticate(token)
+
+    @pytest.mark.parametrize("kid", [["k1"], {"k": 1}, 7])
+    async def test_a_key_id_that_is_not_a_string_is_a_401(self, provider, kid):
+        await _refused(_forged({"alg": "RS256", "kid": kid}))
+        assert provider.calls == []

@@ -42,6 +42,12 @@ sends the browser back to `/app/auth/callback`.
 - **Every request to the agent server goes through `createClient` (`src/providers/client.ts`)
   or `authFetch`**, which add the token per request. A new call made with plain `fetch` or a
   `Client` of its own is unauthenticated and gets 401 once deployed.
+- **The token goes to this page's own origin and nowhere else**, and the static build takes
+  no server URL, graph or auth scheme from the query string (`pinnedConnection`). Upstream
+  lets `?apiUrl=` pick the server; in a build that holds a token, a link could use that to
+  send the token, and fetch artifact HTML the page then runs, from a server of its own.
+  Keep both halves: a new place that reads the server URL must go through
+  `pinnedConnection`, and `withAuthHeader` must stay origin-checked.
 - **A run outlives the page.** Submits use `onDisconnect: "continue"`, and the stream
   rejoins on load (`reconnectOnMount`, which keeps only the run id in `sessionStorage`), so
   a reload, a sign-in redirect or a dropped connection never ends a run. Cancel ends it on
@@ -49,6 +55,12 @@ sends the browser back to `/app/auth/callback`.
   to `onDisconnect: "cancel"`: it cancels on every disconnect, not just on Cancel.
 - **Tokens stay in memory** (`InMemoryWebStorage`). Don't move them to `localStorage` or
   `sessionStorage`; a reload signs in again, silently while the provider session lasts.
+  The only thing stored is a signed-out flag, so a reload after signing out does not sign
+  straight back in through a provider session sign-out may have left alive.
+- **Renewal follows the token that is sent** (the ID token by default, whose lifetime can
+  differ from the access token's that oidc-client-ts times itself by), and **never
+  navigates**: when it fails, the page offers to sign in again. Leaving the page loses the
+  composer's draft; a run in progress carries on and the page rejoins it (see above).
 - The callback navigates client-side (`router.replace`), never by reload: a reload would
   drop the token it just received.
 
@@ -63,6 +75,9 @@ sends the browser back to `/app/auth/callback`.
 - **The browser never holds a LangSmith API key.** A local server needs none, and
   `dev.py --remote` adds one server-side in the API passthrough. Upstream's key field,
   which kept the key in `localStorage`, is removed; don't bring it back.
+- **The passthrough serves this machine's own page only**, because it is as good as the key
+  it adds: `next dev` listens on 127.0.0.1 (the `dev` script), and `route.dev.ts` refuses
+  requests from any other origin and sends no CORS headers. Don't widen either.
 - **The thread list requests a metadata projection** (`src/providers/Thread.tsx`), never
   full thread values: QuickJS snapshots make each thread megabytes.
 - **The upload allowlist tracks `UPLOAD_KINDS`** in `deep_life_sci/middleware/uploads.py`.
