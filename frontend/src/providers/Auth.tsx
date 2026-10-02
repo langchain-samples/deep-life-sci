@@ -70,7 +70,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, []);
 
   // When renewal fails and the token has expired, ask rather than navigate: leaving the
-  // page would stop a run in progress, and lose whatever is in the composer.
+  // page would lose whatever is in the composer. A run in progress carries on either way,
+  // and the page rejoins it after signing in (`reconnectOnMount`).
   useEffect(() => {
     if (phase.kind !== "signed-in") return;
     const { manager } = phase;
@@ -83,7 +84,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         id: SESSION_TOAST,
         duration: Infinity,
         description:
-          "Sign in again to keep working. Signing in reloads the page, which stops a run that is still going.",
+          "Sign in again to keep working. A run that is still going carries on, and reappears once you are back.",
         action: { label: "Sign in", onClick: () => signInAgain(manager) },
       });
     });

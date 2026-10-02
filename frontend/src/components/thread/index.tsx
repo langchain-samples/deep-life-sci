@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { ReactNode, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { useStreamContext } from "@/providers/Stream";
+import { useCancelRun, useStreamContext } from "@/providers/Stream";
 import { ModelBadge } from "./ModelBadge";
 import { RunStatus } from "./RunStatus";
 import { useState, FormEvent } from "react";
@@ -110,6 +110,7 @@ export function Thread() {
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
+  const cancelRun = useCancelRun();
   const messages = stream.messages;
   const isLoading = stream.isLoading;
 
@@ -176,9 +177,10 @@ export function Thread() {
         streamMode: ["values"],
         streamSubgraphs: true,
         streamResumable: true,
-        // `stop()` only aborts the client stream; without this the run keeps
-        // going server-side and the thread stays busy.
-        onDisconnect: "cancel",
+        // A disconnect (reload, sign-in redirect, dropped connection, the platform's
+        // 1-hour limit) leaves the run going, and the page rejoins it
+        // (`reconnectOnMount`). Cancel stops it explicitly (`useCancelRun`).
+        onDisconnect: "continue",
         optimisticValues: (prev) => ({
           ...prev,
           context,
@@ -203,7 +205,7 @@ export function Thread() {
       streamMode: ["values"],
       streamSubgraphs: true,
       streamResumable: true,
-      onDisconnect: "cancel",
+      onDisconnect: "continue",
     });
   };
 
@@ -470,7 +472,7 @@ export function Thread() {
                         {stream.isLoading ? (
                           <Button
                             key="stop"
-                            onClick={() => stream.stop()}
+                            onClick={() => void cancelRun()}
                             className="ml-auto"
                           >
                             <LoaderCircle className="h-4 w-4 animate-spin" />

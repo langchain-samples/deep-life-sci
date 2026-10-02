@@ -27,8 +27,10 @@ server. It must not install anything: `scripts/setup.py` owns `pnpm install` her
 - **`DEEP_LIFE_SCI_STATIC=1 pnpm build`** (the deployment image; `scripts/deploy.py`): plain
   files under `/app`, served by the agent server itself (`deep_life_sci/webapp.py`), so the
   page, the API and `/ui/*` share one origin. No rewrite, no route handler, no Node at run
-  time. Try it locally by building it and running a server with the deploy config;
-  `paths.UI_DIR` finds `frontend/out`.
+  time. Try it locally by building it and running a server with the deploy config minus
+  `dockerfile_lines` and `allow_langsmith_api_keys`; `paths.UI_DIR` finds `frontend/out`.
+  The second matters: without the platform's LangSmith auth behind it, that option lets
+  requests with no token through.
 
 ## Sign-in
 
@@ -46,14 +48,19 @@ sends the browser back to `/app/auth/callback`.
   send the token, and fetch artifact HTML the page then runs, from a server of its own.
   Keep both halves: a new place that reads the server URL must go through
   `pinnedConnection`, and `withAuthHeader` must stay origin-checked.
+- **A run outlives the page.** Submits use `onDisconnect: "continue"`, and the stream
+  rejoins on load (`reconnectOnMount`, which keeps only the run id in `sessionStorage`), so
+  a reload, a sign-in redirect or a dropped connection never ends a run. Cancel ends it on
+  the server through `useCancelRun`, which cancels the thread's active runs. Never go back
+  to `onDisconnect: "cancel"`: it cancels on every disconnect, not just on Cancel.
 - **Tokens stay in memory** (`InMemoryWebStorage`). Don't move them to `localStorage` or
   `sessionStorage`; a reload signs in again, silently while the provider session lasts.
   The only thing stored is a signed-out flag, so a reload after signing out does not sign
   straight back in through a provider session sign-out may have left alive.
 - **Renewal follows the token that is sent** (the ID token by default, whose lifetime can
   differ from the access token's that oidc-client-ts times itself by), and **never
-  navigates**: when it fails, the page offers to sign in again. Leaving the page cancels a
-  run in progress (runs go out with `onDisconnect: "cancel"`) and loses the composer.
+  navigates**: when it fails, the page offers to sign in again. Leaving the page loses the
+  composer's draft; a run in progress carries on and the page rejoins it (see above).
 - The callback navigates client-side (`router.replace`), never by reload: a reload would
   drop the token it just received.
 

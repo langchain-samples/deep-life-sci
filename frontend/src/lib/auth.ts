@@ -176,7 +176,8 @@ function renewAt(deadline: number) {
  *
  * When a renewal fails, the session goes on with the token it has until that expires; then
  * it has ended, and the page offers to sign in again. It never navigates away by itself:
- * that would stop a run in progress (runs are cancelled when their page goes). */
+ * that would lose the composer's draft. A run in progress survives it (runs continue when
+ * their page goes, and the page rejoins them). */
 function renew(): Promise<User | null> {
   if (!manager) return Promise.resolve(null);
   const userManager = manager;
