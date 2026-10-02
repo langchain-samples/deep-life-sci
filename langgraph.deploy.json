@@ -1,0 +1,42 @@
+{
+  "python_version": "3.12",
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "agent": "./deep_life_sci/graph.py:make_graph"
+  },
+  "ui": {
+    "agent": "./ui/ui.tsx"
+  },
+  "http": {
+    "app": "./deep_life_sci/webapp.py:app",
+    "disable_store": true
+  },
+  "store": {
+    "ttl": {
+      "refresh_on_read": true,
+      "default_ttl": 129600,
+      "sweep_interval_minutes": 60
+    }
+  },
+  "checkpointer": {
+    "ttl": {
+      "strategy": "delete",
+      "default_ttl": 129600,
+      "sweep_interval_minutes": 60
+    }
+  },
+  "env": ".env.deploy",
+  "auth": {
+    "path": "./deep_life_sci/auth.py:auth",
+    "allow_langsmith_api_keys": true
+  },
+  "dockerfile_lines": [
+    "ENV NODE_VERSION=22",
+    "RUN /storage/install-node.sh",
+    "ADD frontend /opt/deep-life-sci-frontend",
+    "RUN cd /opt/deep-life-sci-frontend && npx --yes pnpm@10.5.1 install --frozen-lockfile && DEEP_LIFE_SCI_STATIC=1 npx --yes pnpm@10.5.1 build && mv out /opt/deep-life-sci-ui && cd / && rm -rf /opt/deep-life-sci-frontend /root/.npm /root/.cache /root/.local/share/pnpm",
+    "ENV DEEP_LIFE_SCI_UI_DIR=/opt/deep-life-sci-ui"
+  ]
+}

@@ -22,19 +22,18 @@ node_modules/
 # The tracked CLAUDE.md files are the checked-in half and stay in git.
 .claude/
 
-# Node modules for the artifact components in ui/. The lockfile beside them IS tracked:
-# langgraph.json bundles ui/ui.tsx at build time, so the bundle's dependencies need to
-# resolve to the same versions everywhere.
-ui/node_modules/
+# Node modules for the artifact components in ui/, an npm workspace of the root
+# package.json. The root package-lock.json IS tracked: langgraph.json bundles ui/ui.tsx at
+# build time, so the bundle's dependencies need to resolve to the same versions everywhere.
+# (`node_modules/` above already covers the root and ui/ both.)
 
 # The Node setup installs when the machine has none it can use (`install_node`), and the
 # staging directory it unpacks into first.
 /.node/
 /.node.partial/
 
-# The chat frontend `scripts/setup.py` clones. A checkout of someone else's repo,
-# vendored here only so the UI needs no directory outside this one — also in
-# .dockerignore, or a dev-only Next app ships inside the deploy image.
+# Where `scripts/setup.py` used to clone the chat UI, before it moved into frontend/. A
+# checkout from then may still have one on disk.
 .chat-ui/
 
 # Host-side cache. Not a deliverable, and `data/` is 20M+ of fetched abstracts that

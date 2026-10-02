@@ -7,7 +7,11 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    "deepagents>=0.7.4",
+    # Capped at the next minor, with langchain-quickjs below: their QuickJS middleware and
+    # dynamic subagent APIs are beta, and a deployment resolves from these bounds rather
+    # than from uv.lock (scripts/deploy.py says why). Raise a cap deliberately, after the
+    # real compiled-agent test passes against the new version.
+    "deepagents>=0.7.4,<0.8",
     # NCBI E-utilities and PMC OA are plain HTTP; sources/pubmed.py and sources/pmc.py
     # drive them directly.
     "httpx>=0.28.1",
@@ -17,20 +21,24 @@ dependencies = [
     "langchain-openai>=1.4.2",
     # QuickJS is the root model's orchestration surface (programmatic tool calling), not
     # an optional accelerator — the agent has no other way to reach the PubMed tools.
-    "langchain-quickjs>=0.3.5",
-    # The four below arrive transitively via deepagents, but this package imports them
+    "langchain-quickjs>=0.3.5,<0.4",
+    # The five below arrive transitively via deepagents, but this package imports them
     # directly, so they are pinned here rather than inherited:
     #   langchain      -> AgentMiddleware/AgentState (middleware/artifacts.py)
     #   langchain-core -> @tool, message and runnable types (sources/, graph.py)
     #   langgraph      -> push_ui_message and the `ui` state reducer (middleware/artifacts.py)
+    #   langgraph-sdk  -> ServerRuntime, how the server says a factory call is a run (graph.py)
     #   langsmith      -> SandboxClient, the container every `execute` call lands in
     "langchain>=1.3.14",
     "langchain-core>=1.5.3",
     "langgraph>=1.2.10",
+    "langgraph-sdk>=0.4.2",
     # [sandbox] is empty today (websockets is an unconditional langsmith dep); the extra
     # is named so the sandbox transport stays declared if that ever moves behind it.
     "langsmith[sandbox]>=0.10.15",
     "python-dotenv>=1.2.2",
+    # Verifying sign-in tokens from any OIDC provider (auth.py). [crypto] for RSA/EC keys.
+    "pyjwt[crypto]>=2.13.0",
     # models.yaml, the per-role model settings (models.py).
     "pyyaml>=6.0.3",
 ]

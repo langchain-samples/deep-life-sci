@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { Wrench } from "lucide-react";
-import { getApiKey } from "@/lib/api-key";
+import { authFetch, defaultApiUrl, pinnedConnection } from "@/lib/auth";
 
 /**
  * The main agent's model and effort, under the composer, with a wrench that lists every role.
@@ -62,16 +62,15 @@ function useModels(asked: number): Models | null {
   // chat is talking to.
   const [apiUrl] = useQueryState("apiUrl");
   const [authScheme] = useQueryState("authScheme");
-  const url = apiUrl || process.env.NEXT_PUBLIC_API_URL;
-  const scheme = authScheme || process.env.NEXT_PUBLIC_AUTH_SCHEME;
+  const pinned = pinnedConnection();
+  const url = pinned?.apiUrl ?? (apiUrl || defaultApiUrl());
+  const scheme = pinned ? undefined : authScheme || process.env.NEXT_PUBLIC_AUTH_SCHEME;
   const [models, setModels] = useState<Models | null>(null);
 
   useEffect(() => {
     if (!url) return;
     const controller = new AbortController();
     const headers = new Headers();
-    const apiKey = getApiKey();
-    if (apiKey) headers.set("X-Api-Key", apiKey);
     if (scheme) headers.set("X-Auth-Scheme", scheme);
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -88,7 +87,7 @@ function useModels(asked: number): Models | null {
       );
     };
     const load = (attempt: number) => {
-      fetch(`${url}/models`, { headers, signal: controller.signal })
+      authFetch(`${url}/models`, { headers, signal: controller.signal })
         .then(async (res) => {
           if ([502, 503, 504].includes(res.status)) return retry(attempt);
           const body = await res.json().catch(() => null);
