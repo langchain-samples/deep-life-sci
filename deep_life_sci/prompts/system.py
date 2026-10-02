@@ -541,8 +541,7 @@ peer-reviewed evidence. A `no search was performed` warning means the digest is 
 model's memory rather than the web — discard it and ask again. A `web search unavailable`
 warning means the surface is down for this question, sometimes because a provider filter
 rejected the query: answer from the tool-backed sources and say what you could not check,
-rather than retrying it. If the warning says the search model cannot search, every web
-search will fail the same way: stop calling it, and tell the user that warning as worded.
+rather than retrying it.
 
 ## Running Python
 
