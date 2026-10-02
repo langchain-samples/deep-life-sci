@@ -145,6 +145,14 @@ def snapshot_name(name: str) -> str:
     return f"pubmed-py-bio-{name}"
 
 
+# Read by the Agent Server, not this package. A redeploy stops a revision's queue workers,
+# and a run still going when the grace period ends is resumed on the new revision from its
+# last checkpoint, re-running the step it was in. The default is 180s; research runs often
+# take longer, so most would be cut off and partly repeated. Longer means a rollout can wait
+# up to this long for in-flight runs. Resuming is safe (see tests/test_upload_lifecycle.py
+# and tests/test_artifact_lifecycle.py), just slower and costlier than finishing.
+PLATFORM_SETTINGS = {"BG_JOB_SHUTDOWN_GRACE_PERIOD_SECS": "600"}
+
 OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "OIDC_SCOPE", "OIDC_TOKEN",
                  "OIDC_ALLOWED_EMAIL_DOMAINS")
 
@@ -172,6 +180,7 @@ def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
         "NCBI_EMAIL": env_value("NCBI_EMAIL"),
         "NCBI_API_KEY": env_value("NCBI_API_KEY"),
         "DEEP_LIFE_SCI_AUTH": auth_mode,
+        **PLATFORM_SETTINGS,
     }
     if auth_mode == "oidc":
         settings |= {key: env_value(key) for key in OIDC_SETTINGS}

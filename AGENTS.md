@@ -118,6 +118,9 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 - With sign-in on, the agent server also serves the chat UI's static build at `/app`
   (`webapp.py`), built into the image by `deploy.py`'s `dockerfile_lines`. Custom routes
   are outside the platform's auth, so `webapp.py` checks tokens on `/models` itself.
+- A redeploy resumes in-flight runs from their last checkpoint once the shutdown grace
+  period (`deploy.py:PLATFORM_SETTINGS`) ends, re-running the step they were in. Keep
+  publishing and upload staging safe to repeat; their lifecycle tests pin it.
 - Deployments load `deep_life_sci/auth.py`; local servers never do. Signed-in users are
   scoped to threads they own, LangSmith-key callers and Studio are not, and anything a
   signed-in user needs must be allowed there explicitly: the rest is denied by default.

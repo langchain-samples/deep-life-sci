@@ -165,3 +165,21 @@ async def test_manifest_is_appended_using_a_real_model_request():
     assert prepared.system_prompt.startswith("base\n\n<uploaded_files>")
     assert prepared.messages == req.messages
     assert req.system_prompt == "base"
+
+
+async def test_a_resumed_turn_stages_the_same_upload_without_duplicating_it(monkeypatch):
+    """A deployment resumes a crashed or redeployed run from its last checkpoint, so the
+    staging step can run twice on the same state before its update is ever saved. Both
+    writes are overwrites by name: one durable copy, the same bytes, the same manifest."""
+    monkeypatch.setattr(uploads, "_thread_key", lambda: "a")
+    store = InMemoryStore()
+    runtime = SimpleNamespace(store=store)
+    state = {"messages": [HumanMessage(id="q", content=[attachment()])]}
+
+    first_backend, second_backend = Backend(), Backend()
+    first = await uploads.UploadMiddleware(first_backend).abefore_agent(state, runtime)
+    second = await uploads.UploadMiddleware(second_backend).abefore_agent(state, runtime)
+
+    assert second == first
+    assert second_backend.uploaded == first_backend.uploaded
+    assert len(await store.asearch(("uploads", "a"))) == 1

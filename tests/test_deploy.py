@@ -127,6 +127,7 @@ class TestDeploySecrets:
             "NCBI_TOOL": "deep_life_sci_ab12cd34_my_lab",
             "NCBI_EMAIL": "me@example.org",
             "DEEP_LIFE_SCI_AUTH": "langsmith",
+            "BG_JOB_SHUTDOWN_GRACE_PERIOD_SECS": "600",
         }
 
     def test_oidc_settings_ship_only_in_oidc_mode(self, dotenv):
@@ -180,7 +181,7 @@ class TestDeploySecrets:
         source = "".join(
             path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
         )
-        for name in deploy.deploy_settings("x", "oidc"):
+        for name in set(deploy.deploy_settings("x", "oidc")) - set(deploy.PLATFORM_SETTINGS):
             assert f'"{name}"' in source, name
 
 
