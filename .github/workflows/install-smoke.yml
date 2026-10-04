@@ -64,7 +64,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # Full version: setup-uv publishes no floating major tag (`@v10` does not resolve).
+      - uses: astral-sh/setup-uv@v10.2.0
 
       # What a fresh WSL Ubuntu has and the bare image lacks. Certificates only: Python
       # verifies HTTPS against the system store when setup downloads Node.
