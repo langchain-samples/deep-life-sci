@@ -7,7 +7,7 @@
 
 An open-source [Deep Agent](https://docs.langchain.com/oss/python/deepagents/overview) assistant for biologists, bioinformaticians, and clinical researchers.
 
-[![License](https://img.shields.io/github/license/langchain-samples/deep-life-sci?color=4f46e5)](LICENSE) [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-4f46e5)](pyproject.toml) [![Built with deepagents](https://img.shields.io/badge/built%20with-deepagents-0d9488)](https://docs.langchain.com/oss/python/deepagents/overview) [![Traced with LangSmith](https://img.shields.io/badge/traced%20with-LangSmith-0d9488)](https://smith.langchain.com)
+[![License](https://img.shields.io/github/license/langchain-samples/deep-life-sci?color=4f46e5)](LICENSE) [![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-4f46e5)](pyproject.toml) [![Built with deepagents](https://img.shields.io/badge/built%20with-deepagents-0d9488)](https://docs.langchain.com/oss/python/deepagents/overview) [![Traced with LangSmith](https://img.shields.io/badge/traced%20with-LangSmith-0d9488)](https://smith.langchain.com)
 
 [Quickstart](#quickstart) · [Capabilities](#capabilities) · [Data sources](#data-sources)
 

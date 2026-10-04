@@ -1,7 +1,8 @@
 """One-time setup. Run this once per clone, then ask questions with the chat UI.
 
     uv run scripts/setup.py          # prompt for the API key, install everything
-    uv run scripts/setup.py --yes    # never prompt; for CI and containers
+    uv run scripts/setup.py --yes    # never prompt; the key comes from LANGSMITH_API_KEY
+    uv run scripts/setup.py --yes --no-snapshot   # CI with no LangSmith credentials
 
 Four steps, in the order they depend on each other:
 
@@ -118,8 +119,15 @@ def ask_key(key: str, prompt: str, prefix: str) -> None:
     if env_value(key):
         return
     if not interactive():
-        die(TAG, f"{key} is not set in .env and there is no terminal to ask on. "
-                 "Add it and re-run.")
+        # CI and containers hand credentials in through the environment. Only here, with
+        # nobody to ask: at a prompt, a key exported for some other project is not an
+        # answer the person running this gave.
+        if exported := "".join(os.environ.get(key, "").split()):
+            set_env(key, exported)
+            say(TAG, f"using {key} from the environment")
+            return
+        die(TAG, f"{key} is not set in .env or the environment, and there is no terminal "
+                 "to ask on. Add it and re-run.")
     while True:
         reply = ask_secret(prompt)
         if not reply:
@@ -503,11 +511,20 @@ def main() -> int:
     parser.add_argument(
         "-y", "--yes", action="store_true", help="never prompt; for CI and containers"
     )
-    _assume_yes = parser.parse_args().yes
+    # The snapshot is the one step that needs a working LangSmith key, so skipping it is
+    # what lets CI check the rest of an install with a placeholder one. Runs still work
+    # without it, only slower: sandbox.py installs the scientific stack itself.
+    parser.add_argument(
+        "--no-snapshot", action="store_true",
+        help="skip the sandbox snapshot; for CI without LangSmith credentials",
+    )
+    args = parser.parse_args()
+    _assume_yes = args.yes
 
     ensure_env()
     ensure_deps()
-    ensure_snapshot()
+    if not args.no_snapshot:
+        ensure_snapshot()
     ensure_node()
     ensure_frontend()
     ensure_artifact_deps()
