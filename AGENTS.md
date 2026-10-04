@@ -27,7 +27,7 @@ uv run scripts/deploy.py               # create or update a LangSmith deployment
 uv run scripts/dev.py --remote <URL>   # local chat UI against a deployment
 uv run agent ["question"]              # one-shot CLI; no question uses the demo
 uv run scripts/build_snapshot.py       # rebuild the scientific Python sandbox image
-uv run langgraph dev                   # API only, port 2024
+uv run langgraph dev                   # API only, port 2024; add --no-reload on Windows
 uv run --group test pytest             # offline tests
 uv run --group test pytest tests/test_pubmed.py  # example focused check
 uv run ruff check .                    # repository lint configuration in pyproject.toml

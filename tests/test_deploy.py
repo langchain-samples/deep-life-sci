@@ -9,12 +9,13 @@ developer's own `.env` following the code into a shared server.
 from __future__ import annotations
 
 import json
-import re
 import sys
 import tomllib
 from unittest.mock import Mock
 
 import pytest
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from deep_life_sci import paths
 
@@ -33,12 +34,10 @@ def _read(relative: str) -> str:
 
 class TestTheImageCanInstallThePackage:
     def test_python_version_satisfies_requires_python(self):
-        """The server image defaults to 3.11, which `pip install -e .` rejects outright."""
+        """The server image defaults to 3.11, which `pip install -e .` rejects outright, and
+        requires-python also has a ceiling (pyproject.toml says why)."""
         requires = tomllib.loads(_read("pyproject.toml"))["project"]["requires-python"]
-        floor = re.fullmatch(r">=(\d+)\.(\d+)", requires)
-        assert floor, f"unexpected requires-python {requires!r}"
-        version = tuple(int(part) for part in CONFIG["python_version"].split("."))
-        assert version >= (int(floor[1]), int(floor[2]))
+        assert Version(CONFIG["python_version"]) in SpecifierSet(requires)
 
     def test_artifact_dependencies_install_beside_langgraph_json(self):
         """The build runs its npm install in langgraph.json's directory and nowhere else;

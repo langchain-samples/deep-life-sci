@@ -5,7 +5,10 @@ description = "A Deep Agents research assistant for life scientists: PubMed/PMC 
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+# Capped below 3.14 for bsdiff4 (via langchain-quickjs), which has no wheels there, so
+# setup would compile it and die on any machine without a C compiler. scripts/CLAUDE.md
+# says what to check before raising this, and .python-version with it.
+requires-python = ">=3.12,<3.14"
 dependencies = [
     # Capped at the next minor, with langchain-quickjs below: their QuickJS middleware and
     # dynamic subagent APIs are beta, and a deployment resolves from these bounds rather
