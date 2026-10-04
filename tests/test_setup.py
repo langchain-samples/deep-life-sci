@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import sys
+from unittest.mock import Mock
 
 import pytest
 
@@ -38,6 +39,8 @@ def answers(monkeypatch):
     def use(*replies: str) -> None:
         queue = list(replies)
         monkeypatch.setattr(setup, "interactive", lambda: True)
+        # The region check is a DNS lookup; every region serves here unless a test says not.
+        monkeypatch.setattr(setup, "serves_bedrock_gpt", lambda _region: True)
         monkeypatch.setattr("builtins.input", lambda _prompt: queue.pop(0))
         monkeypatch.setattr(setup.getpass, "getpass", lambda _prompt: queue.pop(0))
 
@@ -87,6 +90,23 @@ class TestModelAccess:
         assert _common.env_value("AWS_PROFILE") == "research"
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == ""
         assert _common.env_value("AWS_REGION") == "us-west-2"
+
+    def test_a_region_without_bedrocks_gpt_endpoint_is_asked_again(
+        self, env_file, answers, monkeypatch
+    ):
+        answers("4", "ABSKbedrock", "us-west-1", "", "us-west-2")
+        monkeypatch.setattr(setup, "serves_bedrock_gpt", lambda region: region != "us-west-1")
+        setup.ensure_model_access()
+        assert _common.env_value("AWS_REGION") == "us-west-2"
+
+    def test_a_setup_stopped_at_the_key_prompt_offers_the_whole_menu_again(
+        self, env_file, answers, monkeypatch
+    ):
+        answers("2")
+        monkeypatch.setattr(setup, "ask_key", Mock(side_effect=KeyboardInterrupt))
+        with pytest.raises(KeyboardInterrupt):
+            setup.ensure_model_access()
+        assert _common.env_value("MODEL_ACCESS") == ""
 
     def test_direct_without_any_key_and_no_terminal_stops(self, env_file, monkeypatch):
         env_file.write_text("MODEL_ACCESS=direct\n")

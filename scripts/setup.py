@@ -36,6 +36,7 @@ import platform
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -294,9 +295,32 @@ def ensure_bedrock() -> None:
     if env_value("AWS_REGION") or adopt_from_shell("AWS_REGION"):
         return
     region = BEDROCK_DEFAULT_REGION
-    if interactive():
+    while interactive():
         region = "".join(input(f"[{TAG}] AWS region [{region}]: ").split()) or region
+        if serves_bedrock_gpt(region) or confirm_no(f"use {region} anyway?"):
+            break
+        region = BEDROCK_DEFAULT_REGION
     set_env("AWS_REGION", region)
+
+
+def serves_bedrock_gpt(region: str) -> bool:
+    """Whether `region` has Bedrock's OpenAI-compatible endpoint, which the Bedrock GPT
+    models setup recommends need. Where it is not offered its hostname does not resolve,
+    and the agent's first model call fails as a bare connection error. Says so and
+    returns False there; Claude, on bedrock-runtime, is not affected."""
+    try:
+        socket.getaddrinfo(f"bedrock-mantle.{region}.api.aws", 443)
+        return True
+    except OSError:
+        say(TAG, f"Bedrock's OpenAI-compatible endpoint is not offered in {region} (or this "
+                 "machine is offline), so Bedrock's GPT models, the recommended ones, cannot "
+                 "run there. GPT-5.6 runs in us-east-1, us-east-2 and us-west-2.")
+        return False
+
+
+def confirm_no(question: str) -> bool:
+    """`confirm` with No as the answer to Enter."""
+    return input(f"[{TAG}] {question} [y/N] ").strip().lower().startswith("y")
 
 
 def ensure_model_access() -> tuple[str, ...]:
@@ -311,22 +335,24 @@ def ensure_model_access() -> tuple[str, ...]:
 
     The LangSmith key is asked for either way: tracing and sandboxes need it.
     """
-    access, chosen = env_value("MODEL_ACCESS").lower(), ""
+    access = env_value("MODEL_ACCESS").lower()
     if not access:
         chosen = (
             choose("how should the agent reach its models?", ACCESS_CHOICES)
             if interactive() else "gateway"
         )
-        access = "gateway" if chosen == "gateway" else "direct"
-        set_env("MODEL_ACCESS", access)
+        # Recorded only once the credentials are in, so a setup stopped at the key prompt
+        # offers the whole menu again rather than holding the user to a half-made choice.
+        if chosen != "gateway":
+            ask_provider_key(chosen)
+        set_env("MODEL_ACCESS", "gateway" if chosen == "gateway" else "direct")
+        return tuple(filter(has_own_credentials, OWN_KEYS)) if chosen != "gateway" else ()
     if access == "gateway":
         return ()
     if access != "direct":
         die(TAG, f"MODEL_ACCESS={access!r} in .env; set it to gateway or direct.")
 
-    if chosen in OWN_KEYS:
-        ask_provider_key(chosen)
-    elif not any(map(has_own_credentials, OWN_KEYS)):
+    if not any(map(has_own_credentials, OWN_KEYS)):
         if not interactive():
             die(TAG, "MODEL_ACCESS=direct needs ANTHROPIC_API_KEY, OPENAI_API_KEY or "
                      "AWS_BEARER_TOKEN_BEDROCK in .env, and there is no terminal to ask on. "

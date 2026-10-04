@@ -754,7 +754,14 @@ def rejection_message(role: str, exc: BaseException) -> str | None:
     unreadable image as a setting. Both SDKs' `APIStatusError` carry `status_code`, so no
     provider import is needed. Reads the settings without `_resolve`'s checks, so this
     cannot raise in place of the error it reports.
+
+    A connection that never opened is reported too, naming the host, because nothing else
+    would: the API shows it as "An internal error occurred". Only that, not a timeout,
+    which `ROOT_TIMEOUT` and the per-role ceilings already account for. Matched by class
+    name, the same `APIConnectionError` in both SDKs, of which a timeout is a subclass.
     """
+    if _is_connection_failure(exc):
+        return _connection_message(role, exc)
     status = getattr(exc, "status_code", None)
     if not isinstance(status, int) or isinstance(exc, ContextOverflowError):
         return None
@@ -765,6 +772,29 @@ def rejection_message(role: str, exc: BaseException) -> str | None:
         f"{exc}\n\n({role} role: model {_setting(role, 'model')!r}, effort "
         f"{_effort(role) or '(none)'!r}, from models.yaml or {role.upper()}_* env vars.)"
     )
+
+
+def _is_connection_failure(exc: BaseException) -> bool:
+    names = [cls.__name__ for cls in type(exc).__mro__]
+    return "APIConnectionError" in names and "APITimeoutError" not in names
+
+
+def _connection_message(role: str, exc: BaseException) -> str:
+    """A connection failure, with the one cause that is ours to name: Bedrock's
+    OpenAI-compatible endpoint, which its GPT models use, exists only in some regions, and
+    elsewhere its hostname does not resolve at all."""
+    try:
+        host = exc.request.url.host
+    except AttributeError:
+        host = "the model provider"
+    message = f"Could not connect to {host} for the {role} model's request: {exc}"
+    if host.startswith("bedrock-mantle."):
+        message += (
+            f"\n\nAWS_REGION is {_aws_region()!r}. Bedrock's OpenAI-compatible endpoint, "
+            "which its GPT models use, is not offered in every region: GPT-5.6 runs in "
+            "us-east-1, us-east-2 and us-west-2. Set AWS_REGION to one of those in .env."
+        )
+    return message
 
 
 def _resolve(role: str) -> tuple[str, str, str]:

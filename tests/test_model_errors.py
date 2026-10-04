@@ -55,6 +55,29 @@ def test_our_own_bugs_pass_through_unchanged():
     assert info.value is exc
 
 
+def test_a_connection_that_never_opened_names_the_host_and_bedrocks_regions(monkeypatch):
+    import httpx
+    import openai
+
+    monkeypatch.setenv("AWS_REGION", "us-west-1")
+    request = httpx.Request("POST", "https://bedrock-mantle.us-west-1.api.aws/openai/v1/responses")
+    with pytest.raises(ModelCallError, match=r"(?s)bedrock-mantle\.us-west-1.*us-west-2"):
+        SurfaceModelErrors("root").wrap_model_call(
+            None, _raising(openai.APIConnectionError(request=request))
+        )
+
+
+def test_a_timeout_passes_through_unchanged():
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    with pytest.raises(openai.APITimeoutError):
+        SurfaceModelErrors("root").wrap_model_call(
+            None, _raising(openai.APITimeoutError(request=request))
+        )
+
+
 def test_a_successful_call_is_returned_as_is():
     assert SurfaceModelErrors("root").wrap_model_call(None, lambda _r: "ok") == "ok"
 
