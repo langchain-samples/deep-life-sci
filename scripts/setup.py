@@ -227,16 +227,19 @@ OWN_KEYS = {
     "bedrock": ("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock", ""),
 }
 
+PROVIDER_CHOICES = (
+    ("anthropic", "Anthropic API key"),
+    ("openai", "OpenAI API key"),
+    ("bedrock", "Amazon Bedrock credentials"),
+)
 ACCESS_CHOICES = (
     ("gateway", "LangSmith LLM Gateway (recommended): provider keys stay in your "
                 "LangSmith workspace"),
-    ("anthropic", "your own Anthropic API key"),
-    ("openai", "your own OpenAI API key"),
-    ("bedrock", "your own Amazon Bedrock credentials"),
+    *((choice, f"your own {label}") for choice, label in PROVIDER_CHOICES),
 )
 
-# The regions Bedrock is supported in: models.py's BEDROCK_REGIONS, repeated for the same
-# reason as OWN_KEYS. The first is the answer to Enter.
+# The regions Bedrock is supported in: models.py's BEDROCK_REGIONS (which says why),
+# repeated for the same reason as OWN_KEYS. The first is the answer to Enter.
 BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
 
 
@@ -271,7 +274,9 @@ def ask_provider_key(destination: str) -> None:
     if destination == "bedrock":
         ensure_bedrock()
     elif not env_value(key) and not adopt_from_shell(key):
-        ask_key(key, f"{name} API key ({prefix}...)", prefix)
+        # No prefix check: provider key formats are the providers' to change, and a wrong
+        # key is named by the server at its first call.
+        ask_key(key, f"{name} API key ({prefix}...)", "")
 
 
 def has_own_credentials(destination: str) -> bool:
@@ -291,8 +296,8 @@ def ensure_bedrock() -> None:
     region_ok = env_value("AWS_REGION") in BEDROCK_REGIONS
     if has_own_credentials("bedrock") and region_ok:
         return
-    say(TAG, "Bedrock runs through Mantle, its OpenAI-compatible endpoint, so it works in "
-             f"these regions only: {regions}.")
+    say(TAG, "Bedrock needs Mantle, its OpenAI-compatible endpoint, with GPT-5.6, so it "
+             f"works in these regions only: {regions}.")
     if not (
         has_own_credentials("bedrock")
         or adopt_from_shell("AWS_BEARER_TOKEN_BEDROCK")
@@ -313,7 +318,7 @@ def ensure_bedrock() -> None:
         if region in BEDROCK_REGIONS:
             set_env("AWS_REGION", region)
             return
-        say(TAG, f"{region} is not supported: Mantle is not available there. "
+        say(TAG, f"{region} is not supported: Mantle does not serve GPT-5.6 there. "
                  f"Choose one of: {regions}.")
 
 
@@ -351,7 +356,7 @@ def ensure_model_access() -> tuple[str, ...]:
             die(TAG, "MODEL_ACCESS=direct needs ANTHROPIC_API_KEY, OPENAI_API_KEY or "
                      "AWS_BEARER_TOKEN_BEDROCK in .env, and there is no terminal to ask on. "
                      "Add one and re-run.")
-        ask_provider_key(choose("which provider are your credentials for?", ACCESS_CHOICES[1:]))
+        ask_provider_key(choose("which provider are your credentials for?", PROVIDER_CHOICES))
     elif has_own_credentials("bedrock"):
         ensure_bedrock()  # the region, if a hand edit left it out
     return tuple(filter(has_own_credentials, OWN_KEYS))
@@ -381,8 +386,7 @@ def ensure_ncbi_tool() -> None:
 
 def ensure_env() -> tuple[str, ...]:
     """Returns where model calls go with the user's own credentials (`ensure_model_access`)."""
-    fresh = not ENV_FILE.exists()
-    if fresh:
+    if not ENV_FILE.exists():
         shutil.copy(REPO_ROOT / ".env.example", ENV_FILE)
         say(TAG, "created .env from .env.example")
     else:
@@ -391,15 +395,19 @@ def ensure_env() -> tuple[str, ...]:
     ensure_langsmith_key()
     own_keys = ensure_model_access()
     ensure_ncbi_tool()
-
-    # Only on a first run: these are genuinely optional, so re-asking every time would be
-    # nagging someone who already decided to skip them.
-    if fresh:
-        say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
-                 "from 3 to 10 req/s.")
-        ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
-        ask_optional("NCBI_EMAIL", "contact email for NCBI (their usage policy asks for one)")
     return own_keys
+
+
+def ask_ncbi_credentials() -> None:
+    """The optional NCBI key and email, on a first run only: re-asking every time would be
+    nagging someone who already decided to skip them. Asked after everything about models,
+    so the model questions stay together."""
+    if not interactive():
+        return
+    say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
+             "from 3 to 10 req/s.")
+    ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
+    ask_optional("NCBI_EMAIL", "contact email for NCBI (their usage policy asks for one)")
 
 
 # --- 2. dependencies --------------------------------------------------------------
@@ -736,9 +744,12 @@ def main() -> int:
     args = parser.parse_args()
     _assume_yes = args.yes
 
+    first_run = not ENV_FILE.exists()
     own_keys = ensure_env()
     ensure_deps()
     ensure_models_match(own_keys)
+    if first_run:
+        ask_ncbi_credentials()
     if not args.no_snapshot:
         ensure_snapshot()
     ensure_node()

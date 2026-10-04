@@ -213,12 +213,14 @@ DIRECT_KEYS = {
 }
 DIRECT_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "bedrock": "Amazon Bedrock"}
 
-# The regions Bedrock is supported in under `MODEL_ACCESS=direct`: those where both Mantle
+# The regions Bedrock is supported in under `MODEL_ACCESS=direct`: those where Mantle
 # (Bedrock's OpenAI-compatible endpoint, which its GPT models and their web search need)
-# and GPT-5.6 were verified, in the US. A fixed list, enforced at startup, rather than
-# per-model rules: elsewhere Mantle's hostname does not even resolve (us-west-1, though
-# Bedrock's catalog lists GPT-5.6 there), and the first call fails as a bare connection
-# error. Claude, on bedrock-runtime, would run in more, but one rule is easier to follow.
+# serves GPT-5.6. Verified 2026-10-04 against Mantle's own `/v1/models` in every region it
+# runs in: 17 regions have Mantle, and only these three list GPT-5.6 (us-west-2 has Terra
+# and Luna, the defaults, but not Sol); the other fourteen serve only the open-weight
+# gpt-oss models. Elsewhere, us-west-1 among them although Bedrock's catalog lists GPT-5.6
+# there, Mantle's hostname does not resolve at all. A fixed list, enforced at startup, is
+# easier to follow than per-model rules; Claude, on bedrock-runtime, would run in more.
 BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
 
 # What `scripts/setup.py` switches models.yaml's roles to when the user's own key is for a
@@ -892,9 +894,10 @@ def _check_direct(role: str, model: str, provider: str, model_source: str) -> No
     destination = _destination(model, provider)
     if destination == "bedrock" and _aws_region() not in BEDROCK_REGIONS:
         raise SystemExit(
-            f"AWS_REGION={_aws_region()!r} is not supported for Bedrock. Bedrock runs "
-            "through Mantle, its OpenAI-compatible endpoint, so it works in these regions "
-            f"only: {', '.join(BEDROCK_REGIONS)}. Set AWS_REGION in .env to one of them."
+            f"AWS_REGION={_aws_region()!r} is not supported for Bedrock. Bedrock needs "
+            "Mantle, its OpenAI-compatible endpoint, with GPT-5.6, so it works in these "
+            f"regions only: {', '.join(BEDROCK_REGIONS)}. Set AWS_REGION in .env to one "
+            "of them."
         )
     if has_direct_credentials(destination):
         return

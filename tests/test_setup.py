@@ -102,6 +102,25 @@ class TestModelAccess:
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]
 
+    def test_a_provider_key_is_taken_as_typed(self, env_file, answers, capsys):
+        """No prefix check: key formats are the providers' to change."""
+        answers("2", "sk-proj-not-anthropic")
+        setup.ensure_model_access()
+        assert _common.env_value("ANTHROPIC_API_KEY") == "sk-proj-not-anthropic"
+        assert "use it anyway" not in capsys.readouterr().out
+
+    def test_the_provider_only_menu_does_not_repeat_your_own(self, env_file, answers, capsys):
+        env_file.write_text("MODEL_ACCESS=direct\n")
+        answers("1", "sk-ant-abc")
+        setup.ensure_model_access()
+        menu = capsys.readouterr().out
+        assert "which provider" in menu and "your own" not in menu
+
+    def test_ncbi_credentials_say_nothing_without_a_terminal(self, env_file, monkeypatch, capsys):
+        monkeypatch.setattr(setup, "interactive", lambda: False)
+        setup.ask_ncbi_credentials()
+        assert capsys.readouterr().out == ""
+
     def test_the_region_list_is_models_own(self):
         assert setup.BEDROCK_REGIONS == models.BEDROCK_REGIONS
 
