@@ -319,12 +319,22 @@ def main() -> int:
         #
         # This makes the asyncio.to_thread rule in sources/cache_io.py load-bearing rather
         # than theoretical: runs share one event loop, so a blocking call stalls neighbours.
-        spawn(
-            "agent",
-            REPO_ROOT,
-            ["uv", "run", "--group", "dev", "langgraph", "dev",
-             "--no-browser", "--n-jobs-per-worker", "5"],
-        )
+        #
+        # --no-reload on Windows: with reload on, uvicorn runs the server on a
+        # SelectorEventLoop there, which cannot start subprocesses. The server starts the
+        # artifact bundler (`npx @langchain/langgraph-ui`) as one at boot, and when that
+        # raises the server exits, so `langgraph dev` dies on every start. Without reload
+        # uvicorn uses the ProactorEventLoop, which can. The cost is restarting by hand
+        # after a code change, on Windows only.
+        #
+        # PYTHONUTF8 because the server's output reaches us through a pipe, which Windows
+        # Python encodes in the ANSI code page: the startup banner's emoji then fail to
+        # encode and the log fills with UnicodeEncodeError tracebacks that look fatal.
+        argv = ["uv", "run", "--group", "dev", "langgraph", "dev",
+                "--no-browser", "--n-jobs-per-worker", "5"]
+        if WINDOWS:
+            argv.append("--no-reload")
+        spawn("agent", REPO_ROOT, argv, env={"PYTHONUTF8": "1"} if WINDOWS else None)
 
     # Same wedge, same rule as :2024 above — `next dev` can end up bound to the port and
     # answering nothing, and adopting that paints a window that never fills in. No /ok

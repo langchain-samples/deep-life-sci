@@ -2,6 +2,7 @@
 
     uv run scripts/setup.py          # prompt for the API key, install everything
     uv run scripts/setup.py --yes    # never prompt; for CI and containers
+    uv run scripts/setup.py --yes --no-snapshot   # CI with no LangSmith credentials
 
 Four steps, in the order they depend on each other:
 
@@ -503,11 +504,20 @@ def main() -> int:
     parser.add_argument(
         "-y", "--yes", action="store_true", help="never prompt; for CI and containers"
     )
-    _assume_yes = parser.parse_args().yes
+    # The snapshot is the one step that needs a working LangSmith key, so skipping it is
+    # what lets CI check the rest of an install with a placeholder one. Runs still work
+    # without it, only slower: sandbox.py installs the scientific stack itself.
+    parser.add_argument(
+        "--no-snapshot", action="store_true",
+        help="skip the sandbox snapshot; for CI without LangSmith credentials",
+    )
+    args = parser.parse_args()
+    _assume_yes = args.yes
 
     ensure_env()
     ensure_deps()
-    ensure_snapshot()
+    if not args.no_snapshot:
+        ensure_snapshot()
     ensure_node()
     ensure_frontend()
     ensure_artifact_deps()

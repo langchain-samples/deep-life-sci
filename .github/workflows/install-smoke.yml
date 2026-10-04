@@ -1,0 +1,137 @@
+# Installs the repo the way the README says and checks that `scripts/dev.py` brings up both
+# servers, on the two setups that have broken for testers without anyone here seeing it:
+#
+#   windows  — native Windows. `langgraph dev` used to exit at every start there (see the
+#              --no-reload comment in scripts/dev.py).
+#   ubuntu   — a bare Ubuntu 22.04 with no C compiler, as a fresh WSL install is. Its Python
+#              is 3.10, so uv downloads one; without .python-version that was 3.14, where a
+#              dependency has no prebuilt wheel and setup died compiling it.
+#
+# No secrets: setup runs with a placeholder LangSmith key and skips the sandbox snapshot,
+# the one step that needs a real one. The servers boot without calling LangSmith, which is
+# all this checks; it never asks the agent a question.
+name: Install smoke test
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/install-smoke.yml"
+      - ".python-version"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "langgraph.json"
+      - "package.json"
+      - "package-lock.json"
+      - "frontend/package.json"
+      - "frontend/pnpm-lock.yaml"
+      - "scripts/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/install-smoke.yml"
+      - ".python-version"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "langgraph.json"
+      - "package.json"
+      - "package-lock.json"
+      - "frontend/package.json"
+      - "frontend/pnpm-lock.yaml"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+          - name: ubuntu-22.04, no compiler
+            os: ubuntu-latest
+            container: ubuntu:22.04
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+
+      # What a fresh WSL Ubuntu has and the bare image lacks. Certificates only: Python
+      # verifies HTTPS against the system store when setup downloads Node.
+      - name: Certificates, and no C compiler
+        if: matrix.container
+        run: |
+          apt-get update -qq && apt-get install -y -qq ca-certificates
+          if command -v cc gcc clang; then
+            echo "this job must run without a compiler"; exit 1
+          fi
+
+      - name: Placeholder credentials
+        run: printf 'LANGSMITH_API_KEY=lsv2_ci_placeholder\n' > .env
+
+      - name: Setup
+        run: uv run scripts/setup.py --yes --no-snapshot
+
+      - name: Python is the pinned version
+        run: uv run python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
+
+      - name: Both servers start and stay up
+        run: |
+          uv run python - <<'EOF'
+          import os, signal, subprocess, sys, time, urllib.request
+
+          def answers(port, path):
+              try:
+                  with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=20) as r:
+                      return r.status == 200
+              except Exception:
+                  return False
+
+          log = open("dev.log", "w")
+          # This interpreter rather than `uv run`, so the signal below reaches dev.py itself.
+          dev = subprocess.Popen(
+              [sys.executable, "scripts/dev.py"],
+              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+              env={**os.environ, "NO_BROWSER": "1"},
+          )
+          # The artifact bundle proves the server got past starting its bundler, which is
+          # where it used to exit on Windows.
+          pending = {(2024, "/ok"), (2024, "/ui/agent/entrypoint.js"), (3000, "/")}
+          deadline = time.monotonic() + 15 * 60
+          ok = False
+          while time.monotonic() < deadline and dev.poll() is None:
+              pending = {check for check in pending if not answers(*check)}
+              if not pending:
+                  # Up is not enough: the Windows failure was a server that answered
+                  # briefly and then exited.
+                  time.sleep(20)
+                  ok = dev.poll() is None and answers(2024, "/ok")
+                  break
+              time.sleep(5)
+
+          if dev.poll() is None:
+              if os.name == "nt":
+                  subprocess.run(["taskkill", "/T", "/F", "/PID", str(dev.pid)], check=False)
+              else:
+                  dev.send_signal(signal.SIGINT)  # dev.py stops both servers on SIGINT
+              try:
+                  dev.wait(timeout=30)
+              except subprocess.TimeoutExpired:
+                  dev.kill()
+          log.close()
+          print(open("dev.log", encoding="utf-8", errors="replace").read())
+          if not ok:
+              print(f"dev.py exited ({dev.returncode})" if dev.returncode is not None
+                    else f"still waiting on {sorted(pending)}", file=sys.stderr)
+              sys.exit(1)
+          EOF
