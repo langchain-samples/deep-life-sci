@@ -905,7 +905,8 @@ def _check_direct(role: str, model: str, provider: str, model_source: str) -> No
     )
     raise SystemExit(
         f"The {role} model, {model!r}, runs on {name}, and MODEL_ACCESS=direct calls {name} "
-        f"with your own credentials, but {needs}. Add them to .env (re-run "
+        f"with your own credentials, but {needs}. Add "
+        f"{'one' if destination == 'bedrock' else 'it'} to .env (re-run "
         f"`uv run scripts/setup.py`), or choose a model in {model_source.split()[0]} for "
         "a provider you have credentials for."
     )
