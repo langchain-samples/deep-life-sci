@@ -39,8 +39,6 @@ def answers(monkeypatch):
     def use(*replies: str) -> None:
         queue = list(replies)
         monkeypatch.setattr(setup, "interactive", lambda: True)
-        # The region check is a DNS lookup; every region serves here unless a test says not.
-        monkeypatch.setattr(setup, "serves_bedrock_gpt", lambda _region: True)
         monkeypatch.setattr("builtins.input", lambda _prompt: queue.pop(0))
         monkeypatch.setattr(setup.getpass, "getpass", lambda _prompt: queue.pop(0))
 
@@ -79,7 +77,7 @@ class TestModelAccess:
         answers("4", "ABSKbedrock", "")
         assert setup.ensure_model_access() == ("bedrock",)
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == "ABSKbedrock"
-        assert _common.env_value("AWS_REGION") == setup.BEDROCK_DEFAULT_REGION
+        assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]
 
     def test_bedrock_takes_a_signed_in_aws_profile_instead(self, env_file, answers, monkeypatch):
         monkeypatch.setenv("AWS_PROFILE", "research")
@@ -91,13 +89,21 @@ class TestModelAccess:
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == ""
         assert _common.env_value("AWS_REGION") == "us-west-2"
 
-    def test_a_region_without_bedrocks_gpt_endpoint_is_asked_again(
-        self, env_file, answers, monkeypatch
-    ):
-        answers("4", "ABSKbedrock", "us-west-1", "", "us-west-2")
-        monkeypatch.setattr(setup, "serves_bedrock_gpt", lambda region: region != "us-west-1")
+    def test_a_region_outside_the_list_is_refused_and_asked_again(self, env_file, answers):
+        answers("4", "ABSKbedrock", "us-west-1", "us-west-2")
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == "us-west-2"
+
+    def test_an_unsupported_region_in_the_shell_is_not_adopted(
+        self, env_file, answers, monkeypatch
+    ):
+        monkeypatch.setenv("AWS_REGION", "us-west-1")
+        answers("4", "ABSKbedrock", "")
+        setup.ensure_model_access()
+        assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]
+
+    def test_the_region_list_is_models_own(self):
+        assert setup.BEDROCK_REGIONS == models.BEDROCK_REGIONS
 
     def test_a_setup_stopped_at_the_key_prompt_offers_the_whole_menu_again(
         self, env_file, answers, monkeypatch

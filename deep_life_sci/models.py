@@ -213,6 +213,14 @@ DIRECT_KEYS = {
 }
 DIRECT_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "bedrock": "Amazon Bedrock"}
 
+# The regions Bedrock is supported in under `MODEL_ACCESS=direct`: those where both Mantle
+# (Bedrock's OpenAI-compatible endpoint, which its GPT models and their web search need)
+# and GPT-5.6 were verified, in the US. A fixed list, enforced at startup, rather than
+# per-model rules: elsewhere Mantle's hostname does not even resolve (us-west-1, though
+# Bedrock's catalog lists GPT-5.6 there), and the first call fails as a bare connection
+# error. Claude, on bedrock-runtime, would run in more, but one rule is easier to follow.
+BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
+
 # What `scripts/setup.py` switches models.yaml's roles to when the user's own key is for a
 # provider the file does not use: (model, effort) per role. The Anthropic set is the one
 # models.yaml's comments recommend; the OpenAI set is its shipped defaults, and the Bedrock
@@ -780,21 +788,12 @@ def _is_connection_failure(exc: BaseException) -> bool:
 
 
 def _connection_message(role: str, exc: BaseException) -> str:
-    """A connection failure, with the one cause that is ours to name: Bedrock's
-    OpenAI-compatible endpoint, which its GPT models use, exists only in some regions, and
-    elsewhere its hostname does not resolve at all."""
+    """A connection failure, naming the host it could not reach."""
     try:
         host = exc.request.url.host
     except AttributeError:
         host = "the model provider"
-    message = f"Could not connect to {host} for the {role} model's request: {exc}"
-    if host.startswith("bedrock-mantle."):
-        message += (
-            f"\n\nAWS_REGION is {_aws_region()!r}. Bedrock's OpenAI-compatible endpoint, "
-            "which its GPT models use, is not offered in every region: GPT-5.6 runs in "
-            "us-east-1, us-east-2 and us-west-2. Set AWS_REGION to one of those in .env."
-        )
-    return message
+    return f"Could not connect to {host} for the {role} model's request: {exc}"
 
 
 def _resolve(role: str) -> tuple[str, str, str]:
@@ -847,17 +846,16 @@ def direct_problem(model: str, provider: str) -> str | None:
 def has_direct_credentials(destination: str) -> bool:
     """Whether `MODEL_ACCESS=direct` has what it needs to call one destination.
 
-    Bedrock also takes an AWS profile in place of a key (SSO, or `aws configure`), and needs
-    a region either way. Only the environment is read: resolving the AWS credential chain
-    can reach the instance metadata service, which is network I/O at assembly.
+    Bedrock also takes an AWS profile in place of a key (SSO, or `aws configure`); its
+    region is `_check_direct`'s. Only the environment is read: resolving the AWS credential
+    chain can reach the instance metadata service, which is network I/O at assembly.
     """
     if destination != "bedrock":
         return bool(direct_key(destination))
-    signed_in = any(
+    return any(
         os.environ.get(name, "").strip()
         for name in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_PROFILE", "AWS_ACCESS_KEY_ID")
     )
-    return signed_in and bool(_aws_region())
 
 
 def roles_without_key(destinations: tuple[str, ...], path: Path) -> dict[str, str]:
@@ -892,11 +890,17 @@ def _check_direct(role: str, model: str, provider: str, model_source: str) -> No
             "Choose another model, or set MODEL_ACCESS=gateway."
         )
     destination = _destination(model, provider)
+    if destination == "bedrock" and _aws_region() not in BEDROCK_REGIONS:
+        raise SystemExit(
+            f"AWS_REGION={_aws_region()!r} is not supported for Bedrock. Bedrock runs "
+            "through Mantle, its OpenAI-compatible endpoint, so it works in these regions "
+            f"only: {', '.join(BEDROCK_REGIONS)}. Set AWS_REGION in .env to one of them."
+        )
     if has_direct_credentials(destination):
         return
     name = DIRECT_NAMES[destination]
     needs = (
-        "AWS_BEARER_TOKEN_BEDROCK (or AWS_PROFILE) and AWS_REGION are not both set"
+        "neither AWS_BEARER_TOKEN_BEDROCK nor AWS_PROFILE is set"
         if destination == "bedrock" else f"{DIRECT_KEYS[destination]} is not set"
     )
     raise SystemExit(

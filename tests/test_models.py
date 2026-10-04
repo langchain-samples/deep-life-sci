@@ -318,14 +318,19 @@ class TestDirectAccess:
         monkeypatch.setenv("ROOT_MODEL", model)
         monkeypatch.setenv("ROOT_EFFORT", "")
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
-        with pytest.raises(SystemExit, match=r"runs on Amazon Bedrock.*AWS_REGION"):
-            _resolve("root")
+        for unsupported in ("", "us-west-1"):
+            monkeypatch.setenv("AWS_REGION", unsupported)
+            with pytest.raises(SystemExit, match=r"is not supported for Bedrock.*us-east-1"):
+                _resolve("root")
         monkeypatch.setenv("AWS_REGION", "us-east-1")
         _resolve("root")
         # A signed-in AWS profile stands in for the key.
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK")
         monkeypatch.setenv("AWS_PROFILE", "research")
         _resolve("root")
+        monkeypatch.delenv("AWS_PROFILE")
+        with pytest.raises(SystemExit, match="neither AWS_BEARER_TOKEN_BEDROCK nor AWS_PROFILE"):
+            _resolve("root")
 
 
 class TestWebSearchSpecs:

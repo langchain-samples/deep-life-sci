@@ -36,7 +36,6 @@ import platform
 import re
 import secrets
 import shutil
-import socket
 import subprocess
 import sys
 import tarfile
@@ -236,8 +235,9 @@ ACCESS_CHOICES = (
     ("bedrock", "your own Amazon Bedrock credentials"),
 )
 
-# Where Bedrock's GPT models, the defaults on Bedrock, are served (models.py says which).
-BEDROCK_DEFAULT_REGION = "us-east-1"
+# The regions Bedrock is supported in: models.py's BEDROCK_REGIONS, repeated for the same
+# reason as OWN_KEYS. The first is the answer to Enter.
+BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
 
 
 def choose(question: str, options: tuple[tuple[str, str], ...]) -> str:
@@ -280,47 +280,41 @@ def has_own_credentials(destination: str) -> bool:
 
 
 def ensure_bedrock() -> None:
-    """A Bedrock API key, or an AWS profile in its place, and a region.
+    """A Bedrock API key, or an AWS profile in its place, and a supported region.
 
     A profile is offered only when the shell already names one, which is how someone signed
     in with `aws sso login` or `aws configure` arrives. A deployment cannot sign in that way,
-    so `deploy.py` needs the key regardless.
+    so `deploy.py` needs the key regardless. Regions are a fixed list (models.py says why),
+    stated before anything is asked and enforced rather than warned about.
     """
+    regions = ", ".join(BEDROCK_REGIONS)
+    region_ok = env_value("AWS_REGION") in BEDROCK_REGIONS
+    if has_own_credentials("bedrock") and region_ok:
+        return
+    say(TAG, "Bedrock runs through Mantle, its OpenAI-compatible endpoint, so it works in "
+             f"these regions only: {regions}.")
     if not (
         has_own_credentials("bedrock")
         or adopt_from_shell("AWS_BEARER_TOKEN_BEDROCK")
         or adopt_from_shell("AWS_PROFILE")
     ):
         ask_key("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock API key", "")
-    if env_value("AWS_REGION") or adopt_from_shell("AWS_REGION"):
+    if region_ok:
         return
-    region = BEDROCK_DEFAULT_REGION
-    while interactive():
-        region = "".join(input(f"[{TAG}] AWS region [{region}]: ").split()) or region
-        if serves_bedrock_gpt(region) or confirm_no(f"use {region} anyway?"):
-            break
-        region = BEDROCK_DEFAULT_REGION
-    set_env("AWS_REGION", region)
-
-
-def serves_bedrock_gpt(region: str) -> bool:
-    """Whether `region` has Bedrock's OpenAI-compatible endpoint, which the Bedrock GPT
-    models setup recommends need. Where it is not offered its hostname does not resolve,
-    and the agent's first model call fails as a bare connection error. Says so and
-    returns False there; Claude, on bedrock-runtime, is not affected."""
-    try:
-        socket.getaddrinfo(f"bedrock-mantle.{region}.api.aws", 443)
-        return True
-    except OSError:
-        say(TAG, f"Bedrock's OpenAI-compatible endpoint is not offered in {region} (or this "
-                 "machine is offline), so Bedrock's GPT models, the recommended ones, cannot "
-                 "run there. GPT-5.6 runs in us-east-1, us-east-2 and us-west-2.")
-        return False
-
-
-def confirm_no(question: str) -> bool:
-    """`confirm` with No as the answer to Enter."""
-    return input(f"[{TAG}] {question} [y/N] ").strip().lower().startswith("y")
+    if os.environ.get("AWS_REGION", "").strip() in BEDROCK_REGIONS and adopt_from_shell(
+        "AWS_REGION"
+    ):
+        return
+    if not interactive():
+        die(TAG, f"set AWS_REGION in .env to one of: {regions}. There is no terminal to ask on.")
+    while True:
+        reply = "".join(input(f"[{TAG}] AWS region ({regions}) [{BEDROCK_REGIONS[0]}]: ").split())
+        region = reply or BEDROCK_REGIONS[0]
+        if region in BEDROCK_REGIONS:
+            set_env("AWS_REGION", region)
+            return
+        say(TAG, f"{region} is not supported: Mantle is not available there. "
+                 f"Choose one of: {regions}.")
 
 
 def ensure_model_access() -> tuple[str, ...]:
