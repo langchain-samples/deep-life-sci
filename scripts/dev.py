@@ -267,6 +267,22 @@ def remote_ui_env(url: str) -> dict[str, str]:
 
 
 def main() -> int:
+    """`_launch`, with whatever it started stopped however it ends.
+
+    The teardown wraps the whole launch, not only the supervision loop at its end: the
+    :3000 check can `die()` after the agent server is already up, and a Ctrl-C can land
+    while it waits on a cold UI, and either used to leave `langgraph dev` holding :2024 for
+    the next launch to adopt. `stop_all` touches only what this run spawned.
+    """
+    try:
+        return _launch()
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        stop_all()
+
+
+def _launch() -> int:
     parser = argparse.ArgumentParser(prog="uv run scripts/dev.py")
     parser.add_argument("--remote", metavar="URL",
                         help="start only the chat UI, against this deployment")
@@ -368,7 +384,7 @@ def main() -> int:
 
     say("dev", f"chat UI -> {UI_URL}   (Ctrl-C stops what this script started)")
     # Every signal explicitly — the `trap cleanup INT TERM` the shell version had, plus the
-    # two it was missing. Each default disposition skips the teardown below in its own way,
+    # two it was missing. Each default disposition skips the teardown in `main` in its own way,
     # and the cost is identical every time: both servers outlive us still holding their
     # ports, and the *next* launch finds them listening and reuses them, so a stale stack
     # silently serves the run.
@@ -390,17 +406,12 @@ def main() -> int:
             continue
         with contextlib.suppress(ValueError, OSError):
             signal.signal(sig, _raise_interrupt)
-    try:
-        while True:
-            for name, proc in _started:
-                if proc.poll() is not None:
-                    say("dev", f"{name} exited ({proc.returncode})")
-                    return proc.returncode or 1
-            time.sleep(0.25)
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        stop_all()
+    while True:
+        for name, proc in _started:
+            if proc.poll() is not None:
+                say("dev", f"{name} exited ({proc.returncode})")
+                return proc.returncode or 1
+        time.sleep(0.25)
 
 
 if __name__ == "__main__":
