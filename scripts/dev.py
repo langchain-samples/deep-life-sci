@@ -86,6 +86,10 @@ def spawn(name: str, cwd, argv: list[str], env: dict[str, str] | None = None) ->
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,  # line buffered: the prefix appears as the server logs it, not at exit
+        # UTF-8 rather than the locale's encoding, which on Windows is an ANSI code page:
+        # Node and (with PYTHONUTF8) the agent server both write UTF-8, and decoding it as
+        # cp1252 turns Next's `▲` banner into mojibake.
+        encoding="utf-8",
         errors="replace",
         env={**os.environ, **env} if env else None,
         **group,
@@ -95,6 +99,8 @@ def spawn(name: str, cwd, argv: list[str], env: dict[str, str] | None = None) ->
 
 
 def _pump(name: str, proc: subprocess.Popen[str]) -> None:
+    """Forward a server's output, prefixed. Must not die: nothing else drains the pipe, and
+    a server whose pipe fills blocks on its next log line and stops answering."""
     if proc.stdout is None:
         return
     for line in proc.stdout:
@@ -274,6 +280,10 @@ def main() -> int:
     while it waits on a cold UI, and either used to leave `langgraph dev` holding :2024 for
     the next launch to adopt. `stop_all` touches only what this run spawned.
     """
+    # The servers' output can hold characters our own stdout cannot encode: on Windows,
+    # redirected to a file or pipe, it is cp1252. Raising there would kill a pump thread.
+    with contextlib.suppress(AttributeError, ValueError):
+        sys.stdout.reconfigure(errors="replace")
     try:
         return _launch()
     except KeyboardInterrupt:

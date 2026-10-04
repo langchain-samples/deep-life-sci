@@ -91,14 +91,16 @@ jobs:
           uv run python - <<'EOF'
           import os, signal, subprocess, sys, time, urllib.request
 
-          def answers(port, path):
+          def probe(port, path):
+              """None when it answers 200, else why not."""
               try:
                   with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=20) as r:
-                      return r.status == 200
-              except Exception:
-                  return False
+                      return None if r.status == 200 else f"HTTP {r.status}"
+              except Exception as exc:
+                  return f"{type(exc).__name__}: {exc}"
 
-          log = open("dev.log", "w")
+          start = time.monotonic()
+          log = open("dev.log", "wb")
           # This interpreter rather than `uv run`, so the signal below reaches dev.py itself.
           dev = subprocess.Popen(
               [sys.executable, "scripts/dev.py"],
@@ -107,22 +109,29 @@ jobs:
           )
           # The artifact bundle proves the server got past starting its bundler, which is
           # where it used to exit on Windows.
-          pending = {(2024, "/ok"), (2024, "/ui/agent/entrypoint.js"), (3000, "/")}
-          deadline = time.monotonic() + 15 * 60
+          pending = {(2024, "/ok"): "", (2024, "/ui/agent/entrypoint.js"): "", (3000, "/"): ""}
+          deadline = start + 10 * 60
           ok = False
           while time.monotonic() < deadline and dev.poll() is None:
-              pending = {check for check in pending if not answers(*check)}
+              for check in list(pending):
+                  pending[check] = probe(*check)
+                  if pending[check] is None:
+                      del pending[check]
+                      print(f"{time.monotonic() - start:5.0f}s  :{check[0]}{check[1]} answers",
+                            flush=True)
               if not pending:
                   # Up is not enough: the Windows failure was a server that answered
                   # briefly and then exited.
                   time.sleep(20)
-                  ok = dev.poll() is None and answers(2024, "/ok")
+                  ok = dev.poll() is None and probe(2024, "/ok") is None
                   break
               time.sleep(5)
 
-          if dev.poll() is None:
+          exited = dev.poll()  # before we stop it: not None means it exited on its own
+          if exited is None:
               if os.name == "nt":
-                  subprocess.run(["taskkill", "/T", "/F", "/PID", str(dev.pid)], check=False)
+                  subprocess.run(["taskkill", "/T", "/F", "/PID", str(dev.pid)],
+                                 capture_output=True, check=False)
               else:
                   dev.send_signal(signal.SIGINT)  # dev.py stops both servers on SIGINT
               try:
@@ -130,9 +139,23 @@ jobs:
               except subprocess.TimeoutExpired:
                   dev.kill()
           log.close()
-          print(open("dev.log", encoding="utf-8", errors="replace").read())
-          if not ok:
-              print(f"dev.py exited ({dev.returncode})" if dev.returncode is not None
-                    else f"still waiting on {sorted(pending)}", file=sys.stderr)
-              sys.exit(1)
+          for (port, path), why in pending.items():
+              print(f"never answered  :{port}{path}  ({why})", flush=True)
+          if exited is not None:
+              print(f"dev.py exited on its own ({exited})", flush=True)
+          elif not ok and not pending:
+              print("came up, then stopped answering", flush=True)
+          # Bytes, not text: this step's stdout is cp1252 on Windows and the log is not.
+          print("----- dev.log -----", flush=True)
+          sys.stdout.buffer.write(open("dev.log", "rb").read())
+          sys.stdout.flush()
+          sys.exit(0 if ok else 1)
           EOF
+
+      - name: Keep the log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-log-${{ matrix.os }}
+          path: dev.log
+          if-no-files-found: ignore
