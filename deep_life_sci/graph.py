@@ -14,7 +14,7 @@ because "the user might come back to this thread" is true right up until it isn'
 
 Point a chat UI at this — `uv run scripts/dev.py` starts both halves, or by hand:
 
-    uv run langgraph dev                     # this graph, on :2024
+    uv run langgraph dev                     # this graph, on :2024 (--no-reload on Windows)
     cd frontend && pnpm dev                  # UI, on :3000 -> http://localhost:2024
 
 The UI must serve `/ui/*` from its own origin — a `next.config.mjs` rewrite to :2024.

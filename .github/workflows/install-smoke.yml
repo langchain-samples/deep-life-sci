@@ -4,8 +4,9 @@
 #   windows  — native Windows. `langgraph dev` used to exit at every start there (see the
 #              --no-reload comment in scripts/dev.py).
 #   ubuntu   — a bare Ubuntu 22.04 with no C compiler, as a fresh WSL install is. Its Python
-#              is 3.10, so uv downloads one; without .python-version that was 3.14, where a
-#              dependency has no prebuilt wheel and setup died compiling it.
+#              is 3.10, so uv downloads one; without .python-version and the requires-python
+#              cap that was 3.14, where a dependency has no prebuilt wheel and setup died
+#              compiling it.
 #
 # No secrets: setup runs with a placeholder LangSmith key and skips the sandbox snapshot,
 # the one step that needs a real one. The servers boot without calling LangSmith, which is
@@ -13,31 +14,28 @@
 name: Install smoke test
 
 on:
+  # Ignore-listed rather than allow-listed: what can break an install or a boot is most of
+  # the repo (the graph the server imports, the components it bundles, the UI), and a new
+  # directory should run this until someone decides it cannot.
   pull_request:
-    paths:
-      - ".github/workflows/install-smoke.yml"
-      - ".python-version"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "langgraph.json"
-      - "package.json"
-      - "package-lock.json"
-      - "frontend/package.json"
-      - "frontend/pnpm-lock.yaml"
-      - "scripts/**"
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - "assets/**"
+      - "tests/**"
+      - "evals/**"
+      - ".dockerignore"
+      - "langgraph.deploy.json"
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/install-smoke.yml"
-      - ".python-version"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "langgraph.json"
-      - "package.json"
-      - "package-lock.json"
-      - "frontend/package.json"
-      - "frontend/pnpm-lock.yaml"
-      - "scripts/**"
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - "assets/**"
+      - "tests/**"
+      - "evals/**"
+      - ".dockerignore"
+      - "langgraph.deploy.json"
   workflow_dispatch:
 
 permissions:
@@ -77,10 +75,11 @@ jobs:
             echo "this job must run without a compiler"; exit 1
           fi
 
-      - name: Placeholder credentials
-        run: printf 'LANGSMITH_API_KEY=lsv2_ci_placeholder\n' > .env
-
+      # The key through the environment, so setup writes .env from .env.example the way a
+      # first install does, rather than finding one already there and skipping that.
       - name: Setup
+        env:
+          LANGSMITH_API_KEY: lsv2_ci_placeholder
         run: uv run scripts/setup.py --yes --no-snapshot
 
       - name: Python is the pinned version
@@ -89,15 +88,14 @@ jobs:
       - name: Both servers start and stay up
         run: |
           uv run python - <<'EOF'
-          import os, signal, subprocess, sys, time, urllib.request
+          import os, signal, subprocess, sys, time
 
-          def probe(port, path):
-              """None when it answers 200, else why not."""
-              try:
-                  with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=20) as r:
-                      return None if r.status == 200 else f"HTTP {r.status}"
-              except Exception as exc:
-                  return f"{type(exc).__name__}: {exc}"
+          sys.path.insert(0, "scripts")
+          from _common import answering, listening
+
+          # The failure lines quote the log, and this step's stdout is cp1252 on Windows:
+          # what it cannot encode becomes `?` rather than a traceback that hides the verdict.
+          sys.stdout.reconfigure(errors="replace")
 
           start = time.monotonic()
           log = open("dev.log", "wb")
@@ -107,49 +105,69 @@ jobs:
               stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
               env={**os.environ, "NO_BROWSER": "1"},
           )
-          # The artifact bundle proves the server got past starting its bundler, which is
-          # where it used to exit on Windows.
-          pending = {(2024, "/ok"): "", (2024, "/ui/agent/entrypoint.js"): "", (3000, "/"): ""}
+          # The artifact bundle proves the server got past starting its bundler, which is where
+          # it used to exit on Windows. Not that the bundle built: the log is checked for that.
+          pending = [(2024, "/ok"), (2024, "/ui/agent/entrypoint.js"), (3000, "/")]
           deadline = start + 10 * 60
           ok = False
           while time.monotonic() < deadline and dev.poll() is None:
               for check in list(pending):
-                  pending[check] = probe(*check)
-                  if pending[check] is None:
-                      del pending[check]
+                  if answering(*check, timeout=20):
+                      pending.remove(check)
                       print(f"{time.monotonic() - start:5.0f}s  :{check[0]}{check[1]} answers",
                             flush=True)
               if not pending:
-                  # Up is not enough: the Windows failure was a server that answered
-                  # briefly and then exited.
+                  # Up is not enough: the Windows failure was a server that answered briefly
+                  # and then exited.
                   time.sleep(20)
-                  ok = dev.poll() is None and probe(2024, "/ok") is None
+                  ok = dev.poll() is None and answering(2024)
                   break
               time.sleep(5)
 
           exited = dev.poll()  # before we stop it: not None means it exited on its own
           if exited is None:
               if os.name == "nt":
+                  # Nothing here can deliver a console event to dev.py, so its own teardown
+                  # cannot run; this is the tree kill that teardown uses on Windows.
                   subprocess.run(["taskkill", "/T", "/F", "/PID", str(dev.pid)],
                                  capture_output=True, check=False)
               else:
-                  dev.send_signal(signal.SIGINT)  # dev.py stops both servers on SIGINT
+                  dev.send_signal(signal.SIGINT)  # dev.py's own teardown, as Ctrl-C runs it
               try:
                   dev.wait(timeout=30)
               except subprocess.TimeoutExpired:
                   dev.kill()
           log.close()
-          for (port, path), why in pending.items():
-              print(f"never answered  :{port}{path}  ({why})", flush=True)
-          if exited is not None:
-              print(f"dev.py exited on its own ({exited})", flush=True)
-          elif not ok and not pending:
-              print("came up, then stopped answering", flush=True)
-          # Bytes, not text: this step's stdout is cp1252 on Windows and the log is not.
+
+          # A port still held after stopping is the orphan the next launch would adopt.
+          held = [2024, 3000]
+          for _ in range(40):
+              held = [port for port in held if listening(port)]
+              if not held:
+                  break
+              time.sleep(0.25)
+
+          text = open("dev.log", "rb").read()
           print("----- dev.log -----", flush=True)
-          sys.stdout.buffer.write(open("dev.log", "rb").read())
+          sys.stdout.buffer.write(text)  # as bytes: the log is UTF-8, unlike this stdout
           sys.stdout.flush()
-          sys.exit(0 if ok else 1)
+          print("-------------------", flush=True)
+
+          failures = [f"never answered  :{port}{path}" for port, path in pending]
+          if exited is not None:
+              failures.append(f"dev.py exited on its own ({exited})")
+          elif not ok and not pending:
+              failures.append("came up, then stopped answering")
+          failures += [f"still listening after dev.py stopped  :{port}" for port in held]
+          # A component whose dependency is missing is left out of the bundle while
+          # entrypoint.js still answers 200; the bundler's log is the only place it shows.
+          failures += [
+              "bundler: " + line.decode("utf-8", "replace").strip()
+              for line in text.splitlines() if b"Could not resolve" in line
+          ]
+          for failure in failures:
+              print(failure, flush=True)
+          sys.exit(0 if ok and not failures else 1)
           EOF
 
       - name: Keep the log
