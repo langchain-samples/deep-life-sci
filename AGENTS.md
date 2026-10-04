@@ -50,6 +50,9 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   not trigger dependency installation.
 - The gateway authenticates with a LangSmith key. Provider credentials belong in the
   workspace's provider integrations. See `models.py:gateway_key()` for precedence.
+  `MODEL_ACCESS=direct` is the opt-in bring-your-own-key path (Anthropic, OpenAI or Bedrock
+  credentials in `.env`, Bedrock through langchain-aws);
+  read provider keys only in that mode, and keep the same models.yaml ids working in both.
 - Model roles and environment axes live in `models.py:ENV_VARS`. Entry points import
   that list; do not copy it. Preserve explicitly empty values across dotenv loading:
   empty effort disables the parameter for models that do not support it.

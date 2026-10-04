@@ -157,6 +157,9 @@ def sandbox_prefix(name: str) -> str:
     return f"{name[:7].rstrip('-')}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
 
 
+# AWS_PROFILE is absent: it names a profile on this machine, which a deployment has not got.
+DIRECT_SETTINGS = ("MODEL_ACCESS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+                   "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION")
 OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "OIDC_SCOPE", "OIDC_TOKEN",
                  "OIDC_ALLOWED_EMAIL_DOMAINS")
 
@@ -184,6 +187,9 @@ def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
         "NCBI_API_KEY": env_value("NCBI_API_KEY"),
         "DEEP_LIFE_SCI_AUTH": auth_mode,
     }
+    # Provider keys ship only when model calls use them, never beside the gateway.
+    if env_value("MODEL_ACCESS").lower() == "direct":
+        settings |= {key: env_value(key) for key in DIRECT_SETTINGS}
     if auth_mode == "oidc":
         settings |= {key: env_value(key) for key in OIDC_SETTINGS}
     return {key: value for key, value in settings.items() if value}
@@ -364,6 +370,11 @@ def main() -> int:
     if "NCBI_API_KEY" not in settings:
         say(TAG, "warning: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
                  "every user, and without a key that caller is held to 3 requests/sec.")
+    direct = settings.get("MODEL_ACCESS") == "direct"
+    if direct and env_value("AWS_PROFILE") and "AWS_BEARER_TOKEN_BEDROCK" not in settings:
+        say(TAG, "warning: .env signs in to Bedrock with AWS_PROFILE, which exists only on "
+                 "this machine. Bedrock models will not start on the deployment until "
+                 "AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key) is in .env.")
 
     api_key = env_value("LANGSMITH_API_KEY")
     host_url = os.environ.get("LANGGRAPH_HOST_URL") or (

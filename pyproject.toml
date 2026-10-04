@@ -41,6 +41,10 @@ dependencies = [
     "pyjwt[crypto]>=2.13.0",
     # models.yaml, the per-role model settings (models.py).
     "pyyaml>=6.0.3",
+    # Bedrock under MODEL_ACCESS=direct (models.py): ChatAnthropicBedrock for Claude,
+    # ChatOpenAIMantle for everything else. Capped at the next major because the Mantle
+    # classes are new. Imported only when a Bedrock model is built.
+    "langchain-aws>=1.8.0,<2",
 ]
 
 [project.scripts]

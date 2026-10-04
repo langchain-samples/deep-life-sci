@@ -58,7 +58,9 @@ os.environ.setdefault("DEEP_LIFE_SCI_CACHE_TTL", "off")
 from langsmith import aevaluate  # noqa: E402
 
 from deep_life_sci.models import (  # noqa: E402
-    check_gateway_config,
+    CHAT_ROLES,
+    ROLES,
+    check_model_access,
     describe,
     slug,
 )
@@ -170,7 +172,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     # Fail on a bad model config before booting the first container.
-    check_gateway_config()
+    check_model_access(*(CHAT_ROLES if args.structural else ROLES))
     pair = describe()
     print(f"[evals] {pair}")
 

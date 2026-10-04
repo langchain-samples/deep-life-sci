@@ -348,6 +348,11 @@ def require_setup(tag: str) -> None:
         die(tag, f"no .env in {REPO_ROOT}. Run:  uv run scripts/setup.py")
     if not (REPO_ROOT / ".venv").is_dir():
         die(tag, f"no virtualenv in {REPO_ROOT}. Run:  uv run scripts/setup.py")
-    for key in ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY"):
+    # Under MODEL_ACCESS=direct the gateway key goes unused, and which provider keys are
+    # needed depends on models.yaml: the server checks those as it starts.
+    keys = ["LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY"]
+    if env_value("MODEL_ACCESS").lower() == "direct":
+        keys.remove("LANGSMITH_GATEWAY_API_KEY")
+    for key in keys:
         if not env_value(key):
             die(tag, f"{key} is not set in .env. Run:  uv run scripts/setup.py")

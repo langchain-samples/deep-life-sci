@@ -117,3 +117,71 @@ def test_an_empty_openai_base_url_reads_as_unset(constructors, monkeypatch):
     monkeypatch.setenv("LANGSMITH_GATEWAY_BASE_URL", "")
     models.root_model()
     assert constructors["openai"].call_args.kwargs["base_url"] == models.OPENAI_BASE_URL
+
+
+@pytest.mark.parametrize(
+    "provider,model,sent",
+    [
+        ("anthropic", "claude-sonnet-5", "claude-sonnet-5"),
+        # OpenAI's own API takes bare ids; models.yaml keeps the gateway's form for both.
+        ("openai", "openai/gpt-5.6-terra", "gpt-5.6-terra"),
+    ],
+)
+def test_direct_access_sends_the_users_own_key_to_the_provider(
+    constructors, monkeypatch, provider, model, sent
+):
+    monkeypatch.setenv("MODEL_ACCESS", "direct")
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", f"sk-{provider}")
+    monkeypatch.setenv("ROOT_MODEL", model)
+    models.root_model()
+    kwargs = constructors[provider].call_args.kwargs
+    assert kwargs["model"] == sent
+    assert kwargs["api_key"] == f"sk-{provider}"
+    # The SDK's own default, which is the provider's API rather than the gateway.
+    assert "base_url" not in kwargs
+
+
+@pytest.fixture
+def bedrock_constructors(monkeypatch):
+    import langchain_aws
+
+    anthropic, mantle = Mock(), Mock()
+    monkeypatch.setattr(langchain_aws, "ChatAnthropicBedrock", anthropic, raising=False)
+    monkeypatch.setattr(langchain_aws, "ChatOpenAIMantle", mantle, raising=False)
+    monkeypatch.setenv("MODEL_ACCESS", "direct")
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-key")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    return {"anthropic": anthropic, "openai": mantle}
+
+
+@pytest.mark.parametrize(
+    "provider,model",
+    [
+        # Claude on bedrock-runtime, which takes the inference-profile ids the gateway does.
+        ("anthropic", "bedrock/us.anthropic.claude-sonnet-5"),
+        ("openai", "bedrock/openai.gpt-5.6-terra"),
+    ],
+)
+def test_direct_bedrock_leaves_credentials_to_the_aws_sdks(
+    bedrock_constructors, monkeypatch, provider, model
+):
+    monkeypatch.setenv("ROOT_MODEL", model)
+    monkeypatch.setenv("ROOT_EFFORT", "high")
+    models.root_model()
+    kwargs = bedrock_constructors[provider].call_args.kwargs
+    assert kwargs["model"] == model.removeprefix("bedrock/")
+    assert kwargs["reasoning_effort"] == "high"
+    # Read from AWS_BEARER_TOKEN_BEDROCK or the AWS credential chain by the SDK itself.
+    assert "api_key" not in kwargs and "base_url" not in kwargs
+    if provider == "openai":
+        assert kwargs["use_responses_api"] is True
+    else:
+        assert kwargs["timeout"] == models.ROOT_TIMEOUT.read
+        assert kwargs["max_tokens"] == kwargs["profile"]["max_output_tokens"]
+
+
+def test_direct_bedrock_search_binds_bedrocks_own_web_search(bedrock_constructors, monkeypatch):
+    monkeypatch.setenv("SEARCH_MODEL", "bedrock/openai.gpt-5.6-luna")
+    models.web_search_model()
+    bound = bedrock_constructors["openai"].return_value.bind_tools.call_args.args[0]
+    assert bound == [models._BEDROCK_WEB_SEARCH_SPEC]

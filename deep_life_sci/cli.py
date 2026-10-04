@@ -37,7 +37,7 @@ os.environ.update(_CLI_OVERRIDES)
 # import time, so importing it first would bake in the pre-.env value.
 from deep_life_sci.agent import build_agent  # noqa: E402
 from deep_life_sci.middleware.perf import install_logging  # noqa: E402
-from deep_life_sci.models import check_gateway_config, describe  # noqa: E402
+from deep_life_sci.models import check_model_access, describe  # noqa: E402
 from deep_life_sci.sandbox import sandbox_session  # noqa: E402
 from deep_life_sci.sources import cache_io  # noqa: E402
 
@@ -93,7 +93,7 @@ async def stream_answer(agent, question: str) -> None:
 
 async def main(question: str) -> None:
     # Fail on a bad model config before paying to boot a sandbox.
-    check_gateway_config()
+    check_model_access()
     install_logging()
     print(f"[models] {describe()}\n")
 
@@ -116,7 +116,10 @@ def run() -> None:
     shell has already split it into words by the time it arrives here, and the
     alternative is a confusing "unexpected argument" for a natural way to type it.
     """
-    required = ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY")
+    required = ["LANGSMITH_API_KEY"]
+    # Provider keys under MODEL_ACCESS=direct depend on models.yaml; `main` checks those.
+    if os.environ.get("MODEL_ACCESS", "").strip().lower() != "direct":
+        required.insert(0, "LANGSMITH_GATEWAY_API_KEY")
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         # Without this the first model call dies as an SDK auth error a long way from its

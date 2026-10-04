@@ -42,12 +42,13 @@ from deep_life_sci.models import (
     _resolve,
     _setting,
     _web_search_spec,
-    check_gateway_config,
+    check_model_access,
     describe,
     gateway_key,
     refresh,
     rejection_message,
     report_web_search_problem,
+    roles_without_key,
     root_model,
     slug,
     summary,
@@ -223,16 +224,108 @@ class TestGatewayKey:
 class TestCheckGatewayConfig:
     def test_fails_legibly_rather_than_deep_inside_the_sdk(self):
         with pytest.raises(SystemExit, match="LANGSMITH_API_KEY is not set"):
-            check_gateway_config()
+            check_model_access()
 
     def test_says_a_provider_key_is_not_what_it_wants(self):
         """The commonest mistake: pasting an sk-... here gets a 403 at the gateway."""
         with pytest.raises(SystemExit, match="provider credential"):
-            check_gateway_config()
+            check_model_access()
 
     def test_passes_once_a_key_is_present(self, monkeypatch):
         monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_x")
-        check_gateway_config()
+        check_model_access()
+
+
+class TestDirectAccess:
+    """MODEL_ACCESS=direct: the user's own provider keys instead of the gateway."""
+
+    def test_gateway_is_the_default_and_ignores_provider_keys(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-shell")
+        with pytest.raises(SystemExit, match="LANGSMITH_API_KEY is not set"):
+            check_model_access()
+
+    def test_an_unknown_mode_is_refused(self, monkeypatch):
+        monkeypatch.setenv("MODEL_ACCESS", "byok")
+        with pytest.raises(SystemExit, match="MODEL_ACCESS='byok'"):
+            check_model_access()
+
+    def test_needs_no_langsmith_key_for_models(self, monkeypatch):
+        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+        check_model_access()
+
+    def test_a_role_whose_provider_has_no_key_is_named(self, monkeypatch):
+        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+        with pytest.raises(SystemExit, match=r"root model.*OPENAI_API_KEY is not set"):
+            check_model_access()
+        for role in ("ROOT", "SUBAGENT", "SEARCH"):
+            monkeypatch.setenv(f"{role}_MODEL", "claude-sonnet-5")
+            monkeypatch.setenv(f"{role}_EFFORT", "")
+        check_model_access()
+        # The judge only when asked for, as evals do.
+        with pytest.raises(SystemExit, match="judge model"):
+            check_model_access(*ROLES)
+
+    @pytest.mark.parametrize("model", ["xai/grok-5", "anthropic/claude-sonnet-5"])
+    def test_ids_only_the_gateway_reaches_are_refused(self, monkeypatch, model):
+        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+        monkeypatch.setenv("ROOT_MODEL", model)
+        monkeypatch.setenv("ROOT_EFFORT", "")
+        with pytest.raises(SystemExit, match="cannot run with MODEL_ACCESS=direct"):
+            _resolve("root")
+
+    def test_roles_without_key_reads_the_file_alone(self, monkeypatch):
+        from deep_life_sci import paths
+
+        monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
+        assert roles_without_key(("openai",), paths.MODELS_FILE) == {}
+        assert roles_without_key(("anthropic",), paths.MODELS_FILE) == dict.fromkeys(
+            ROLES, "openai"
+        )
+
+    def test_rejections_name_the_provider_rather_than_the_gateway(self, monkeypatch):
+        error = Exception("bad request")
+        error.status_code = 400
+        assert rejection_message("root", error).startswith("The LLM Gateway returned")
+        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        assert rejection_message("root", error).startswith("The model provider returned")
+
+    def test_recommended_models_resolve_with_only_their_own_credentials(self, monkeypatch):
+        from deep_life_sci.models import DIRECT_KEYS, RECOMMENDED_MODELS, _destination
+
+        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        for destination, picks in RECOMMENDED_MODELS.items():
+            for name in DIRECT_KEYS.values():
+                monkeypatch.delenv(name, raising=False)
+            monkeypatch.setenv(DIRECT_KEYS[destination], "k")
+            for role, (model, effort) in picks.items():
+                monkeypatch.setenv(f"{role.upper()}_MODEL", model)
+                monkeypatch.setenv(f"{role.upper()}_EFFORT", effort)
+                resolved, provider, resolved_effort = _resolve(role)
+                assert (resolved, resolved_effort) == (model, effort)
+                assert _destination(model, provider) == destination
+            # And the search role can search there.
+            assert web_search_problem() is None
+
+    @pytest.mark.parametrize("model", ["bedrock/us.anthropic.claude-sonnet-5",
+                                       "bedrock/openai.gpt-5.6-luna"])
+    def test_bedrock_needs_credentials_and_a_region(self, monkeypatch, model):
+        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        monkeypatch.setenv("ROOT_MODEL", model)
+        monkeypatch.setenv("ROOT_EFFORT", "")
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
+        with pytest.raises(SystemExit, match=r"runs on Amazon Bedrock.*AWS_REGION"):
+            _resolve("root")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        _resolve("root")
+        # A signed-in AWS profile stands in for the key.
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK")
+        monkeypatch.setenv("AWS_PROFILE", "research")
+        _resolve("root")
 
 
 class TestWebSearchSpecs:

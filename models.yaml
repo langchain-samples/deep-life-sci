@@ -7,11 +7,12 @@
 # Effort must be a level the model supports; leave it empty to omit it
 # This is required for models with no effort setting
 
-# Provider API keys go in LangSmith under Settings -> Integrations -> Provider Secrets
+# Through the LangSmith LLM Gateway, provider API keys go in LangSmith under
+# Settings -> Integrations -> Provider Secrets; with your own keys, in .env (setup.py asks)
 
 # Amazon Bedrock: prefix the Bedrock model or inference profile id with bedrock/
-# (bedrock/openai.gpt-5.6-terra, bedrock/us.anthropic.claude-...) and add the
-# AWS_BEARER_TOKEN_BEDROCK Provider Secret in LangSmith
+# (bedrock/openai.gpt-5.6-terra, bedrock/us.anthropic.claude-...). Through the gateway, add
+# the AWS_BEARER_TOKEN_BEDROCK Provider Secret in LangSmith
 
 # Main agent
 root:

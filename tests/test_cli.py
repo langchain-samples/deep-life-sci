@@ -43,7 +43,7 @@ def test_dotenv_cannot_overwrite_explicit_model_axis(monkeypatch, path, override
 
 
 async def test_invalid_gateway_configuration_fails_before_sandbox_boot(monkeypatch):
-    monkeypatch.setattr(cli, "check_gateway_config", Mock(side_effect=SystemExit("missing config")))
+    monkeypatch.setattr(cli, "check_model_access", Mock(side_effect=SystemExit("missing config")))
     session = Mock(side_effect=AssertionError("must not boot"))
     monkeypatch.setattr(cli, "sandbox_session", session)
     with pytest.raises(SystemExit, match="missing config"):

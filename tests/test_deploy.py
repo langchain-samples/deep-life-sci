@@ -324,3 +324,31 @@ def test_a_signed_in_owners_sandbox_names_fit_and_differ_by_owner(monkeypatch):
     member = scope("studio-user", signed_in=False, owner="alice")
     assert graph._sandbox_name(member) == alice
     assert graph._sandbox_name(scope("bob", owner="alice")) == bob
+
+
+class TestDirectAccessSecrets:
+    def test_provider_keys_ship_only_when_model_calls_use_them(self, dotenv):
+        dotenv(LANGSMITH_API_KEY="k", ANTHROPIC_API_KEY="sk-ant-x", MODEL_ACCESS="gateway")
+        assert not set(deploy.DIRECT_SETTINGS) & set(deploy.deploy_settings("x"))
+        dotenv(LANGSMITH_API_KEY="k", ANTHROPIC_API_KEY="sk-ant-x", MODEL_ACCESS="direct")
+        secrets = deploy.deploy_settings("x")
+        assert secrets["MODEL_ACCESS"] == "direct"
+        assert secrets["ANTHROPIC_API_KEY"] == "sk-ant-x"
+        assert "OPENAI_API_KEY" not in secrets
+
+    def test_bedrock_ships_its_key_and_region_but_not_a_local_profile(self, dotenv):
+        dotenv(LANGSMITH_API_KEY="k", MODEL_ACCESS="direct", AWS_BEARER_TOKEN_BEDROCK="b",
+               AWS_PROFILE="research", AWS_REGION="us-west-2")
+        secrets = deploy.deploy_settings("x")
+        assert secrets["AWS_BEARER_TOKEN_BEDROCK"] == "b"
+        assert secrets["AWS_REGION"] == "us-west-2"
+        assert "AWS_PROFILE" not in secrets
+
+    def test_direct_settings_are_read_by_the_package_and_not_reserved(self, dotenv):
+        reserved = pytest.importorskip("langgraph_cli.deploy").RESERVED_ENV_VARS
+        source = "".join(
+            path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
+        )
+        for name in deploy.DIRECT_SETTINGS:
+            assert name not in reserved
+            assert f'"{name}"' in source, name
