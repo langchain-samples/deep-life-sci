@@ -62,11 +62,12 @@ class TestModelAccess:
         assert _common.env_value("MODEL_ACCESS") == "direct"
         assert _common.env_value("ANTHROPIC_API_KEY") == "sk-ant-abc"
 
-    def test_a_key_already_in_the_shell_is_adopted(self, env_file, answers, monkeypatch):
+    def test_a_key_in_the_shell_is_not_used(self, env_file, answers, monkeypatch):
+        """What .env holds is always what the user typed here."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-shell")
-        answers("3", "")
+        answers("3", "sk-typed")
         assert setup.ensure_model_access() == ("openai",)
-        assert _common.env_value("OPENAI_API_KEY") == "sk-shell"
+        assert _common.env_value("OPENAI_API_KEY") == "sk-typed"
 
     def test_an_answered_choice_is_not_asked_again(self, env_file, answers):
         env_file.write_text("MODEL_ACCESS=direct\nANTHROPIC_API_KEY=sk-ant-abc\n")
@@ -79,25 +80,21 @@ class TestModelAccess:
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == "ABSKbedrock"
         assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]
 
-    def test_bedrock_takes_a_signed_in_aws_profile_instead(self, env_file, answers, monkeypatch):
-        monkeypatch.setenv("AWS_PROFILE", "research")
-        monkeypatch.setenv("AWS_REGION", "us-west-2")
-        # Enter to each: yes to the profile, then to the shell's region.
-        answers("4", "", "")
+    def test_an_aws_profile_in_env_stands_in_for_the_key(self, env_file, answers):
+        env_file.write_text("MODEL_ACCESS=direct\nAWS_PROFILE=research\nAWS_REGION=us-west-2\n")
+        answers()  # nothing left to ask
         assert setup.ensure_model_access() == ("bedrock",)
-        assert _common.env_value("AWS_PROFILE") == "research"
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == ""
-        assert _common.env_value("AWS_REGION") == "us-west-2"
 
     def test_a_region_outside_the_list_is_refused_and_asked_again(self, env_file, answers):
         answers("4", "ABSKbedrock", "us-west-1", "us-west-2")
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == "us-west-2"
 
-    def test_an_unsupported_region_in_the_shell_is_not_adopted(
+    def test_a_region_in_the_shell_is_not_used(
         self, env_file, answers, monkeypatch
     ):
-        monkeypatch.setenv("AWS_REGION", "us-west-1")
+        monkeypatch.setenv("AWS_REGION", "us-east-2")
         answers("4", "ABSKbedrock", "")
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]

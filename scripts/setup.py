@@ -233,7 +233,7 @@ PROVIDER_CHOICES = (
     ("bedrock", "Amazon Bedrock credentials"),
 )
 ACCESS_CHOICES = (
-    ("gateway", "LangSmith LLM Gateway (recommended): provider keys stay in your "
+    ("gateway", "LangSmith LLM Gateway: provider keys stay in your "
                 "LangSmith workspace"),
     *((choice, f"your own {label}") for choice, label in PROVIDER_CHOICES),
 )
@@ -254,26 +254,13 @@ def choose(question: str, options: tuple[tuple[str, str], ...]) -> str:
             return options[int(reply) - 1][0]
 
 
-def adopt_from_shell(key: str) -> bool:
-    """Copy `key` from the shell into .env, if it is set there and the user agrees.
-
-    Into .env rather than left in the shell, because a deployment ships what .env holds,
-    and `uv run agent` from another terminal would otherwise lose it.
-    """
-    exported = os.environ.get(key, "").strip()
-    shown = exported if key in ("AWS_PROFILE", "AWS_REGION") else f"{exported[:8]}…"
-    if exported and confirm(f"use the {key} already set in your shell ({shown})?"):
-        set_env(key, exported)
-        return True
-    return False
-
-
 def ask_provider_key(destination: str) -> None:
-    """The user's own credentials for one destination, from the shell if it has them."""
+    """The user's own credentials for one destination, typed in: never read from the shell,
+    so what .env holds is always what the user entered here."""
     key, name, prefix = OWN_KEYS[destination]
     if destination == "bedrock":
         ensure_bedrock()
-    elif not env_value(key) and not adopt_from_shell(key):
+    elif not env_value(key):
         # No prefix check: provider key formats are the providers' to change, and a wrong
         # key is named by the server at its first call.
         ask_key(key, f"{name} API key ({prefix}...)", "")
@@ -285,12 +272,12 @@ def has_own_credentials(destination: str) -> bool:
 
 
 def ensure_bedrock() -> None:
-    """A Bedrock API key, or an AWS profile in its place, and a supported region.
+    """A Bedrock API key and a supported region.
 
-    A profile is offered only when the shell already names one, which is how someone signed
-    in with `aws sso login` or `aws configure` arrives. A deployment cannot sign in that way,
-    so `deploy.py` needs the key regardless. Regions are a fixed list (models.py says why),
-    stated before anything is asked and enforced rather than warned about.
+    An AWS profile also works in place of the key (AWS_PROFILE in .env, by hand), but setup
+    asks only for the key: it is the one form a deployment can use too. Regions are a fixed
+    list (models.py says why), stated before anything is asked and enforced rather than
+    warned about.
     """
     regions = ", ".join(BEDROCK_REGIONS)
     region_ok = env_value("AWS_REGION") in BEDROCK_REGIONS
@@ -298,17 +285,9 @@ def ensure_bedrock() -> None:
         return
     say(TAG, "Bedrock needs Mantle, its OpenAI-compatible endpoint, with GPT-5.6, so it "
              f"works in these regions only: {regions}.")
-    if not (
-        has_own_credentials("bedrock")
-        or adopt_from_shell("AWS_BEARER_TOKEN_BEDROCK")
-        or adopt_from_shell("AWS_PROFILE")
-    ):
+    if not has_own_credentials("bedrock"):
         ask_key("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock API key", "")
     if region_ok:
-        return
-    if os.environ.get("AWS_REGION", "").strip() in BEDROCK_REGIONS and adopt_from_shell(
-        "AWS_REGION"
-    ):
         return
     if not interactive():
         die(TAG, f"set AWS_REGION in .env to one of: {regions}. There is no terminal to ask on.")
@@ -407,7 +386,7 @@ def ask_ncbi_credentials() -> None:
     say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
              "from 3 to 10 req/s.")
     ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
-    ask_optional("NCBI_EMAIL", "contact email for NCBI (their usage policy asks for one)")
+    ask_optional("NCBI_EMAIL", "contact email for NCBI")
 
 
 # --- 2. dependencies --------------------------------------------------------------
@@ -425,13 +404,14 @@ def ensure_deps() -> None:
 
 
 def ensure_models_match(own_keys: tuple[str, ...]) -> None:
-    """Offer to move models.yaml's roles onto the provider of the user's own key.
+    """Move models.yaml's roles onto the provider of the user's own key.
 
     The shipped models.yaml runs OpenAI models, so an Anthropic key alone would otherwise
     end at the server's first check, naming an OPENAI_API_KEY the user never meant to have.
-    Only the roles that need another provider change, to the models models.py recommends,
-    and only with a yes: the file is the user's to edit, and one that already fits is left
-    alone. After the virtualenv, because it reads the file with models.py's own loader.
+    Done without asking, because only the roles those credentials cannot call change, to
+    the models models.py recommends: nothing that could run is touched, the old models stay
+    in the file's comments, and one that already fits is left alone. After the virtualenv,
+    because it reads the file with models.py's own loader.
     """
     if not own_keys:
         return
@@ -441,16 +421,8 @@ def ensure_models_match(own_keys: tuple[str, ...]) -> None:
     if not stranded:
         return
     target = own_keys[0]
-    name = models.DIRECT_NAMES[target]
-    say(TAG, f"models.yaml runs {', '.join(stranded)} on models your {name} credentials "
-             "cannot call.")
-    if not confirm(f"switch {'it' if len(stranded) == 1 else 'them'} to {name}'s "
-                   "recommended models?"):
-        say(TAG, "then edit models.yaml before running the agent; its comments show how.")
-        return
     switch_models(paths.MODELS_FILE, target, stranded)
-    say(TAG, f"models.yaml now runs {', '.join(stranded)} on {name} "
-             "(the old models are in its comments).")
+    say(TAG, f"default models switched to recommended {models.DIRECT_NAMES[target]} options")
 
 
 _ROLE_LINE = re.compile(r"^(\w+):")
