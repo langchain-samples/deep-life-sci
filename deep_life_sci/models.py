@@ -213,15 +213,13 @@ DIRECT_KEYS = {
 }
 DIRECT_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "bedrock": "Amazon Bedrock"}
 
-# The regions Bedrock is supported in under `MODEL_ACCESS=direct`: those where Mantle
-# (Bedrock's OpenAI-compatible endpoint, which its GPT models and their web search need)
-# serves GPT-5.6. Verified 2026-10-04 against Mantle's own `/v1/models` in every region it
-# runs in: 17 regions have Mantle, and only these three list GPT-5.6 (us-west-2 has Terra
-# and Luna, the defaults, but not Sol); the other fourteen serve only the open-weight
-# gpt-oss models. Elsewhere, us-west-1 among them although Bedrock's catalog lists GPT-5.6
-# there, Mantle's hostname does not resolve at all. A fixed list, enforced at startup, is
-# easier to follow than per-model rules; Claude, on bedrock-runtime, would run in more.
-BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
+# The regions that serve every model in RECOMMENDED_MODELS["bedrock"]. Setup notes it
+# when the user's region is outside them; nothing refuses one, because which models a
+# region serves changes and the user may run others (models.yaml's Bedrock notes). Update
+# it with the recommended models. Checked 2026-10-04 against Mantle's own `/v1/models` in
+# all 17 regions that have Mantle: only these three listed the recommended models; the
+# rest served open-weight gpt-oss only, and us-west-1 has no Mantle at all.
+RECOMMENDED_BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
 
 # What `scripts/setup.py` switches models.yaml's roles to when the user's own key is for a
 # provider the file does not use: (model, effort) per role. The Anthropic set is the one
@@ -790,12 +788,19 @@ def _is_connection_failure(exc: BaseException) -> bool:
 
 
 def _connection_message(role: str, exc: BaseException) -> str:
-    """A connection failure, naming the host it could not reach."""
+    """A connection failure, naming the host it could not reach. On Bedrock the usual
+    cause is a region without Mantle, whose hostname then does not resolve."""
     try:
         host = exc.request.url.host
     except AttributeError:
         host = "the model provider"
-    return f"Could not connect to {host} for the {role} model's request: {exc}"
+    message = f"Could not connect to {host} for the {role} model's request: {exc}"
+    if host.startswith("bedrock"):
+        message += (
+            f"\n\nBedrock serves different models in different regions, and AWS_REGION is "
+            f"{_aws_region()!r}. See the Bedrock notes in models.yaml."
+        )
+    return message
 
 
 def _resolve(role: str) -> tuple[str, str, str]:
@@ -892,12 +897,10 @@ def _check_direct(role: str, model: str, provider: str, model_source: str) -> No
             "Choose another model, or set MODEL_ACCESS=gateway."
         )
     destination = _destination(model, provider)
-    if destination == "bedrock" and _aws_region() not in BEDROCK_REGIONS:
+    if destination == "bedrock" and not _aws_region():
         raise SystemExit(
-            f"AWS_REGION={_aws_region()!r} is not supported for Bedrock. Bedrock needs "
-            "Mantle, its OpenAI-compatible endpoint, with GPT-5.6, so it works in these "
-            f"regions only: {', '.join(BEDROCK_REGIONS)}. Set AWS_REGION in .env to one "
-            "of them."
+            f"The {role} model, {model!r}, runs on Amazon Bedrock, which needs a region, but "
+            "AWS_REGION is not set. Add it to .env; see the Bedrock notes in models.yaml."
         )
     if has_direct_credentials(destination):
         return
@@ -939,10 +942,9 @@ def _web_search_spec(model: str, provider: str) -> dict:
         return _BEDROCK_WEB_SEARCH_SPEC
     raise WebSearchUnavailable(
         f"{_model_source('search')}={model!r} cannot be the search model: Bedrock's web "
-        "search runs only on its OpenAI GPT models from GPT-5.4 on (e.g. "
-        "'bedrock/openai.gpt-5.6-luna', in us-east-1, us-east-2 or us-west-2), and Claude "
-        "has no server-side search on Bedrock. Use one of those, or a model on OpenAI or "
-        "Anthropic directly."
+        "search runs only on OpenAI's GPT models, from GPT-5.4 on, and Claude has no "
+        "server-side search on Bedrock. Use one of those, or a model on OpenAI or Anthropic "
+        "directly; see the Bedrock notes in models.yaml."
     )
 
 

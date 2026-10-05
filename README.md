@@ -86,8 +86,8 @@ Setup will ask you how the agent should reach its models:
   provider key behind them, added once under **Settings → Integrations → Provider Secrets**
   as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
 - **Your own Anthropic, OpenAI or Amazon Bedrock credentials.** Model calls go to that provider directly.
-  For Bedrock, setup asks for a Bedrock API key and a region:
-  us-east-1, us-east-2 or us-west-2, the regions where Bedrock's OpenAI-compatible endpoint (Mantle) runs.
+  For Bedrock, setup asks for a Bedrock API key and a region. Bedrock serves different models in different regions;
+  see the Bedrock notes in `models.yaml`.
   If `models.yaml` uses another provider's models, setup switches them to that provider's recommended ones.
   LangSmith still handles tracing and sandboxes, so you still need its API key.
 

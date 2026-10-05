@@ -10,9 +10,21 @@
 # Through the LangSmith LLM Gateway, provider API keys go in LangSmith under
 # Settings -> Integrations -> Provider Secrets; with your own keys, in .env (setup.py asks)
 
-# Amazon Bedrock: prefix the Bedrock model or inference profile id with bedrock/
-# (bedrock/openai.gpt-5.6-terra, bedrock/us.anthropic.claude-...). Through the gateway, add
-# the AWS_BEARER_TOKEN_BEDROCK Provider Secret in LangSmith
+# Bedrock notes
+#
+# Prefix the Bedrock model or inference profile id with bedrock/ (bedrock/openai.gpt-...,
+# bedrock/us.anthropic.claude-...). Through the LangSmith LLM Gateway, add the
+# AWS_BEARER_TOKEN_BEDROCK Provider Secret in LangSmith; with your own Bedrock credentials,
+# setup.py puts the key and AWS_REGION in .env
+#
+# Bedrock serves different models in different regions. Claude runs on Bedrock's standard
+# endpoint; every other model runs on Mantle, Bedrock's OpenAI-compatible endpoint, which
+# exists in fewer regions and serves fewer models in most of them. The default Bedrock
+# models (OpenAI's GPT, the only models with web search on Bedrock) run in us-east-1,
+# us-east-2 and us-west-2. A model a region does not serve fails at its first call. To list
+# what Mantle serves in a region:
+#   curl -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" https://bedrock-mantle.<region>.api.aws/v1/models
+# For Claude, check model access in the Bedrock console for your region
 
 # Main agent
 root:

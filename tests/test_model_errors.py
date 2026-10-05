@@ -55,6 +55,18 @@ def test_our_own_bugs_pass_through_unchanged():
     assert info.value is exc
 
 
+def test_a_bedrock_connection_failure_points_at_the_bedrock_notes(monkeypatch):
+    import httpx
+    import openai
+
+    monkeypatch.setenv("AWS_REGION", "us-west-1")
+    request = httpx.Request("POST", "https://bedrock-mantle.us-west-1.api.aws/v1/responses")
+    with pytest.raises(ModelCallError, match=r"(?s)'us-west-1'.*Bedrock notes in models\.yaml"):
+        SurfaceModelErrors("root").wrap_model_call(
+            None, _raising(openai.APIConnectionError(request=request))
+        )
+
+
 def test_a_connection_that_never_opened_names_the_host():
     import httpx
     import openai

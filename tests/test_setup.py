@@ -78,7 +78,7 @@ class TestModelAccess:
         answers("4", "ABSKbedrock", "")
         assert setup.ensure_model_access() == ("bedrock",)
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == "ABSKbedrock"
-        assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]
+        assert _common.env_value("AWS_REGION") == setup.RECOMMENDED_BEDROCK_REGIONS[0]
 
     def test_an_aws_profile_in_env_stands_in_for_the_key(self, env_file, answers):
         env_file.write_text("MODEL_ACCESS=direct\nAWS_PROFILE=research\nAWS_REGION=us-west-2\n")
@@ -86,10 +86,20 @@ class TestModelAccess:
         assert setup.ensure_model_access() == ("bedrock",)
         assert _common.env_value("AWS_BEARER_TOKEN_BEDROCK") == ""
 
-    def test_a_region_outside_the_list_is_refused_and_asked_again(self, env_file, answers):
-        answers("4", "ABSKbedrock", "us-west-1", "us-west-2")
+    def test_a_recommended_region_gets_a_note(self, env_file, answers, capsys):
+        answers("4", "ABSKbedrock", "us-west-2")
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == "us-west-2"
+        out = capsys.readouterr().out
+        assert "note: Bedrock serves different models" in out and "warning" not in out
+
+    def test_any_other_region_is_kept_with_a_warning(self, env_file, answers, capsys):
+        answers("4", "ABSKbedrock", "eu-west-1")
+        setup.ensure_model_access()
+        assert _common.env_value("AWS_REGION") == "eu-west-1"
+        assert "warning: the default Bedrock models do not run in eu-west-1" in (
+            capsys.readouterr().out
+        )
 
     def test_a_region_in_the_shell_is_not_used(
         self, env_file, answers, monkeypatch
@@ -97,7 +107,7 @@ class TestModelAccess:
         monkeypatch.setenv("AWS_REGION", "us-east-2")
         answers("4", "ABSKbedrock", "")
         setup.ensure_model_access()
-        assert _common.env_value("AWS_REGION") == setup.BEDROCK_REGIONS[0]
+        assert _common.env_value("AWS_REGION") == setup.RECOMMENDED_BEDROCK_REGIONS[0]
 
     def test_a_provider_key_is_taken_as_typed(self, env_file, answers, capsys):
         """No prefix check: key formats are the providers' to change."""
@@ -118,8 +128,8 @@ class TestModelAccess:
         setup.ask_ncbi_credentials()
         assert capsys.readouterr().out == ""
 
-    def test_the_region_list_is_models_own(self):
-        assert setup.BEDROCK_REGIONS == models.BEDROCK_REGIONS
+    def test_the_recommended_regions_are_models_own(self):
+        assert setup.RECOMMENDED_BEDROCK_REGIONS == models.RECOMMENDED_BEDROCK_REGIONS
 
     def test_a_setup_stopped_at_the_key_prompt_offers_the_whole_menu_again(
         self, env_file, answers, monkeypatch

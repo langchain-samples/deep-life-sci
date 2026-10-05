@@ -238,9 +238,10 @@ ACCESS_CHOICES = (
     *((choice, f"your own {label}") for choice, label in PROVIDER_CHOICES),
 )
 
-# The regions Bedrock is supported in: models.py's BEDROCK_REGIONS (which says why),
-# repeated for the same reason as OWN_KEYS. The first is the answer to Enter.
-BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
+# The regions that serve the recommended Bedrock models: models.py's
+# RECOMMENDED_BEDROCK_REGIONS, repeated for the same reason as OWN_KEYS. The first is the
+# answer to Enter.
+RECOMMENDED_BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
 
 
 def choose(question: str, options: tuple[tuple[str, str], ...]) -> str:
@@ -272,33 +273,27 @@ def has_own_credentials(destination: str) -> bool:
 
 
 def ensure_bedrock() -> None:
-    """A Bedrock API key and a supported region.
+    """A Bedrock API key and a region.
 
     An AWS profile also works in place of the key (AWS_PROFILE in .env, by hand), but setup
-    asks only for the key: it is the one form a deployment can use too. Regions are a fixed
-    list (models.py says why), stated before anything is asked and enforced rather than
-    warned about.
+    asks only for the key: it is the one form a deployment can use too. Any region is
+    accepted, with a note: a stronger one when it does not serve the default models.
     """
-    regions = ", ".join(BEDROCK_REGIONS)
-    region_ok = env_value("AWS_REGION") in BEDROCK_REGIONS
-    if has_own_credentials("bedrock") and region_ok:
-        return
-    say(TAG, "Bedrock needs Mantle, its OpenAI-compatible endpoint, with GPT-5.6, so it "
-             f"works in these regions only: {regions}.")
     if not has_own_credentials("bedrock"):
         ask_key("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock API key", "")
-    if region_ok:
+    if env_value("AWS_REGION"):
         return
-    if not interactive():
-        die(TAG, f"set AWS_REGION in .env to one of: {regions}. There is no terminal to ask on.")
-    while True:
-        reply = "".join(input(f"[{TAG}] AWS region ({regions}) [{BEDROCK_REGIONS[0]}]: ").split())
-        region = reply or BEDROCK_REGIONS[0]
-        if region in BEDROCK_REGIONS:
-            set_env("AWS_REGION", region)
-            return
-        say(TAG, f"{region} is not supported: Mantle does not serve GPT-5.6 there. "
-                 f"Choose one of: {regions}.")
+    default = RECOMMENDED_BEDROCK_REGIONS[0]
+    region = default
+    if interactive():
+        region = "".join(input(f"[{TAG}] AWS region [{default}]: ").split()) or default
+    set_env("AWS_REGION", region)
+    if region in RECOMMENDED_BEDROCK_REGIONS:
+        say(TAG, "note: Bedrock serves different models in different regions; see the "
+                 "Bedrock notes in models.yaml.")
+    else:
+        say(TAG, f"warning: the default Bedrock models do not run in {region}. See the "
+                 "Bedrock notes in models.yaml.")
 
 
 def ensure_model_access() -> tuple[str, ...]:

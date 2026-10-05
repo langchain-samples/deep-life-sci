@@ -318,11 +318,10 @@ class TestDirectAccess:
         monkeypatch.setenv("ROOT_MODEL", model)
         monkeypatch.setenv("ROOT_EFFORT", "")
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
-        for unsupported in ("", "us-west-1"):
-            monkeypatch.setenv("AWS_REGION", unsupported)
-            with pytest.raises(SystemExit, match=r"is not supported for Bedrock.*us-east-1"):
-                _resolve("root")
-        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        with pytest.raises(SystemExit, match="AWS_REGION is not set"):
+            _resolve("root")
+        # Any region: which models it serves is the user's to check (models.yaml's notes).
+        monkeypatch.setenv("AWS_REGION", "eu-west-1")
         _resolve("root")
         # A signed-in AWS profile stands in for the key.
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK")
