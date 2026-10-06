@@ -35,7 +35,7 @@
     "esbuild": "^0.28.1",
     "esbuild-plugin-tailwindcss": "^2.2.0",
     "framer-motion": "^13.0.0",
-    "katex": "^0.18.1",
+    "katex": "^0.18.2",
     "langgraph-nextjs-api-passthrough": "^0.1.4",
     "lodash": "^4.18.1",
     "lucide-react": "^1.30.0",
