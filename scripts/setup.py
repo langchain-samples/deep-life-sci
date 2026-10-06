@@ -53,6 +53,7 @@ from _common import (
     env_value,
     frontend_dir,
     pnpm_or_die,
+    quiet_node,
     run,
     say,
     set_env,
@@ -665,7 +666,7 @@ def ensure_frontend() -> None:
     pnpm = pnpm_or_die(TAG)
     say(TAG, "updating frontend dependencies…" if modules.is_dir()
         else "installing frontend dependencies (~1 min)…")
-    run([*pnpm.argv, "install", "--frozen-lockfile", "--silent"], cwd=ui_dir)
+    run([*pnpm.argv, "install", "--frozen-lockfile", "--silent"], cwd=ui_dir, env=quiet_node())
     stamp_deps(modules, lockfile)
 
 
@@ -687,7 +688,7 @@ def ensure_artifact_deps() -> None:
     # `--silent` below prints nothing at all until it finishes, so without the duration
     # this is a dead terminal for minutes at the very last step of setup.
     say(TAG, "installing artifact component dependencies (a few minutes)…")
-    run(["npm", "ci", "--silent"], cwd=REPO_ROOT)
+    run(["npm", "ci", "--silent"], cwd=REPO_ROOT, env=quiet_node())
     stamp_deps(modules, lockfile)
 
 

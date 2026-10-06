@@ -74,15 +74,34 @@ def use_local_node() -> None:
 use_local_node()
 
 
-def run(argv: list[str], *, cwd: Path | None = None, check: bool = True) -> int:
-    """Run a command, letting its output through to the terminal."""
+def run(
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run a command, letting its output through to the terminal. `env` is added to ours."""
     exe = tool(argv[0])
     if exe is None:
         raise FileNotFoundError(argv[0])
-    completed = subprocess.run([exe, *argv[1:]], cwd=cwd)
+    completed = subprocess.run(
+        [exe, *argv[1:]], cwd=cwd, env={**os.environ, **env} if env else None
+    )
     if check and completed.returncode != 0:
         raise SystemExit(completed.returncode)
     return completed.returncode
+
+
+def quiet_node() -> dict[str, str]:
+    """`NODE_OPTIONS` that stop Node printing deprecation warnings, keeping any already set.
+
+    For the package installs setup runs, where the warnings are about the tools' own code
+    and nothing the user can act on: the pinned pnpm 10.5.1 calls `url.parse()`, which
+    Node 24 reports as DEP0169 in the middle of an otherwise silent install, and a security-
+    sounding warning there reads like the install went wrong.
+    """
+    return {"NODE_OPTIONS": f"{os.environ.get('NODE_OPTIONS', '')} --no-deprecation".strip()}
 
 
 def listening(port: int) -> bool:

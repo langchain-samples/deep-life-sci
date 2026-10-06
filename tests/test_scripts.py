@@ -77,3 +77,11 @@ def test_an_install_is_current_only_for_the_lockfile_it_came_from(tmp_path):
     lockfile.write_text("lockfileVersion: '9.0'\npackages: {oidc-client-ts@3.5.0: {}}\n")
     assert not _common.deps_current(modules, lockfile)
     assert not _common.deps_current(tmp_path / "missing", lockfile)
+
+
+def test_quiet_node_adds_no_deprecation_and_keeps_existing_options(monkeypatch):
+    """The pinned pnpm calls url.parse(); Node 24's DEP0169 for it reads like a failed install."""
+    monkeypatch.delenv("NODE_OPTIONS", raising=False)
+    assert _common.quiet_node() == {"NODE_OPTIONS": "--no-deprecation"}
+    monkeypatch.setenv("NODE_OPTIONS", "--max-old-space-size=4096")
+    assert _common.quiet_node() == {"NODE_OPTIONS": "--max-old-space-size=4096 --no-deprecation"}
