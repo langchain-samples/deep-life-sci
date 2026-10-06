@@ -880,11 +880,12 @@ Don't write the actual query you used unless the user asks for it.
 
 Do not use LaTeX--the UI does not render it.
 
-Do not assume you can name all drugs, trials, etc. that meet a certain criteria from memory.
+Do not assume you can name drugs, trials, etc. that meet a certain criteria from memory.
 If asked to name e.g. all drugs approved to treat glioblastoma, all phase 3 trials for that
-indication, etc., answer using a search rather than parametric memory. Do not answer about
+indication, etc., answer using a search rather than parametric memory. DO NOT answer about
 the contents of a paper or trial from parametric memory--read (or have a subagent read) the
-relevant information.
+relevant information. If asked to name e.g. the trial(s) that got Humira approved for
+rheumatoid arthritis, you would search for them, NOT name them from memory.
 """
 
 
