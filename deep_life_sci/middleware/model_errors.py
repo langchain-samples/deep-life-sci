@@ -10,7 +10,10 @@ On the root that failure ends the run and is the toast the user sees. On an anal
 it ends that `task()` call, and the root reads it as the call's error; the root prompt
 tells it to relay a gateway error rather than work around it.
 
-A context overflow, and anything without a status code, passes through unchanged.
+Two failures without a status code are reported the same way, because nothing else would
+name their cause: a connection that never opened, and AWS failing to hand over the user's
+own Bedrock credentials (`rejection_message` says which). A context overflow, and anything
+else without a status code, passes through unchanged.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from deep_life_sci.models import rejection_message
 
 
 class ModelCallError(RuntimeError):
-    """The gateway answered a role's model call with an error; the message is theirs."""
+    """A role's model call failed in a way the user can act on; the message says how."""
 
 
 class SurfaceModelErrors(AgentMiddleware):

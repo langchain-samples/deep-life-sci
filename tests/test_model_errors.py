@@ -61,7 +61,8 @@ def test_a_bedrock_connection_failure_points_at_the_bedrock_notes(monkeypatch):
 
     monkeypatch.setenv("AWS_REGION", "us-west-1")
     request = httpx.Request("POST", "https://bedrock-mantle.us-west-1.api.aws/v1/responses")
-    with pytest.raises(ModelCallError, match=r"(?s)'us-west-1'.*Bedrock notes in models\.yaml"):
+    notes = r"(?s)'us-west-1'.*Bedrock notes in models\.bedrock\.yaml"
+    with pytest.raises(ModelCallError, match=notes):
         SurfaceModelErrors("root").wrap_model_call(
             None, _raising(openai.APIConnectionError(request=request))
         )

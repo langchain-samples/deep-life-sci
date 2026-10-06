@@ -1,6 +1,9 @@
 # The model defaults the offline tests run against, pinned by tests/conftest.py so an edit
-# to the repository's models.yaml cannot decide whether an assertion holds. Mirrors the
-# shipped defaults; change both together.
+# to the repository's models.gateway.yaml cannot decide whether an assertion holds. Mirrors the
+# shipped defaults; change both together. Tests that need the user's own keys switch
+# `access` with the `direct` fixture (tests/conftest.py).
+
+access: gateway
 
 root:
   model: openai/gpt-5.6-terra

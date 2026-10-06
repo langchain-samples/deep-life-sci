@@ -9,7 +9,7 @@ and is tested as one.
 The subtlest behaviour in the module, and the one most likely to be broken by a
 well-intentioned edit: a **default** provider describes the default model it sits beside,
 so it must not survive that model being replaced. Without that, `ROOT_MODEL=claude-sonnet-5`
-alone would contradict a models.yaml `provider: openai` and refuse to run.
+alone would contradict a models file's `provider: openai` and refuse to run.
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ from deep_life_sci.models import (
     _web_search_spec,
     check_model_access,
     describe,
+    file_needs,
     gateway_key,
     refresh,
     rejection_message,
     report_web_search_problem,
-    roles_without_key,
     root_model,
     slug,
     summary,
@@ -135,7 +135,7 @@ class TestResolve:
         default = DEFAULTS["root"]
         assert (model, provider, effort) == (
             default["model"],
-            # models.yaml may leave the path to the id's form.
+            # The models file may leave the path to the id's form.
             default["provider"] or _infer_provider(default["model"]),
             default["effort"],
         )
@@ -237,25 +237,23 @@ class TestCheckGatewayConfig:
 
 
 class TestDirectAccess:
-    """MODEL_ACCESS=direct: the user's own provider keys instead of the gateway."""
+    """A models file with `access: direct`: the user's own provider keys, not the gateway."""
 
     def test_gateway_is_the_default_and_ignores_provider_keys(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-shell")
         with pytest.raises(SystemExit, match="LANGSMITH_API_KEY is not set"):
             check_model_access()
 
-    def test_an_unknown_mode_is_refused(self, monkeypatch):
-        monkeypatch.setenv("MODEL_ACCESS", "byok")
-        with pytest.raises(SystemExit, match="MODEL_ACCESS='byok'"):
+    def test_an_unknown_access_is_refused(self, access):
+        access("byok")
+        with pytest.raises(SystemExit, match="access is 'byok'"):
             check_model_access()
 
-    def test_needs_no_langsmith_key_for_models(self, monkeypatch):
-        monkeypatch.setenv("MODEL_ACCESS", "direct")
+    def test_needs_no_langsmith_key_for_models(self, monkeypatch, direct):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
         check_model_access()
 
-    def test_a_role_whose_provider_has_no_key_is_named(self, monkeypatch):
-        monkeypatch.setenv("MODEL_ACCESS", "direct")
+    def test_a_role_whose_provider_has_no_key_is_named(self, monkeypatch, direct):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
         with pytest.raises(SystemExit, match=r"root model.*OPENAI_API_KEY is not set"):
             check_model_access()
@@ -268,68 +266,155 @@ class TestDirectAccess:
             check_model_access(*ROLES)
 
     @pytest.mark.parametrize("model", ["xai/grok-5", "anthropic/claude-sonnet-5"])
-    def test_ids_only_the_gateway_reaches_are_refused(self, monkeypatch, model):
-        monkeypatch.setenv("MODEL_ACCESS", "direct")
+    def test_ids_only_the_gateway_reaches_are_refused(self, monkeypatch, direct, model):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
         monkeypatch.setenv("ROOT_MODEL", model)
         monkeypatch.setenv("ROOT_EFFORT", "")
-        with pytest.raises(SystemExit, match="cannot run with MODEL_ACCESS=direct"):
+        with pytest.raises(SystemExit, match="cannot run with your own provider keys"):
             _resolve("root")
 
-    def test_roles_without_key_reads_the_file_alone(self, monkeypatch):
-        from deep_life_sci import paths
-
+    def test_a_file_names_the_credentials_it_needs(self, access, monkeypatch):
+        """For setup and deploy, from the file alone: a shell override is not shipped."""
         monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
-        assert roles_without_key(("openai",), paths.MODELS_FILE) == {}
-        assert roles_without_key(("anthropic",), paths.MODELS_FILE) == dict.fromkeys(
-            ROLES, "openai"
-        )
+        assert file_needs(access("gateway")) == ("gateway", ())
+        assert file_needs(access("direct")) == ("direct", ("openai",))
 
-    def test_rejections_name_the_provider_rather_than_the_gateway(self, monkeypatch):
+    def test_rejections_name_the_provider_rather_than_the_gateway(self, access):
         error = Exception("bad request")
         error.status_code = 400
         assert rejection_message("root", error).startswith("The LLM Gateway returned")
-        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        access("direct")
         assert rejection_message("root", error).startswith("The model provider returned")
 
-    def test_recommended_models_resolve_with_only_their_own_credentials(self, monkeypatch):
-        from deep_life_sci.models import DIRECT_KEYS, RECOMMENDED_MODELS, _destination
+    @pytest.mark.parametrize("destination", ["anthropic", "openai", "bedrock"])
+    def test_each_providers_file_runs_on_its_own_credentials_alone(
+        self, monkeypatch, destination
+    ):
+        """The files setup points MODELS_FILE at, read from the repository as shipped."""
+        from deep_life_sci.models import DIRECT_KEYS, MODEL_FILES, _destination
+        from deep_life_sci.paths import REPO_ROOT
 
-        monkeypatch.setenv("MODEL_ACCESS", "direct")
+        path = REPO_ROOT / MODEL_FILES[destination]
+        _use_models_file(monkeypatch, path)
         monkeypatch.setenv("AWS_REGION", "us-east-1")
-        for destination, picks in RECOMMENDED_MODELS.items():
-            for name in DIRECT_KEYS.values():
-                monkeypatch.delenv(name, raising=False)
-            monkeypatch.setenv(DIRECT_KEYS[destination], "k")
-            for role, (model, effort) in picks.items():
-                monkeypatch.setenv(f"{role.upper()}_MODEL", model)
-                monkeypatch.setenv(f"{role.upper()}_EFFORT", effort)
-                resolved, provider, resolved_effort = _resolve(role)
-                assert (resolved, resolved_effort) == (model, effort)
-                assert _destination(model, provider) == destination
-            # And the search role can search there.
-            assert web_search_problem() is None
+        monkeypatch.setenv(DIRECT_KEYS[destination], "k")
+        assert file_needs(path) == ("direct", (destination,))
+        for role in ROLES:
+            model, provider, _ = _resolve(role)
+            assert _destination(model, provider) == destination
+            assert models.LABELS.get(model), f"{model} has no label for the badge"
+        # And the search role can search there.
+        assert web_search_problem() is None
+
+    def test_the_openai_file_runs_the_gateways_models(self):
+        """The same models as models.gateway.yaml, called with the user's own key: one file of
+        defaults to change, and this test to say when the other was forgotten."""
+        from deep_life_sci.models import MODEL_FILES
+        from deep_life_sci.paths import REPO_ROOT
+
+        gateway, direct = (_load(REPO_ROOT / MODEL_FILES[name]) for name in ("gateway", "openai"))
+        assert (gateway.access, direct.access) == ("gateway", "direct")
+        assert gateway.defaults == direct.defaults
 
     @pytest.mark.parametrize("model", ["bedrock/us.anthropic.claude-sonnet-5",
                                        "bedrock/openai.gpt-5.6-luna"])
-    def test_bedrock_needs_credentials_and_a_region(self, monkeypatch, model):
-        monkeypatch.setenv("MODEL_ACCESS", "direct")
+    def test_bedrock_needs_credentials_and_a_region(self, monkeypatch, direct, model):
         monkeypatch.setenv("ROOT_MODEL", model)
         monkeypatch.setenv("ROOT_EFFORT", "")
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
         with pytest.raises(SystemExit, match="AWS_REGION is not set"):
             _resolve("root")
-        # Any region: which models it serves is the user's to check (models.yaml's notes).
+        # Any region: which models it serves is the user's to check (models.bedrock.yaml's notes).
         monkeypatch.setenv("AWS_REGION", "eu-west-1")
         _resolve("root")
-        # A signed-in AWS profile stands in for the key.
+        # AWS access keys stand in for the key, both halves of them.
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK")
-        monkeypatch.setenv("AWS_PROFILE", "research")
-        _resolve("root")
-        monkeypatch.delenv("AWS_PROFILE")
-        with pytest.raises(SystemExit, match="neither AWS_BEARER_TOKEN_BEDROCK nor AWS_PROFILE"):
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        with pytest.raises(SystemExit, match="none of AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE"):
             _resolve("root")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+        _resolve("root")
+
+    def test_aws_default_region_is_a_region(self, monkeypatch, direct):
+        monkeypatch.setenv("ROOT_MODEL", "bedrock/openai.gpt-5.6-luna")
+        monkeypatch.setenv("ROOT_EFFORT", "")
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+        _resolve("root")
+
+    def test_a_signed_in_profile_serves_bedrocks_gpt_but_not_its_claude(self, monkeypatch, direct):
+        """Claude's SDK would resolve the profile on the server's event loop, which the dev
+        server refuses; the GPT models' SDK mints its key off the loop."""
+        monkeypatch.setenv("AWS_PROFILE", "research")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        monkeypatch.setenv("ROOT_EFFORT", "")
+        monkeypatch.setenv("ROOT_MODEL", "bedrock/openai.gpt-5.6-terra")
+        _resolve("root")
+        monkeypatch.setenv("ROOT_MODEL", "bedrock/us.anthropic.claude-sonnet-5")
+        with pytest.raises(SystemExit, match="cannot sign in with AWS_PROFILE"):
+            _resolve("root")
+        # The key, or AWS access keys, beside the profile are what it signs in with.
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+        _resolve("root")
+
+    def test_claude_on_bedrock_refuses_an_empty_key(self, monkeypatch, direct):
+        """Its SDK sends an empty AWS_BEARER_TOKEN_BEDROCK as `Bearer `, never the profile."""
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        monkeypatch.setenv("ROOT_EFFORT", "")
+        monkeypatch.setenv("ROOT_MODEL", "bedrock/us.anthropic.claude-sonnet-5")
+        with pytest.raises(SystemExit, match="empty AWS_BEARER_TOKEN_BEDROCK"):
+            _resolve("root")
+        # The GPT models' SDK skips an empty one.
+        monkeypatch.setenv("ROOT_MODEL", "bedrock/openai.gpt-5.6-terra")
+        _resolve("root")
+
+    def test_credentials_read_through_a_reader_of_setups_choosing(self):
+        """`scripts/setup.py` checks .env with the server's own rule."""
+        from deep_life_sci.models import aws_region, has_direct_credentials
+
+        env = {"AWS_ACCESS_KEY_ID": "AKIA", "AWS_DEFAULT_REGION": " us-west-2 "}.get
+        assert not has_direct_credentials("bedrock", env)  # half a pair
+        env = {"AWS_ACCESS_KEY_ID": "AKIA", "AWS_SECRET_ACCESS_KEY": "s"}.get
+        assert has_direct_credentials("bedrock", env)
+        assert not has_direct_credentials("openai", env)
+        assert aws_region({"AWS_DEFAULT_REGION": " us-west-2 "}.get) == "us-west-2"
+        assert aws_region({"AWS_REGION": "eu-west-1", "AWS_DEFAULT_REGION": "x"}.get) == (
+            "eu-west-1"
+        )
+
+    def test_aws_credential_failures_name_the_fix(self, monkeypatch):
+        """An expired SSO session raises from botocore, with no status code to report."""
+        from botocore.exceptions import ProfileNotFound, UnauthorizedSSOTokenError
+
+        monkeypatch.setenv("AWS_PROFILE", "research")
+        message = rejection_message("root", UnauthorizedSSOTokenError())
+        assert "AWS could not supply credentials for the root model's request" in message
+        assert "aws sso login --profile research" in message
+        assert "AWS_BEARER_TOKEN_BEDROCK" in rejection_message(
+            "subagent", ProfileNotFound(profile="research")
+        )
+
+    def test_whether_a_model_takes_a_system_message_midway(self):
+        """UpdateCadence's reminder: Claude on Bedrock refuses one in place, though the bare
+        id of the same model takes it."""
+        from langchain_anthropic import ChatAnthropic
+        from langchain_aws import ChatAnthropicBedrock
+        from langchain_openai import ChatOpenAI
+
+        from deep_life_sci.models import takes_system_midway
+
+        assert takes_system_midway(ChatOpenAI(model="gpt-5.6-terra", api_key="k"))
+        assert takes_system_midway(ChatAnthropic(model="claude-sonnet-5-5", api_key="k"))
+        assert not takes_system_midway(ChatAnthropic(model="claude-sonnet-5", api_key="k"))
+        assert not takes_system_midway(
+            ChatAnthropicBedrock(model="us.anthropic.claude-sonnet-5-5-v1:0",
+                                 region_name="us-east-1")
+        )
 
 
 class TestWebSearchSpecs:
@@ -390,7 +475,7 @@ labels: {openai/gpt-5.6-terra: GPT-5.6 Terra}
 
 
 class TestLoadModelsYaml:
-    """models.yaml is what a user edits, so a mistake in it must fail loudly at startup."""
+    """A models file is what a user edits, so a mistake in it must fail loudly at startup."""
 
     def _load(self, tmp_path, text: str):
         path = tmp_path / "models.yaml"
@@ -398,11 +483,11 @@ class TestLoadModelsYaml:
         return _load(path)
 
     def test_the_shipped_file_is_well_formed_and_every_role_can_run(self, monkeypatch):
-        """The one test that reads the repository's own models.yaml, whatever it now says."""
+        """The one test that reads the repository's own gateway file, whatever it now says."""
         from deep_life_sci import models
         from deep_life_sci.paths import REPO_ROOT
 
-        _use_models_file(monkeypatch, REPO_ROOT / "models.yaml")
+        _use_models_file(monkeypatch, REPO_ROOT / "models.gateway.yaml")
         assert set(models.DEFAULTS) == set(ROLES)
         validate()
 
@@ -413,16 +498,22 @@ class TestLoadModelsYaml:
         assert set(DEFAULTS) == set(ROLES)
 
     def test_reads_each_axis_and_the_labels(self, tmp_path):
-        defaults, labels = self._load(tmp_path, VALID_YAML)
+        defaults, labels, access = self._load(tmp_path, VALID_YAML)
         assert defaults["root"] == {
             "model": "openai/gpt-5.6-terra", "provider": "", "effort": "high"
         }
         assert defaults["search"]["provider"] == "openai"
         assert labels == {"openai/gpt-5.6-terra": "GPT-5.6 Terra"}
+        assert access == "gateway"  # left out, as an older file would
+
+    def test_access_says_how_calls_are_made(self, tmp_path):
+        assert self._load(tmp_path, "access: direct\n" + VALID_YAML).access == "direct"
+        with pytest.raises(SystemExit, match=r"access is 'byok'; write `gateway`"):
+            self._load(tmp_path, "access: byok\n" + VALID_YAML)
 
     def test_an_empty_or_absent_effort_is_none_rather_than_a_default(self, tmp_path):
         """Empty is a value on this axis: Haiku 4.5 400s on any effort at all."""
-        defaults, _ = self._load(tmp_path, VALID_YAML)
+        defaults = self._load(tmp_path, VALID_YAML).defaults
         assert defaults["subagent"]["effort"] == ""
         assert defaults["judge"]["effort"] == ""
 
@@ -587,7 +678,7 @@ class TestEffortCheck:
 
 
 def _use_models_file(monkeypatch, path):
-    """Point models.py at another models.yaml, and forget what it had read."""
+    """Point models.py at another models file, and forget what it had read."""
     from deep_life_sci import models, paths
 
     monkeypatch.setattr(paths, "MODELS_FILE", path)
@@ -600,6 +691,25 @@ class TestModelsFileLifecycle:
         code = "import sys, deep_life_sci.models; print('deep_life_sci.paths' in sys.modules)"
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         assert out.stdout.strip() == "False", out.stderr
+
+    def test_models_file_names_another_file_at_the_root(self):
+        """How setup fits models to the user's own keys without editing a models file."""
+        code = "from deep_life_sci import paths; print(paths.MODELS_FILE)"
+        env = {**os.environ, "MODELS_FILE": " models.bedrock.yaml "}
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        from deep_life_sci.paths import REPO_ROOT
+
+        assert out.stdout.strip() == str(REPO_ROOT / "models.bedrock.yaml"), out.stderr
+        env["MODELS_FILE"] = ""
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        assert out.stdout.strip() == str(REPO_ROOT / "models.gateway.yaml"), out.stderr
+
+    def test_errors_name_the_file_in_use(self, tmp_path, monkeypatch):
+        path = tmp_path / "models.anthropic.yaml"
+        path.write_text(VALID_YAML.replace("openai/gpt-5.6-luna, provider: OpenAI", "gpt-5.6-luna"))
+        _use_models_file(monkeypatch, path)
+        with pytest.raises(SystemExit, match=r"models\.anthropic\.yaml search\.model="):
+            validate("search")
 
     def test_an_edit_applies_on_the_next_refresh(self, tmp_path, monkeypatch):
         path = tmp_path / "models.yaml"
@@ -623,7 +733,7 @@ class TestModelsFileLifecycle:
         monkeypatch.setenv("ROOT_MODEL", "claude-sonnet-5")
         assert _resolve("root")[1] == "anthropic"
 
-    def test_a_yaml_value_that_cannot_work_names_the_line_in_models_yaml(
+    def test_a_yaml_value_that_cannot_work_names_the_line_in_the_models_file(
         self, tmp_path, monkeypatch
     ):
         path = tmp_path / "models.yaml"
@@ -717,7 +827,8 @@ class TestBedrock:
     def test_the_search_warning_names_where_the_model_came_from(self, monkeypatch):
         monkeypatch.setitem(models.DEFAULTS["search"], "model", BEDROCK_CLAUDE)
         monkeypatch.setitem(models.DEFAULTS["search"], "effort", "")
-        assert web_search_problem().startswith(f"models.yaml search.model={BEDROCK_CLAUDE!r}")
+        source = f"models.gateway.yaml search.model={BEDROCK_CLAUDE!r}"
+        assert web_search_problem().startswith(source)
 
     def test_claude_on_bedrock_is_built_as_chat_anthropic_on_the_standard_endpoint(
         self, monkeypatch

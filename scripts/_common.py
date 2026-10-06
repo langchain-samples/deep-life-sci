@@ -193,6 +193,16 @@ def set_env(key: str, value: str) -> None:
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def unset_env(key: str) -> None:
+    """Drop every line assigning `key` in .env, leaving comments untouched."""
+    if not ENV_FILE.exists():
+        return
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    kept = [line for line in lines if not ((found := _assignment(line)) and found[0] == key)]
+    if kept != lines:
+        ENV_FILE.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
 def frontend_dir() -> Path:
     """The chat UI, a Next app kept in this repo (see frontend/UPSTREAM.md)."""
     return REPO_ROOT / "frontend"
@@ -367,11 +377,8 @@ def require_setup(tag: str) -> None:
         die(tag, f"no .env in {REPO_ROOT}. Run:  uv run scripts/setup.py")
     if not (REPO_ROOT / ".venv").is_dir():
         die(tag, f"no virtualenv in {REPO_ROOT}. Run:  uv run scripts/setup.py")
-    # Under MODEL_ACCESS=direct the gateway key goes unused, and which provider keys are
-    # needed depends on models.yaml: the server checks those as it starts.
-    keys = ["LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY"]
-    if env_value("MODEL_ACCESS").lower() == "direct":
-        keys.remove("LANGSMITH_GATEWAY_API_KEY")
-    for key in keys:
+    # Setup writes both whichever way model calls are made. The provider keys a models file
+    # with `access: direct` needs depend on that file, so the server checks them as it starts.
+    for key in ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY"):
         if not env_value(key):
             die(tag, f"{key} is not set in .env. Run:  uv run scripts/setup.py")

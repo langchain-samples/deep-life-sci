@@ -265,7 +265,7 @@ async def web_search(query: str) -> dict:
                 _PROMPT.format(today=date.today().isoformat(), query=query)
             )
     except (WebSearchUnavailable, SystemExit) as exc:
-        # The search model cannot search at all, or the setting cannot work: models.yaml
+        # The search model cannot search at all, or the setting cannot work: the models file
         # hot-reloads, so an edit mid-run reaches here after this run's checks passed, and a
         # SystemExit out of a PTC tool ends the server's event loop rather than this call.
         # Either message already names the setting and what works instead.

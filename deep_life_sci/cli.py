@@ -116,10 +116,9 @@ def run() -> None:
     shell has already split it into words by the time it arrives here, and the
     alternative is a confusing "unexpected argument" for a natural way to type it.
     """
-    required = ["LANGSMITH_API_KEY"]
-    # Provider keys under MODEL_ACCESS=direct depend on models.yaml; `main` checks those.
-    if os.environ.get("MODEL_ACCESS", "").strip().lower() != "direct":
-        required.insert(0, "LANGSMITH_GATEWAY_API_KEY")
+    # Setup writes both whichever way model calls are made; the provider keys a models file
+    # with `access: direct` needs are `main`'s check, since they depend on that file.
+    required = ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY")
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         # Without this the first model call dies as an SDK auth error a long way from its

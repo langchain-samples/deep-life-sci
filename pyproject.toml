@@ -44,11 +44,12 @@ dependencies = [
     "python-dotenv>=1.2.2",
     # Verifying sign-in tokens from any OIDC provider (auth.py). [crypto] for RSA/EC keys.
     "pyjwt[crypto]>=2.13.0",
-    # models.yaml, the per-role model settings (models.py).
+    # The models files (models.*.yaml), the per-role model settings (models.py).
     "pyyaml>=6.0.3",
-    # Bedrock under MODEL_ACCESS=direct (models.py): ChatAnthropicBedrock for Claude,
-    # ChatOpenAIMantle for everything else. Capped at the next major because the Mantle
-    # classes are new. Imported only when a Bedrock model is built. The extras bring
+    # Bedrock with the user's own credentials (models.bedrock.yaml, models.py):
+    # ChatAnthropicBedrock for Claude, ChatOpenAIMantle for everything else. Capped at the
+    # next major because the Mantle classes are new. models.py imports it only to build a
+    # Bedrock model, though deepagents imports it whenever installed. The extras bring
     # aws-bedrock-token-generator, without which signing in with an AWS profile instead of
     # a Bedrock API key fails at the first GPT call.
     "langchain-aws[anthropic,openai]>=1.8.0,<2",

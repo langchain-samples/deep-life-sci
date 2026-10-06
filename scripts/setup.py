@@ -6,10 +6,9 @@
 
 Four steps, in the order they depend on each other:
 
-    1. .env        — the LangSmith API key, and how model calls authenticate: through the
-                     LangSmith LLM gateway, or with the user's own Anthropic, OpenAI or
-                     Bedrock credentials (then models.yaml is offered a switch to that
-                     provider's models)
+    1. .env        — the LangSmith API key, and the models file to run (MODELS_FILE): the
+                     one through the LangSmith LLM gateway, or the one for the user's own
+                     Anthropic, OpenAI or Bedrock credentials, with that key
     2. uv sync     — the virtualenv
     3. a snapshot  — sandbox image with the scientific Python stack baked in
     4. the chat UI — the frontend, and the deps for the components it renders
@@ -48,6 +47,7 @@ from _common import (
     ENV_FILE,
     LOCAL_NODE_DIR,
     REPO_ROOT,
+    _assignment,
     deps_current,
     die,
     env_value,
@@ -59,6 +59,7 @@ from _common import (
     set_env,
     stamp_deps,
     tool,
+    unset_env,
     use_local_node,
 )
 
@@ -169,11 +170,17 @@ def migrate_gateway_key() -> None:
     single most confusing thing about the setup. Nothing reads the old name any more, so
     an unmigrated .env would look unconfigured; the whole file is rewritten so the
     explanatory comment above the key follows it.
+
+    Decided by the value, a LangSmith key (`lsv2_`, the placeholder included): any other
+    OPENAI_API_KEY is the user's own OpenAI key, which models.openai.yaml reads, and an
+    old gateway key left under that name would otherwise be sent to OpenAI as one.
     """
-    if not ENV_FILE.exists() or env_value("MODEL_ACCESS").lower() == "direct":
+    if not ENV_FILE.exists():
         return
     text = ENV_FILE.read_text(encoding="utf-8")
-    if "OPENAI_API_KEY" not in text or "LANGSMITH_GATEWAY_API_KEY" in text:
+    assigned = [found[1] for line in text.splitlines()
+                if (found := _assignment(line)) and found[0] == "OPENAI_API_KEY"]
+    if "LANGSMITH_GATEWAY_API_KEY" in text or not assigned or not assigned[-1].startswith("lsv2_"):
         return
     ENV_FILE.write_text(
         text.replace("OPENAI_API_KEY", "LANGSMITH_GATEWAY_API_KEY"), encoding="utf-8"
@@ -218,25 +225,24 @@ def ensure_langsmith_key() -> None:
     set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
 
 
-# The user's own credentials, for MODEL_ACCESS=direct: (variable, name, key prefix) per
-# destination. The variables are models.py's DIRECT_KEYS, repeated because this step runs
-# before the virtualenv that could import them exists. Bedrock's key has no prefix worth
-# checking, and an AWS profile stands in for it (`ensure_bedrock`).
+# The user's own credentials, for a models file that says `access: direct`: (variable, name,
+# key prefix) per destination, for the prompts. The variables are models.py's DIRECT_KEYS
+# (the tests hold them equal); whether .env has credentials is models.py's own rule
+# (`has_own_credentials`), importable here because `uv run` syncs the virtualenv before this
+# script starts.
 OWN_KEYS = {
     "anthropic": ("ANTHROPIC_API_KEY", "Anthropic", "sk-ant-"),
     "openai": ("OPENAI_API_KEY", "OpenAI", "sk-"),
     "bedrock": ("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock", ""),
 }
 
-PROVIDER_CHOICES = (
-    ("anthropic", "Anthropic API key"),
-    ("openai", "OpenAI API key"),
-    ("bedrock", "Amazon Bedrock credentials"),
-)
+# How model calls are made, as the menu offers it. Each answer is one of the shipped models
+# files (models.MODEL_FILES), which says so itself (`access:`) and needs one credential.
 ACCESS_CHOICES = (
-    ("gateway", "LangSmith LLM Gateway: provider keys stay in your "
-                "LangSmith workspace"),
-    *((choice, f"your own {label}") for choice, label in PROVIDER_CHOICES),
+    ("gateway", "LangSmith LLM Gateway: provider keys stay in your LangSmith workspace"),
+    ("anthropic", "your own Anthropic API key"),
+    ("openai", "your own OpenAI API key"),
+    ("bedrock", "your own Amazon Bedrock credentials"),
 )
 
 # The regions that serve the recommended Bedrock models: models.py's
@@ -269,20 +275,26 @@ def ask_provider_key(destination: str) -> None:
 
 
 def has_own_credentials(destination: str) -> bool:
-    key = OWN_KEYS[destination][0]
-    return bool(env_value(key) or (destination == "bedrock" and env_value("AWS_PROFILE")))
+    """Whether .env holds the user's own credentials for one destination, by the rule the
+    server checks them with, so setup never asks for what the server would accept."""
+    from deep_life_sci import models
+
+    return models.has_direct_credentials(destination, env_value)
 
 
 def ensure_bedrock() -> None:
     """A Bedrock API key and a region.
 
-    An AWS profile also works in place of the key (AWS_PROFILE in .env, by hand), but setup
-    asks only for the key: it is the one form a deployment can use too. Any region is
-    accepted, with a note: a stronger one when it does not serve the default models.
+    An AWS profile or AWS access keys also work in place of the key (in .env, by hand), but
+    setup asks only for the key: it is the one form a deployment can use too, and the one
+    Claude on Bedrock signs in with. Any region is accepted, with a note: a stronger one
+    when it does not serve the default models. AWS_DEFAULT_REGION counts, as in the SDKs.
     """
+    from deep_life_sci import models
+
     if not has_own_credentials("bedrock"):
         ask_key("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock API key", "")
-    if env_value("AWS_REGION"):
+    if models.aws_region(env_value):
         return
     default = RECOMMENDED_BEDROCK_REGIONS[0]
     region = default
@@ -291,50 +303,61 @@ def ensure_bedrock() -> None:
     set_env("AWS_REGION", region)
     if region in RECOMMENDED_BEDROCK_REGIONS:
         say(TAG, "note: Bedrock serves different models in different regions; see the "
-                 "Bedrock notes in models.yaml.")
+                 "Bedrock notes in models.bedrock.yaml.")
     else:
         say(TAG, f"WARNING: the default Bedrock models do not run in {region}. See the "
-                 "Bedrock notes in models.yaml.")
+                 "Bedrock notes in models.bedrock.yaml.")
 
 
-def ensure_model_access() -> tuple[str, ...]:
-    """How model calls authenticate, asked once; returns the destinations with the user's
-    own credentials, or nothing for the gateway.
+def ensure_models_file() -> None:
+    """Which models file the agent runs (MODELS_FILE in .env), and the credentials it needs.
 
-    Asked whenever .env does not say, which includes a clone set up before there was a
-    choice: once, with the gateway as the answer to Enter, and recorded so it is never asked
-    again. Without a terminal the answer is the gateway, as it always was. Changing it
-    later is an edit to MODEL_ACCESS in .env (`gateway` or `direct`) and another run of
-    this script, which then asks for whatever credential is missing.
+    The file says how its calls are made (`access:`), so this is the one question: the
+    gateway (models.gateway.yaml), or the user's own Anthropic, OpenAI or Bedrock
+    credentials, each with a file of that provider's models (`models.MODEL_FILES`). Asked
+    whenever .env does not say, which includes a clone set up before there was a choice:
+    once, with the gateway as the answer to Enter. Recorded only once the credentials are
+    in, so a setup stopped at the key prompt offers the whole menu again. Without a terminal
+    the answer is the gateway, as it always was.
 
-    The LangSmith key is asked for either way: tracing and sandboxes need it.
+    Changing it later is an edit to MODELS_FILE and another run of this script, which then
+    asks for whatever credential that file needs. The LangSmith key is asked for either
+    way: tracing and sandboxes need it.
     """
-    access = env_value("MODEL_ACCESS").lower()
-    if not access:
-        chosen = (
-            choose("how should the agent reach its models?", ACCESS_CHOICES)
-            if interactive() else "gateway"
-        )
-        # Recorded only once the credentials are in, so a setup stopped at the key prompt
-        # offers the whole menu again rather than holding the user to a half-made choice.
-        if chosen != "gateway":
-            ask_provider_key(chosen)
-        set_env("MODEL_ACCESS", "gateway" if chosen == "gateway" else "direct")
-        return tuple(filter(has_own_credentials, OWN_KEYS)) if chosen != "gateway" else ()
-    if access == "gateway":
-        return ()
-    if access != "direct":
-        die(TAG, f"MODEL_ACCESS={access!r} in .env; set it to gateway or direct.")
+    from deep_life_sci import models
 
-    if not any(map(has_own_credentials, OWN_KEYS)):
-        if not interactive():
-            die(TAG, "MODEL_ACCESS=direct needs ANTHROPIC_API_KEY, OPENAI_API_KEY or "
-                     "AWS_BEARER_TOKEN_BEDROCK in .env, and there is no terminal to ask on. "
-                     "Add one and re-run.")
-        ask_provider_key(choose("which provider are your credentials for?", PROVIDER_CHOICES))
-    elif has_own_credentials("bedrock"):
-        ensure_bedrock()  # the region, if a hand edit left it out
-    return tuple(filter(has_own_credentials, OWN_KEYS))
+    migrate_model_access()
+    if current := env_value("MODELS_FILE"):
+        for destination in models.file_needs(REPO_ROOT / current)[1]:
+            ask_provider_key(destination)  # each asks only for what .env lacks
+        return
+    chosen = (
+        choose("how should the agent reach its models?", ACCESS_CHOICES)
+        if interactive() else "gateway"
+    )
+    if chosen != "gateway":
+        ask_provider_key(chosen)
+    set_env("MODELS_FILE", models.MODEL_FILES[chosen])
+
+
+def migrate_model_access() -> None:
+    """Bring .env from an earlier draft of this setup up to date: MODEL_ACCESS gives way to
+    MODELS_FILE, and the gateway's file is no longer called models.yaml.
+
+    `direct` meant the provider whose key .env held, so the first with one picks the file,
+    unless MODELS_FILE already names one.
+    """
+    from deep_life_sci import models
+
+    gateway = models.MODEL_FILES["gateway"]
+    if env_value("MODELS_FILE") == "models.yaml" and not (REPO_ROOT / "models.yaml").exists():
+        set_env("MODELS_FILE", gateway)
+    access = env_value("MODEL_ACCESS").lower()
+    if access and not env_value("MODELS_FILE"):
+        own = [destination for destination in OWN_KEYS if has_own_credentials(destination)]
+        if access != "direct" or own:
+            set_env("MODELS_FILE", models.MODEL_FILES[own[0]] if access == "direct" else gateway)
+    unset_env("MODEL_ACCESS")
 
 
 # The `tool` every E-utilities request carries. NCBI enforces its rate limits against this
@@ -359,30 +382,38 @@ def ensure_ncbi_tool() -> None:
     set_env("NCBI_TOOL", f"{NCBI_TOOL_BASE}_{secrets.token_hex(4)}")
 
 
-def ensure_env() -> tuple[str, ...]:
-    """Returns where model calls go with the user's own credentials (`ensure_model_access`)."""
-    if not ENV_FILE.exists():
+def ensure_env() -> None:
+    fresh = not ENV_FILE.exists()
+    if fresh:
         shutil.copy(REPO_ROOT / ".env.example", ENV_FILE)
         say(TAG, "created .env from .env.example")
     else:
         migrate_gateway_key()
+    # A first run, including one stopped partway: MODELS_FILE is recorded only once the
+    # model questions are answered, so until then the next run is still the first.
+    first = fresh or not env_value("MODELS_FILE")
 
     ensure_langsmith_key()
-    own_keys = ensure_model_access()
+    ensure_models_file()
     ensure_ncbi_tool()
-    return own_keys
+    if first:
+        ask_ncbi_credentials()
 
 
 def ask_ncbi_credentials() -> None:
     """The optional NCBI key and email, on a first run only: re-asking every time would be
-    nagging someone who already decided to skip them. Asked after everything about models,
-    so the model questions stay together."""
-    if not interactive():
+    nagging someone who already decided to skip them. Asked right after the model
+    questions, so the questions stay together and come before the slow steps; one already
+    in .env is not asked for again."""
+    missing = [key for key in ("NCBI_API_KEY", "NCBI_EMAIL") if not env_value(key)]
+    if not interactive() or not missing:
         return
     say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
              "from 3 to 10 req/s.")
-    ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
-    ask_optional("NCBI_EMAIL", "contact email for NCBI")
+    if "NCBI_API_KEY" in missing:
+        ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
+    if "NCBI_EMAIL" in missing:
+        ask_optional("NCBI_EMAIL", "contact email for NCBI")
 
 
 # --- 2. dependencies --------------------------------------------------------------
@@ -397,68 +428,6 @@ def ensure_deps() -> None:
     # re-lock on a fresh clone is how someone lands on a moved API rather than the
     # versions this was tested against.
     run(["uv", "sync", "--frozen", "--group", "dev", "--quiet"], cwd=REPO_ROOT)
-
-
-def ensure_models_match(own_keys: tuple[str, ...]) -> None:
-    """Move models.yaml's roles onto the provider of the user's own key.
-
-    The shipped models.yaml runs OpenAI models, so an Anthropic key alone would otherwise
-    end at the server's first check, naming an OPENAI_API_KEY the user never meant to have.
-    Done without asking, because only the roles those credentials cannot call change, to
-    the models models.py recommends: nothing that could run is touched, the old models stay
-    in the file's comments, and one that already fits is left alone. After the virtualenv,
-    because it reads the file with models.py's own loader.
-    """
-    if not own_keys:
-        return
-    from deep_life_sci import models, paths
-
-    stranded = models.roles_without_key(own_keys, paths.MODELS_FILE)
-    if not stranded:
-        return
-    target = own_keys[0]
-    switch_models(paths.MODELS_FILE, target, stranded)
-    say(TAG, f"default models switched to recommended {models.DIRECT_NAMES[target]} options")
-
-
-_ROLE_LINE = re.compile(r"^(\w+):")
-_SETTING_LINE = re.compile(r"^(\s+)(model|provider|effort):[ \t]*([^#]*?)[ \t]*(#.*)?$")
-
-
-def switch_models(path, target: str, roles: dict[str, str]) -> None:
-    """Rewrite `roles` in one models.yaml to `target`'s recommended model and effort.
-
-    Edited line by line rather than dumped from YAML, so the comments that make the file
-    readable survive; each changed value keeps its old one as a trailing comment, in the
-    style the file already uses for the alternative. Checked with the loader the agent uses
-    afterwards, and put back if that refuses it.
-    """
-    from deep_life_sci import models
-
-    original = path.read_text(encoding="utf-8")
-    lines, role = original.splitlines(), None
-    for i, line in enumerate(lines):
-        if top := _ROLE_LINE.match(line):
-            role = top.group(1)
-            continue
-        setting = _SETTING_LINE.match(line)
-        if role not in roles or not setting:
-            continue
-        indent, axis, old, comment = setting.groups()
-        model, effort = models.RECOMMENDED_MODELS[target][role]
-        # The provider axis names a gateway path, which Bedrock is not: the model's own.
-        gateway_path = models._infer_provider(model)
-        new = {"model": model, "provider": gateway_path, "effort": effort}[axis]
-        text = f"{indent}{axis}: {new}".rstrip()
-        was = models.DIRECT_NAMES.get(roles[role], "Was")
-        column = line.index(comment) if comment else 0
-        lines[i] = text.ljust(max(len(text) + 2, column)) + f"# {was}: {old or '(empty)'}"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    try:
-        models._load(path)
-    except SystemExit as exc:
-        path.write_text(original, encoding="utf-8")
-        die(TAG, f"could not switch models.yaml ({exc}); it is unchanged. Edit it by hand.")
 
 
 # --- 3. sandbox snapshot ----------------------------------------------------------
@@ -712,12 +681,8 @@ def main() -> int:
     args = parser.parse_args()
     _assume_yes = args.yes
 
-    first_run = not ENV_FILE.exists()
-    own_keys = ensure_env()
+    ensure_env()
     ensure_deps()
-    ensure_models_match(own_keys)
-    if first_run:
-        ask_ncbi_credentials()
     if not args.no_snapshot:
         ensure_snapshot()
     ensure_node()

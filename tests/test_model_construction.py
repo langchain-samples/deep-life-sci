@@ -123,32 +123,54 @@ def test_an_empty_openai_base_url_reads_as_unset(constructors, monkeypatch):
     "provider,model,sent",
     [
         ("anthropic", "claude-sonnet-5", "claude-sonnet-5"),
-        # OpenAI's own API takes bare ids; models.yaml keeps the gateway's form for both.
+        # OpenAI's own API takes bare ids; models.openai.yaml keeps the gateway's form.
         ("openai", "openai/gpt-5.6-terra", "gpt-5.6-terra"),
     ],
 )
 def test_direct_access_sends_the_users_own_key_to_the_provider(
-    constructors, monkeypatch, provider, model, sent
+    constructors, monkeypatch, direct, provider, model, sent
 ):
-    monkeypatch.setenv("MODEL_ACCESS", "direct")
     monkeypatch.setenv(f"{provider.upper()}_API_KEY", f"sk-{provider}")
     monkeypatch.setenv("ROOT_MODEL", model)
     models.root_model()
     kwargs = constructors[provider].call_args.kwargs
     assert kwargs["model"] == sent
     assert kwargs["api_key"] == f"sk-{provider}"
-    # The SDK's own default, which is the provider's API rather than the gateway.
-    assert "base_url" not in kwargs
+    # The provider's own API, named rather than left to the SDK (see the next test).
+    assert kwargs["base_url"] == getattr(models, f"{provider.upper()}_DIRECT_URL")
+
+
+@pytest.mark.parametrize(
+    "variable,value",
+    [
+        ("LANGSMITH_GATEWAY", "true"),  # langchain's own switch to the gateway
+        ("OPENAI_BASE_URL", "https://other-tool.example/v1"),
+        ("ANTHROPIC_BASE_URL", "https://other-tool.example"),
+    ],
+)
+@pytest.mark.parametrize(
+    "model,host",
+    [("openai/gpt-5.6-terra", "api.openai.com"), ("claude-sonnet-5", "api.anthropic.com")],
+)
+def test_the_shell_cannot_move_direct_calls(monkeypatch, direct, variable, value, model, host):
+    """The real classes: each SDK honours these whenever no base URL is passed, so one
+    exported for other work would carry the user's own provider key elsewhere."""
+    monkeypatch.setenv(variable, value)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("ROOT_MODEL", model)
+    built = models.root_model()
+    url = getattr(built, "openai_api_base", None) or built.anthropic_api_url
+    assert host in url
 
 
 @pytest.fixture
-def bedrock_constructors(monkeypatch):
+def bedrock_constructors(monkeypatch, direct):
     import langchain_aws
 
     anthropic, mantle = Mock(), Mock()
     monkeypatch.setattr(langchain_aws, "ChatAnthropicBedrock", anthropic, raising=False)
     monkeypatch.setattr(langchain_aws, "ChatOpenAIMantle", mantle, raising=False)
-    monkeypatch.setenv("MODEL_ACCESS", "direct")
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-key")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     return {"anthropic": anthropic, "openai": mantle}
@@ -178,6 +200,22 @@ def test_direct_bedrock_leaves_credentials_to_the_aws_sdks(
     else:
         assert kwargs["timeout"] == models.ROOT_TIMEOUT.read
         assert kwargs["max_tokens"] == kwargs["profile"]["max_output_tokens"]
+        # The key wins over any AWS access keys the environment also holds.
+        assert kwargs["aws_access_key_id"] is kwargs["aws_secret_access_key"] is None
+
+
+def test_claude_on_bedrock_takes_the_key_beside_aws_access_keys(monkeypatch, direct):
+    """The real class: its SDK refuses a Bedrock API key beside AWS access keys, which a
+    shell exports for other work, and it reads both from the environment by default."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-key")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "session")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("ROOT_MODEL", "bedrock/us.anthropic.claude-sonnet-5")
+    monkeypatch.setenv("ROOT_EFFORT", "")
+    client = models.root_model()._async_client  # built on first use; raised here before
+    assert client.api_key == "bedrock-key"
 
 
 def test_direct_bedrock_search_binds_bedrocks_own_web_search(bedrock_constructors, monkeypatch):
