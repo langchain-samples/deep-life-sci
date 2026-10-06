@@ -83,10 +83,10 @@ private copy inside the repo; nothing else on your machine changes.
 Setup will ask you how the agent should reach its models. Each answer has its own models file:
 
 - **LangSmith LLM Gateway** (`models.gateway.yaml`). Model calls go through the [LangSmith LLM gateway](https://docs.langchain.com/langsmith/llm-gateway), so your workspace also needs the
-  provider key behind them, added once under **Settings → Integrations → Provider Secrets**
+  provider key behind them, added once in LangSmith under **Settings → Integrations → Provider Secrets**
   as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
 - **Your own Anthropic or OpenAI API key** (`models.anthropic.yaml` or `models.openai.yaml`). Model
-  calls go straight to that provider, with the key setup asks for.
+  calls go straight to that provider, with the key you add during setup.
 - **Your own Amazon Bedrock credentials** (`models.bedrock.yaml`). Setup asks for a Bedrock API key and
   a region. The models in that file run in `us-east-1`, `us-east-2` and `us-west-2`; for other regions,
   see the Bedrock notes in it.
