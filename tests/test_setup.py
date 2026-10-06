@@ -177,7 +177,7 @@ class TestSwitchModels:
         setup.switch_models(models_file, "anthropic", {"root": "openai"})
         after = models_file.read_text()
         assert "# Main agent\nroot:\n" in after
-        assert "  model: claude-sonnet-5       # OpenAI: openai/gpt-5.6-terra" in after
+        assert "  model: claude-sonnet-5-5     # OpenAI: openai/gpt-5.6-terra" in after
         # Only the root's lines changed.
         pairs = zip(after.splitlines(), before.splitlines(), strict=True)
         assert sum(a != b for a, b in pairs) == 2

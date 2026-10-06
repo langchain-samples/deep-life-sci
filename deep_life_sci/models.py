@@ -227,10 +227,10 @@ RECOMMENDED_BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
 # set the same models on Bedrock, where only GPT has web search.
 RECOMMENDED_MODELS = {
     "anthropic": {
-        "root": ("claude-sonnet-5", "high"),
+        "root": ("claude-sonnet-5-5", "high"),
         "subagent": ("claude-haiku-4-5-20251001", ""),
         "search": ("claude-haiku-4-5-20251001", ""),
-        "judge": ("claude-sonnet-5", "low"),
+        "judge": ("claude-sonnet-5-5", "low"),
     },
     "openai": {
         "root": ("openai/gpt-5.6-terra", "high"),
@@ -627,7 +627,7 @@ def _provider_for(
             raise SystemExit(
                 f"{model_source}={model!r} is a {inferred!r} id but {provider_source} "
                 f"says {declared!r}. The paths take different id forms: anthropic wants a "
-                "bare id ('claude-sonnet-5'), openai a prefixed one ('openai/gpt-5.6-terra'). "
+                "bare id ('claude-sonnet-5-5'), openai a prefixed one ('openai/gpt-5.6-terra'). "
                 "Fix one or the other, or unset the provider and let the form decide."
             )
         return declared
@@ -635,7 +635,7 @@ def _provider_for(
         return inferred
     raise SystemExit(
         f"Cannot tell which gateway path {model_source}={model!r} needs. "
-        "Anthropic-native ids are bare ('claude-sonnet-5'); everything else must carry a "
+        "Anthropic-native ids are bare ('claude-sonnet-5-5'); everything else must carry a "
         f"provider prefix ('openai/gpt-5.6-terra'). Or set {provider_source} explicitly to "
         f"one of: {', '.join(PROVIDERS)}"
     )
@@ -816,7 +816,7 @@ def _resolve(role: str) -> tuple[str, str, str]:
     provider_source = f"{upper}_PROVIDER"
     if not provider:
         # A default provider describes the default model it sits beside, so it does not
-        # survive that model being replaced: `ROOT_MODEL=claude-sonnet-5` alone would
+        # survive that model being replaced: `ROOT_MODEL=claude-sonnet-5-5` alone would
         # otherwise contradict a models.yaml `provider: openai` and refuse to run.
         provider = defaults["provider"] if model == defaults["model"] else _infer_provider(model)
         if not from_env:
@@ -846,7 +846,7 @@ def direct_problem(model: str, provider: str) -> str | None:
         return None
     return (
         "the gateway alone reaches that prefix; without it, use a bare Anthropic id "
-        "('claude-sonnet-5'), an 'openai/' one or a 'bedrock/' one"
+        "('claude-sonnet-5-5'), an 'openai/' one or a 'bedrock/' one"
     )
 
 
@@ -1152,7 +1152,7 @@ def web_search_model(**kwargs):
 
     Binding in this module is also what keeps a provider swap from silently sending the
     wrong spec: `SEARCH_PROVIDER` is an env axis like every other, so a hard-coded spec
-    at the call site would answer `SEARCH_MODEL=claude-sonnet-5` with an Anthropic model
+    at the call site would answer `SEARCH_MODEL=claude-sonnet-5-5` with an Anthropic model
     holding an OpenAI tool definition, which the gateway rejects with a 400.
 
     Timed out at SEARCH_TIMEOUT_SECONDS rather than the leaves' 30s; see that constant.
@@ -1216,7 +1216,7 @@ def summary(*roles: str) -> list[dict[str, str]]:
 def slug() -> str:
     """A short name for the current configuration, used as the eval experiment prefix.
 
-    Just the root model and its effort — `gpt-5.6-terra`, or `claude-sonnet-5-medium` —
+    Just the root model and its effort — `gpt-5.6-terra`, or `claude-sonnet-5-5-medium` —
     because the root is what a sweep almost always varies. Two sweeps that differ only in
     their leaves therefore share a prefix and sort together in LangSmith, which is the
     comparison you wanted anyway; `describe()` goes into the experiment metadata, so the

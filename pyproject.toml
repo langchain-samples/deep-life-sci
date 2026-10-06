@@ -20,7 +20,9 @@ dependencies = [
     "httpx>=0.28.1",
     # Both SDKs, because any role can be pointed at either provider. Anthropic goes over
     # the native gateway path, OpenAI over the /v1 shim — see models.py.
-    "langchain-anthropic>=1.5.3",
+    # 1.7.5 is the first with a profile for claude-sonnet-5-5, the recommended Claude: without
+    # one ChatAnthropic caps output at 4096 tokens and leaves thinking off (models.py).
+    "langchain-anthropic>=1.7.5",
     "langchain-openai>=1.4.2",
     # QuickJS is the root model's orchestration surface (programmatic tool calling), not
     # an optional accelerator — the agent has no other way to reach the PubMed tools.
