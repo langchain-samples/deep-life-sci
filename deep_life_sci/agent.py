@@ -11,6 +11,7 @@ from deepagents import (
     create_deep_agent,
     register_harness_profile,
 )
+from deepagents._models import get_model_provider
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_quickjs import CodeInterpreterMiddleware
 
@@ -26,6 +27,7 @@ from deep_life_sci.models import (
     report_web_search_problem,
     root_model,
     subagent_model,
+    takes_system_midway,
     validate,
 )
 from deep_life_sci.prompts import (
@@ -77,15 +79,31 @@ def build_agent(backend):
             ],
         }
 
-    # Disable deepagents auto-added `general-purpose` subagent
+    root = root_model()
+    leaves = [
+        analyst_leaf(ABSTRACT_ANALYST),
+        analyst_leaf(FULL_TEXT_ANALYST),
+        analyst_leaf(FIGURE_ANALYST),
+        analyst_leaf(TRIAL_ANALYST),
+        # Reads a path rather than being handed text, like figure-analyst and for the
+        # same reason: an uploaded PDF's extracted text is a file in the sandbox
+        # (`middleware/upload_probe.py`) and far too large for a task description.
+        analyst_leaf(DOCUMENT_ANALYST),
+    ]
+
+    # Disable deepagents auto-added `general-purpose` subagent. Its profile is looked up by
+    # the provider the built model reports, which is not always the gateway path's name:
+    # Bedrock with the user's own keys reports "openai-mantle" or "anthropic-bedrock", and
+    # a provider with no profile gets the general-purpose leaf back, sources and shell too.
     _NO_GENERAL_PURPOSE = HarnessProfile(
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
     )
-    for _provider in ("openai", "anthropic"):
+    built = (get_model_provider(model) for model in (root, *(leaf["model"] for leaf in leaves)))
+    for _provider in {"openai", "anthropic", *filter(None, built)}:
         register_harness_profile(_provider, _NO_GENERAL_PURPOSE)
 
     agent = create_deep_agent(
-        model=root_model(),
+        model=root,
         # The PTC bridge calls `tool.arun` directly, so no middleware hook sees a call
         # made inside `eval`. Inner: progress lines. Outer: source failures return
         # `{error}` instead of raising, since a raise ends the run, not the call.
@@ -101,16 +119,7 @@ def build_agent(backend):
             web_search,
         ])),
         system_prompt=build_system_prompt(),
-        subagents=[
-            analyst_leaf(ABSTRACT_ANALYST),
-            analyst_leaf(FULL_TEXT_ANALYST),
-            analyst_leaf(FIGURE_ANALYST),
-            analyst_leaf(TRIAL_ANALYST),
-            # Reads a path rather than being handed text, like figure-analyst and for the
-            # same reason: an uploaded PDF's extracted text is a file in the sandbox
-            # (`middleware/upload_probe.py`) and far too large for a task description.
-            analyst_leaf(DOCUMENT_ANALYST),
-        ],
+        subagents=leaves,
         backend=backend,
         middleware=[
             # First: its `before_agent` strips the upload payload out of the human
@@ -118,7 +127,7 @@ def build_agent(backend):
             UploadMiddleware(backend),
             # A gateway error reaches the user in the provider's words, not as "internal error".
             SurfaceModelErrors("root"),
-            UpdateCadence(),
+            UpdateCadence(system_turns=takes_system_midway(root)),
             CodeInterpreterMiddleware(
                 # Tools reach JS camelCased: pubmed_search -> tools.pubmedSearch.
                 ptc=[

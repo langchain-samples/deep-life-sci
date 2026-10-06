@@ -1,0 +1,49 @@
+# Model and effort per role, on Amazon Bedrock with your own credentials. Used when
+# MODELS_FILE in .env says models.bedrock.yaml, which setup.py writes when you choose your own
+# Bedrock credentials. Edits apply to the next message; no restart needed.
+
+# Effort must be a level the model supports; leave it empty to omit it
+
+# How model calls are made: straight to Bedrock, with AWS_BEARER_TOKEN_BEDROCK (a Bedrock API
+# key) and AWS_REGION in .env. An AWS CLI profile (AWS_PROFILE) or AWS access keys work in
+# place of the key on this machine, but a deployment needs the key, and Claude cannot sign in
+# with a profile
+access: direct
+
+# Bedrock notes
+#
+# Prefix the Bedrock model or inference profile id with bedrock/ (bedrock/openai.gpt-...,
+# bedrock/us.anthropic.claude-...)
+#
+# Bedrock serves different models in different regions. Claude runs on Bedrock's standard
+# endpoint; every other model runs on Mantle, Bedrock's OpenAI-compatible endpoint, which
+# exists in fewer regions and serves fewer models in most of them. The models below (OpenAI's
+# GPT, the only models with web search on Bedrock) run in us-east-1, us-east-2 and us-west-2.
+# A model a region does not serve fails at its first call. To list what Mantle serves in a
+# region:
+#   curl -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" https://bedrock-mantle.<region>.api.aws/v1/models
+# For Claude, check model access in the Bedrock console for your region
+
+# Main agent
+root:
+  model: bedrock/openai.gpt-5.6-terra
+  effort: high
+
+# Sub-agents spawned for tasks like reading papers
+subagent:
+  model: bedrock/openai.gpt-5.6-luna
+  effort: low
+
+# Web search: needs one of Bedrock's GPT models (gpt-5.4 or later); Claude has no web search there
+search:
+  model: bedrock/openai.gpt-5.6-luna
+  effort: low
+
+# Judge for LLM-as-a-judge evals in LangSmith
+judge:
+  model: bedrock/openai.gpt-5.6-terra
+  effort: low
+
+labels:
+  bedrock/openai.gpt-5.6-terra: GPT-5.6 Terra
+  bedrock/openai.gpt-5.6-luna: GPT-5.6 Luna

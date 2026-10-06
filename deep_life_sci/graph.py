@@ -14,7 +14,7 @@ because "the user might come back to this thread" is true right up until it isn'
 
 Point a chat UI at this — `uv run scripts/dev.py` starts both halves, or by hand:
 
-    uv run langgraph dev                     # this graph, on :2024
+    uv run langgraph dev                     # this graph, on :2024 (--no-reload on Windows)
     cd frontend && pnpm dev                  # UI, on :3000 -> http://localhost:2024
 
 The UI must serve `/ui/*` from its own origin — a `next.config.mjs` rewrite to :2024.
@@ -60,7 +60,7 @@ install_logging()
 
 logger = logging.getLogger(__name__)
 
-# Read and check models.yaml at server start, so a mistake in it stops the server with its
+# Read and check the models file at server start, so a mistake in it stops the server with its
 # message rather than surfacing on the first request.
 models.refresh()
 models.validate(*models.CHAT_ROLES)
@@ -131,7 +131,7 @@ def _acquire(scope: str):
 
 
 def _config_error(exc: SystemExit) -> RuntimeError:
-    """A models.yaml or model-setting error raised inside a request, as one the UI shows.
+    """A models-file or model-setting error raised inside a request, as one the UI shows.
 
     The config checks raise SystemExit, which is right for the CLI and for server start.
     Inside a request it is a BaseException that escapes the task and, under `langgraph dev`,
@@ -201,7 +201,7 @@ async def make_graph(config: RunnableConfig, runtime: ServerRuntime):
     socket call, so it has to go through a worker thread. Keeping `_acquire` itself
     synchronous also keeps it usable from the CLI, which has no loop to protect.
     """
-    # Every build picks up an edited models.yaml, so a change applies to the next run with no
+    # Every build picks up an edited models file, so a change applies to the next run with no
     # restart. Off the loop: it is a file read, and the dev server refuses blocking I/O.
     # Checked before `_acquire` below, so a setting that cannot work never boots a sandbox.
     try:

@@ -58,8 +58,11 @@ os.environ.setdefault("DEEP_LIFE_SCI_CACHE_TTL", "off")
 from langsmith import aevaluate  # noqa: E402
 
 from deep_life_sci.models import (  # noqa: E402
-    check_gateway_config,
+    CHAT_ROLES,
+    ROLES,
+    check_model_access,
     describe,
+    model_access,
     slug,
 )
 from deep_life_sci.runner import run_once  # noqa: E402
@@ -169,8 +172,9 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    # Fail on a bad model config before booting the first container.
-    check_gateway_config()
+    # Fail on a bad model config before booting the first container. A structural sweep
+    # never builds the judge, so it is neither checked nor described.
+    check_model_access(*(CHAT_ROLES if args.structural else ROLES))
     pair = describe()
     print(f"[evals] {pair}")
 
@@ -208,7 +212,14 @@ async def main() -> None:
         # full configuration goes in metadata, where the leaves and the judge survive too.
         experiment_prefix=f"pubmed-{slug()}",
         max_concurrency=args.concurrency,
-        metadata={"models": describe("root", "subagent", "judge"), "judge": not args.structural},
+        # How calls were made too: through the gateway and directly, the same model ids run
+        # different model classes, so two sweeps that differ only in that must not look alike.
+        metadata={
+            "models": describe(*(("root", "subagent") if args.structural else
+                                 ("root", "subagent", "judge"))),
+            "judge": not args.structural,
+            "access": model_access(),
+        },
     )
     # A verdict per seed, on stdout. Everything here is also in LangSmith, which is where
     # the answers, judge comments and trajectories are read from — this exists only so the

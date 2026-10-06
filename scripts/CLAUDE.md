@@ -20,6 +20,24 @@ simply absent with nothing else saying so.
 The chat UI's own rules are in `frontend/CLAUDE.md`. `.dockerignore` keeps `frontend/`
 out of the deploy image; its comments list what must *not* be excluded.
 
+## Platforms
+
+`.github/workflows/install-smoke.yml` runs setup and `dev.py` on native Windows and on a
+bare Ubuntu 22.04 with no C compiler. Those are the two setups testers have broken on:
+
+- `.python-version` pins 3.12, the deployment's version, and `requires-python` stops
+  below 3.14. Without them, a machine whose own Python is too old gets the newest one from
+  uv, and `bsdiff4` (via langchain-quickjs) has no 3.14 wheels, so setup dies compiling
+  it. Before raising either, check that every package in `uv.lock` has wheels for the new
+  version. Changing the pin also makes uv rebuild every existing `.venv` at its next
+  `uv run`, `dev.py` included, so tell existing users to re-run setup first.
+- `dev.py` runs `langgraph dev --no-reload` on every platform to avoid restarts from
+  generated files in `.venv`. Restart the launcher after editing Python code. On Windows
+  it also avoids the subprocess limitation described at the call.
+  A bare `uv run langgraph dev` needs the same flag on Windows.
+- The workflow's `paths-ignore` lists what cannot affect an install or a boot. New
+  directories are covered by default; add one there only if that is true of it.
+
 ## Deploying
 
 `deploy.py` wraps `langgraph deploy`; its docstring says why. It owns `.env.deploy` the way

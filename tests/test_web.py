@@ -302,7 +302,7 @@ class TestWebSearchTool:
         assert f"SEARCH_MODEL='{model}' cannot be the search model" in result["warnings"][0]
 
     async def test_a_setting_that_stopped_working_mid_run_is_contained(self, monkeypatch):
-        """models.yaml hot-reloads; a SystemExit out of a PTC tool ends the server's loop."""
+        """The models file hot-reloads; a SystemExit out of a PTC tool ends the server's loop."""
         def refused():
             raise SystemExit("models.yaml search.provider='bedrock' is not a gateway path.")
 

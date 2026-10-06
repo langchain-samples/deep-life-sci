@@ -29,12 +29,12 @@ os.environ["LANGSMITH_OTEL_ENABLED"] = "false"
 # Prevent entry-point imports from loading a developer's configuration during collection.
 os.environ["PYTHON_DOTENV_DISABLED"] = "true"
 
-# Model defaults come from a pinned copy, not the models.yaml a user is told to edit: some
+# Model defaults come from a pinned copy, not the models.gateway.yaml a user is told to edit: some
 # assertions assume the shipped OpenAI root, and switching the real file to Claude would
 # fail them for no fault in the code. `TestLoadModelsYaml` still checks the shipped file.
 from deep_life_sci import paths
 
-paths.MODELS_FILE = Path(__file__).parent / "fixtures" / "models.yaml"
+paths.MODELS_FILE = Path(__file__).parent / "fixtures" / "models.gateway.yaml"
 
 
 def pytest_configure(config) -> None:
@@ -51,8 +51,24 @@ _PROJECT_ENV = (
     "DEEP_LIFE_SCI_CACHE_TTL",
     "LANGSMITH_API_KEY",
     "LANGSMITH_GATEWAY_API_KEY",
+    "LC_GATEWAY_KEY",  # setup adopts it into .env
     "LANGSMITH_GATEWAY_BASE_URL",
     "LANGSMITH_GATEWAY_ANTHROPIC_URL",
+    "MODELS_FILE",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_PROFILE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    # Read by the SDKs on the direct path, which names its host explicitly; stripped so a
+    # developer's own settings cannot decide where a test's model would have gone.
+    "OPENAI_BASE_URL",
+    "ANTHROPIC_BASE_URL",
+    "LANGSMITH_GATEWAY",
     "NCBI_API_KEY",
     "NCBI_EMAIL",
     "NCBI_TOOL",
@@ -75,14 +91,42 @@ _PROJECT_ENV = (
 @pytest.fixture(autouse=True)
 def isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip every variable this project reads, plus the four role x axis model vars."""
+    from deep_life_sci import models
     from deep_life_sci.models import ENV_VARS
 
     for name in (*_PROJECT_ENV, *ENV_VARS):
         monkeypatch.delenv(name, raising=False)
+    # Each test reads the models file afresh, so one that points MODELS_FILE elsewhere cannot
+    # leave its file's `access` behind for the next.
+    monkeypatch.setattr(models, "_config_state", None)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     monkeypatch.setenv("LANGSMITH_OTEL_ENABLED", "false")
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "true")
+
+
+@pytest.fixture
+def access(monkeypatch, tmp_path):
+    """Switch the pinned models file's `access`, as pointing MODELS_FILE at another would."""
+    from deep_life_sci import models
+
+    pinned = paths.MODELS_FILE
+
+    def use(mode: str) -> Path:
+        path = tmp_path / "models.yaml"
+        text = pinned.read_text(encoding="utf-8")
+        path.write_text(text.replace("access: gateway", f"access: {mode}"), encoding="utf-8")
+        monkeypatch.setattr(paths, "MODELS_FILE", path)
+        monkeypatch.setattr(models, "_config_state", None)
+        return path
+
+    return use
+
+
+@pytest.fixture
+def direct(access):
+    """The pinned models, called with the user's own provider keys (`access: direct`)."""
+    return access("direct")
 
 
 @pytest.fixture(autouse=True)

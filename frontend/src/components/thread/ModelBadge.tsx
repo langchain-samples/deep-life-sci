@@ -6,13 +6,15 @@ import { authFetch, defaultApiUrl, pinnedConnection } from "@/lib/auth";
 /**
  * The main agent's model and effort, under the composer, with a wrench that lists every role.
  *
- * Read-only on purpose: models are chosen in `models.yaml` (or by env override), so this
- * reports what the server resolved rather than offering a choice here. The server's
+ * Read-only on purpose: models are chosen in the models file MODELS_FILE names
+ * (`models.gateway.yaml` by default) or by env override, so this reports what the server
+ * resolved rather than offering a choice here, and says where models and keys are set for
+ * that server. The server's
  * `GET /models` (`deep_life_sci/webapp.py`) is the source, because only the running process
- * knows which overrides won. It re-reads models.yaml on each request, as each run does, and
+ * knows which overrides won. It re-reads the models file on each request, as each run does, and
  * the wrench asks again every time it opens, so an edit shows without reloading the page.
  *
- * A server without that route renders nothing. A models.yaml the server cannot use renders
+ * A server without that route renders nothing. A models file the server cannot use renders
  * as an error, with the server's message in the wrench, since the next message would fail.
  */
 
@@ -55,7 +57,19 @@ function effortName(effort: string): string {
   return EFFORT_NAMES[effort] ?? effort;
 }
 
-type Models = { roles: Role[] } | { error: string };
+// Where models and keys are set, as the server reports them: the models file in use
+// (the one MODELS_FILE names) and the `access` it declares. Absent from
+// older servers.
+type Where = { file?: string; access?: string };
+
+type Models = ({ roles: Role[] } | { error: string }) & Where;
+
+function where(body: Record<string, unknown>): Where {
+  return {
+    file: typeof body.file === "string" ? body.file : undefined,
+    access: typeof body.access === "string" ? body.access : undefined,
+  };
+}
 
 function useModels(asked: number): Models | null {
   // Resolved the same way `providers/Stream.tsx` resolves them, so this asks the server the
@@ -77,7 +91,7 @@ function useModels(asked: number): Models | null {
     // `scripts/dev.py` opens the page once the UI answers, which can be well before the
     // agent server has loaded the graph: until then the connection is refused, and while
     // it starts a proxy in front of it may answer 502-504. Those are retried, with backoff,
-    // for about two minutes. Any other answer is final: a 500 carries a models.yaml error
+    // for about two minutes. Any other answer is final: a 500 carries a models-file error
     // that asking again will not fix, and a server without this route says so with a 404.
     const retry = (attempt: number) => {
       if (controller.signal.aborted || attempt >= 12) return;
@@ -91,9 +105,10 @@ function useModels(asked: number): Models | null {
         .then(async (res) => {
           if ([502, 503, 504].includes(res.status)) return retry(attempt);
           const body = await res.json().catch(() => null);
-          if (Array.isArray(body?.roles)) setModels({ roles: body.roles });
+          if (Array.isArray(body?.roles))
+            setModels({ roles: body.roles, ...where(body) });
           else if (typeof body?.error === "string")
-            setModels({ error: body.error });
+            setModels({ error: body.error, ...where(body) });
           else setModels(null);
         })
         .catch(() => retry(attempt));
@@ -145,7 +160,7 @@ export function ModelBadge() {
       <button
         type="button"
         onClick={() => {
-          // Asking again on open shows a models.yaml edit without reloading the page.
+          // Asking again on open shows a models-file edit without reloading the page.
           if (!open) setAsked((n) => n + 1);
           setOpen((v) => !v);
         }}
@@ -218,10 +233,19 @@ export function ModelBadge() {
             </table>
           )}
           <p className="mt-3 border-t pt-3 text-xs leading-relaxed text-gray-500">
-            Models and effort levels are set in <code>models.yaml</code> at the
-            repository root, and edits apply to your next message. Provider API
-            keys go in LangSmith under Settings → Integrations → Provider
-            Secrets.
+            Models and effort levels are set in{" "}
+            <code>{models.file ?? "models.gateway.yaml"}</code> at the repository root,
+            and edits apply to your next message.{" "}
+            {models.access === "direct" ? (
+              <>
+                Provider API keys go in <code>.env</code>.
+              </>
+            ) : (
+              <>
+                Provider API keys go in LangSmith under Settings → Integrations →
+                Provider Secrets.
+              </>
+            )}
           </p>
         </div>
       )}

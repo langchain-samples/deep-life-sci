@@ -3,7 +3,7 @@
 Model calls authenticate with a **LangSmith** key, never a provider key. The gateway
 resolves the actual OpenAI/Anthropic credential from the workspace's Provider Secrets
 (Settings -> Integrations), so a real `sk-...` is rejected with a 403 before it reaches
-any provider — nothing here reads OPENAI_API_KEY, and one LangSmith key covers models,
+any provider — this path never reads OPENAI_API_KEY, and one LangSmith key covers models,
 tracing and sandboxes alike.
 
 `LANGSMITH_GATEWAY_API_KEY` is therefore an override rather than a second required key:
@@ -14,7 +14,8 @@ edit that later setup runs leave alone. Either way the key is what the OpenAI SD
 call an api_key, so it is passed explicitly rather than through the environment.
 
 Each role is configured by three independent env vars, defaulting to the role's entry in
-`models.yaml` at the repository root (the reasons for those defaults are recorded below):
+the models file at the repository root (`paths.MODELS_FILE`; the reasons for the shipped
+defaults are recorded below):
 
     ROOT_MODEL      SUBAGENT_MODEL      SEARCH_MODEL      JUDGE_MODEL      model id
     ROOT_PROVIDER   SUBAGENT_PROVIDER   SEARCH_PROVIDER   JUDGE_PROVIDER   anthropic|openai
@@ -63,10 +64,32 @@ every other Bedrock model takes the OpenAI-compatible path. Effort is checked ag
 profile of the model behind the Bedrock id. Bedrock's web search serves only its GPT
 models; any other search model leaves the agent running and each web search returning
 that as its warning (`_web_search_spec`).
+
+All of the above is the default, a models file that says `access: gateway`. One that says
+`access: direct` is the bring-your-own-key alternative: each call goes straight to
+Anthropic, OpenAI or Amazon Bedrock with the user's own credentials (`DIRECT_KEYS`), and
+LangSmith keeps tracing and sandboxes. The model ids and paths are written the same way in
+both, so a role moves between files unchanged: the prefix (`openai/`, `bedrock/`) says where
+a call goes and is dropped on the way out, since each API takes its own ids. MODELS_FILE
+picks the file (`paths.MODELS_FILE`); the four shipped ones are `MODEL_FILES`, and setup
+writes MODELS_FILE, so how calls are made is one choice in .env and never an edit to a
+tracked file. Bedrock goes through langchain-aws:
+Claude by `ChatAnthropicBedrock` (bedrock-runtime, which takes the same inference-profile
+ids the gateway does), every other model by `ChatOpenAIMantle` (Bedrock's OpenAI-compatible
+endpoint, where its GPT models' web search lives). Both authenticate the AWS way, in
+`AWS_REGION`: a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`, or AWS access keys, or (GPT
+only) an AWS profile; `_check_claude_on_bedrock` says why Claude cannot use a profile.
+
+What only the gateway reaches is refused at startup rather than at the first call: other
+gateway providers' prefixes, and a role with no credentials for where it goes
+(`_check_direct`). Provider keys are read only under direct access: a key a user's shell
+exports for other work must not quietly take model calls off the gateway, and for the same
+reason a direct call names its host rather than leaving it to the SDK (`OPENAI_DIRECT_URL`).
 """
 
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple, get_args
 
@@ -188,6 +211,53 @@ _BEDROCK_WEB_SEARCH_SPEC = {"type": "web_search", "external_web_access": False}
 # is a vendor reached through either (see `_bedrock_parts`), not a path of its own.
 PROVIDERS = ("anthropic", "openai")
 
+# A models file's `access`: through the LangSmith gateway (the default), or straight to the
+# provider with the user's own credentials. Under `direct` a call goes to one of these
+# destinations (`_destination`), each with the variable holding its key. Bedrock is a
+# destination but not a gateway path: its Claude takes the anthropic path, the rest openai.
+ACCESS_MODES = ("gateway", "direct")
+DIRECT_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "bedrock": "AWS_BEARER_TOKEN_BEDROCK",
+}
+DIRECT_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "bedrock": "Amazon Bedrock"}
+
+# Where a direct call goes. Passed explicitly rather than left to the SDKs, whose default
+# yields to whatever the shell exports for other work: langchain's `LANGSMITH_GATEWAY`
+# switch, which would send the user's provider key to the gateway (it refuses it), or the
+# SDKs' own `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`, which other tools set for their
+# own proxies. The same rule as for the keys: the shell must not move model calls.
+OPENAI_DIRECT_URL = "https://api.openai.com/v1"
+ANTHROPIC_DIRECT_URL = "https://api.anthropic.com"
+
+# Bedrock credentials, by variable name: a Bedrock API key, an AWS CLI profile, or AWS
+# access keys (both halves). `has_direct_credentials` reads them; see it for why by name.
+_BEDROCK_CREDENTIALS = (
+    ("AWS_BEARER_TOKEN_BEDROCK",),
+    ("AWS_PROFILE",),
+    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+)
+
+# The shipped models files, at the repository root, one per answer to setup's question of
+# how model calls are made: each declares its `access`, and the direct ones call only that
+# provider, so each needs one credential. Setup writes the chosen one to MODELS_FILE. The
+# Bedrock file runs GPT on Bedrock, whose GPT models alone have web search there.
+MODEL_FILES = {
+    "gateway": "models.gateway.yaml",
+    "anthropic": "models.anthropic.yaml",
+    "openai": "models.openai.yaml",
+    "bedrock": "models.bedrock.yaml",
+}
+
+# The regions that serve every model in models.bedrock.yaml. Setup notes it when the
+# user's region is outside them; nothing refuses one, because which models a region serves
+# changes and the user may run others (that file's Bedrock notes). Update it with that
+# file. Checked 2026-10-04 against Mantle's own `/v1/models` in all 17 regions that have
+# Mantle: only these three listed those models; the rest served open-weight gpt-oss only,
+# and us-west-1 has no Mantle at all.
+RECOMMENDED_BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
+
 # Bedrock's web search serves its GPT models from this version on, by bare id (so
 # `gpt-5.7-luna` and `gpt-6` pass, `gpt-oss-120b` does not). Claude has none on Bedrock.
 _BEDROCK_SEARCH_MIN_GPT = (5, 4)
@@ -196,7 +266,7 @@ _BEDROCK_SEARCH_MIN_GPT = (5, 4)
 # and GPT models are the only ones with Bedrock's web search.
 _BEDROCK_MAKERS = ("anthropic", "openai")
 
-# Why models.yaml's defaults are what they are. Kept here rather than in the file a user
+# Why the shipped models' defaults are what they are. Kept here rather than in the file a user
 # edits, so that file stays short.
 #
 # 2026-09-16 sweep on the full 15-seed dataset, sol-low vs terra-high, judge and leaves
@@ -247,7 +317,7 @@ _AXES = ("model", "provider", "effort")
 # their `load_dotenv(override=True)` without hand-maintaining a second copy of the list —
 # a copy that drifts is how a `ROOT_MODEL=...` on the command line silently loses to .env.
 # Built from names alone: both entry points import this before `.env` is loaded, so
-# importing this module must not read models.yaml or import `paths` (see `refresh`).
+# importing this module must not read the models file or import `paths` (see `refresh`).
 ENV_VARS = tuple(f"{role.upper()}_{axis.upper()}" for role in ROLES for axis in _AXES)
 
 
@@ -276,8 +346,8 @@ class _UniqueKeyLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep)
 
 
-def _text(role: str, axis: str, value: object) -> str:
-    """One scalar out of models.yaml, as the string the env var would have held.
+def _text(role: str, axis: str, value: object, name: str) -> str:
+    """One scalar out of a models file, as the string the env var would have held.
 
     Empty or absent is `""`, which on the effort axis is a value (no effort), not an
     omission. A YAML boolean is refused rather than coerced: unquoted `off` or `no` parses
@@ -288,37 +358,53 @@ def _text(role: str, axis: str, value: object) -> str:
     if not isinstance(value, str):
         empty = "" if axis == "model" else ", or leave it empty for none"
         raise SystemExit(
-            f"models.yaml: {role}.{axis} is {value!r}; write it as text (quote it){empty}."
+            f"{name}: {role}.{axis} is {value!r}; write it as text (quote it){empty}."
         )
     return value.strip().lower() if axis != "model" else value.strip()
 
 
-def _load(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
-    """(per-role defaults, display labels) from one models.yaml, refused legibly if malformed.
+class _File(NamedTuple):
+    defaults: dict[str, dict[str, str]]  # per role, one string per axis
+    labels: dict[str, str]  # model id -> display name
+    access: str  # how its calls are made: one of ACCESS_MODES
+
+
+def _load(path: Path) -> _File:
+    """One models file, refused legibly if malformed.
 
     Structure only. Whether a role's model, gateway path and effort work together is
     `_resolve`'s check, because env overrides take part in it. Unknown and repeated keys
     are errors rather than ignored, since a misspelt `subagents:` or a pasted second
-    `root:` would otherwise run the wrong model silently.
+    `root:` would otherwise run the wrong model silently. `access` may be left out, for
+    the gateway.
     """
     try:
         raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader) or {}
     except FileNotFoundError:
-        raise SystemExit(f"{path} is missing; it names the model each role runs.") from None
+        raise SystemExit(
+            f"{path} is missing; it names the model each role runs. MODELS_FILE in .env picks "
+            "it, and models.gateway.yaml is the default."
+        ) from None
     except yaml.YAMLError as exc:
         raise SystemExit(f"{path} is not valid YAML: {exc}") from None
     if not isinstance(raw, dict):
         raise SystemExit(f"{path.name} must be a mapping of roles to models.")
-    if unknown := set(raw) - {*ROLES, "labels"}:
+    if unknown := set(raw) - {*ROLES, "labels", "access"}:
         raise SystemExit(
             f"{path.name}: unknown key(s) {', '.join(sorted(map(str, unknown)))}. "
-            f"Expected {', '.join(ROLES)} and labels."
+            f"Expected access, {', '.join(ROLES)} and labels."
+        )
+    access = raw.get("access", "gateway")
+    if access not in ACCESS_MODES:
+        raise SystemExit(
+            f"{path.name}: access is {access!r}; write `gateway` (through the LangSmith LLM "
+            "Gateway) or `direct` (with your own provider keys)."
         )
 
     defaults = {}
     for role in ROLES:
         entry = raw.get(role)
-        if not isinstance(entry, dict) or not _text(role, "model", entry.get("model")):
+        if not isinstance(entry, dict) or not _text(role, "model", entry.get("model"), path.name):
             raise SystemExit(
                 f"{path.name}: `{role}` needs a `model`, e.g. `model: openai/gpt-5.6-luna`."
             )
@@ -327,20 +413,24 @@ def _load(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
                 f"{path.name}: {role} has unknown key(s) "
                 f"{', '.join(sorted(map(str, unknown)))}. Expected {', '.join(_AXES)}."
             )
-        defaults[role] = {axis: _text(role, axis, entry.get(axis)) for axis in _AXES}
+        defaults[role] = {
+            axis: _text(role, axis, entry.get(axis), path.name) for axis in _AXES
+        }
 
     labels = raw.get("labels") or {}
     if not isinstance(labels, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
     ):
         raise SystemExit(f"{path.name}: `labels` must map model ids to display names.")
-    return defaults, labels
+    return _File(defaults, labels, access)
 
 
 class _Config(NamedTuple):
     stamp: tuple[int, int] | None  # (mtime_ns, size) of the file this was read from
     defaults: dict[str, dict[str, str]]
     labels: dict[str, str]
+    access: str
+    path: Path  # that file: the one MODELS_FILE names, models.gateway.yaml by default
 
 
 _config_state: _Config | None = None
@@ -348,7 +438,7 @@ _config_lock = threading.Lock()
 
 
 def refresh() -> None:
-    """Re-read models.yaml if it changed since the last read. Blocking file I/O.
+    """Re-read the models file if it changed since the last read. Blocking file I/O.
 
     The server calls this before every graph build (`graph.make_graph`) and every
     `GET /models`, through `asyncio.to_thread`, so an edit applies to the next run and to
@@ -370,10 +460,13 @@ def refresh() -> None:
             stamp = (stat.st_mtime_ns, stat.st_size)
         except FileNotFoundError:
             stamp = None
-        if _config_state is not None and stamp is not None and stamp == _config_state.stamp:
+        if (
+            _config_state is not None
+            and stamp is not None
+            and (stamp, path) == (_config_state.stamp, _config_state.path)
+        ):
             return
-        defaults, labels = _load(path)
-        _config_state = _Config(stamp, defaults, labels)
+        _config_state = _Config(stamp, *_load(path), path)
 
 
 def _config() -> _Config:
@@ -383,7 +476,7 @@ def _config() -> _Config:
 
 
 def __getattr__(name: str):
-    """`DEFAULTS` and `LABELS`, read from models.yaml on first use rather than at import."""
+    """`DEFAULTS` and `LABELS`, read from the models file on first use, not at import."""
     if name == "DEFAULTS":
         return _config().defaults
     if name == "LABELS":
@@ -404,22 +497,72 @@ def gateway_key() -> str:
     )
 
 
-def check_gateway_config() -> None:
-    """Fail immediately and legibly when the gateway isn't configured.
+def model_access() -> str:
+    """How the models file in use says calls are made: `gateway` or `direct`."""
+    return _config().access
+
+
+def direct_key(destination: str) -> str:
+    """The user's own key for one destination, read only under direct access."""
+    return os.environ.get(DIRECT_KEYS[destination], "").strip()
+
+
+def _destination(model: str, provider: str) -> str:
+    """Where a call for this id goes under direct access: Bedrock, or the path's own
+    provider."""
+    return "bedrock" if _bedrock_parts(model) is not None else provider
+
+
+def file_needs(path: Path) -> tuple[str, tuple[str, ...]]:
+    """How one models file's calls are made, and under direct access the destinations its
+    roles go to (each needs the user's own credentials), in role order without repeats.
+
+    For `scripts/setup.py` and `scripts/deploy.py`, which ask for and ship those
+    credentials. Reads the file alone, without env overrides, as a deployment would.
+    """
+    defaults, _, access = _load(path)
+    if access != "direct":
+        return access, ()
+    found = []
+    for role in ROLES:
+        model, declared = defaults[role]["model"], defaults[role]["provider"]
+        provider = declared if declared in PROVIDERS else _infer_provider(model)
+        if provider and (destination := _destination(model, provider)) not in found:
+            found.append(destination)
+    return access, tuple(found)
+
+
+def aws_region(env: Callable[[str], str | None] = os.environ.get) -> str:
+    """The AWS region, as the AWS SDKs read it: AWS_REGION, else AWS_DEFAULT_REGION.
+
+    `env` reads one variable; `scripts/setup.py` passes its .env reader, so setup and the
+    server agree on what counts as set.
+    """
+    return (env("AWS_REGION") or "").strip() or (env("AWS_DEFAULT_REGION") or "").strip()
+
+
+def check_model_access(*roles: str) -> None:
+    """Fail immediately and legibly when model calls cannot authenticate.
 
     Without this the first model call dies deep inside the SDK with
     'Could not resolve authentication method', which is easy to mistake for a
-    problem in the agent itself.
+    problem in the agent itself. Under direct access that means each role's provider key
+    (the chat roles by default), which `_resolve` checks.
     """
+    if model_access() == "direct":
+        validate(*(roles or CHAT_ROLES))
+        return
     if not gateway_key():
         raise SystemExit(
             "LANGSMITH_API_KEY is not set.\n\n"
-            "Every model call goes through the LangSmith LLM gateway, which authenticates "
-            "with your LangSmith key (starts with 'lsv2_') and resolves the provider "
-            "credential from your workspace's Provider Secrets — a provider key of your "
-            "own is not what this wants. Run `uv run scripts/setup.py`, or add it to .env "
-            "by hand; see .env.example. (LANGSMITH_GATEWAY_API_KEY overrides it, for "
-            "billing model calls under a different workspace-scoped key.)"
+            f"{_file_name()} sends every model call through the LangSmith LLM gateway, which "
+            "authenticates with your LangSmith key (starts with 'lsv2_') and resolves the "
+            "provider credential from your workspace's Provider Secrets — a provider key "
+            "here is not what the gateway wants. Run `uv run scripts/setup.py`, or add it to "
+            ".env by hand; see .env.example. (LANGSMITH_GATEWAY_API_KEY overrides it, for "
+            "billing model calls under a different workspace-scoped key. To use your own "
+            "provider key instead, set MODELS_FILE to models.openai.yaml, "
+            "models.anthropic.yaml or models.bedrock.yaml.)"
         )
 
 
@@ -516,8 +659,8 @@ def _provider_for(
     a preference — sending an id down the wrong path returns a 501 that reads like an
     outage, or silently drops prompt caching.
 
-    The sources name where each value came from (`models.yaml root.model`, or the env var),
-    so the error points at the line to fix; they default to the env var names.
+    The sources name where each value came from (`models.gateway.yaml root.model`, or the
+    env var), so the error points at the line to fix; they default to the env var names.
     """
     model_source = model_source or f"{role.upper()}_MODEL"
     provider_source = provider_source or f"{role.upper()}_PROVIDER"
@@ -538,7 +681,7 @@ def _provider_for(
             raise SystemExit(
                 f"{model_source}={model!r} is a {inferred!r} id but {provider_source} "
                 f"says {declared!r}. The paths take different id forms: anthropic wants a "
-                "bare id ('claude-sonnet-5'), openai a prefixed one ('openai/gpt-5.6-terra'). "
+                "bare id ('claude-sonnet-5-5'), openai a prefixed one ('openai/gpt-5.6-terra'). "
                 "Fix one or the other, or unset the provider and let the form decide."
             )
         return declared
@@ -546,14 +689,14 @@ def _provider_for(
         return inferred
     raise SystemExit(
         f"Cannot tell which gateway path {model_source}={model!r} needs. "
-        "Anthropic-native ids are bare ('claude-sonnet-5'); everything else must carry a "
+        "Anthropic-native ids are bare ('claude-sonnet-5-5'); everything else must carry a "
         f"provider prefix ('openai/gpt-5.6-terra'). Or set {provider_source} explicitly to "
         f"one of: {', '.join(PROVIDERS)}"
     )
 
 
 def _setting(role: str, axis: str) -> str:
-    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else models.yaml.
+    """One config value for one role: `{ROLE}_{AXIS}` in the environment, else the models file.
 
     An env var set to whitespace reads as unset rather than as an empty model id. That
     is why `_effort` does **not** go through here: on that axis an explicit empty value
@@ -567,11 +710,16 @@ def _setting(role: str, axis: str) -> str:
 def _model_source(role: str) -> str:
     """Where `_setting(role, "model")` came from, for messages that name the line to fix."""
     name = f"{role.upper()}_MODEL"
-    return name if os.environ.get(name, "").strip() else f"models.yaml {role}.model"
+    return name if os.environ.get(name, "").strip() else f"{_file_name()} {role}.model"
+
+
+def _file_name() -> str:
+    """The models file in use, as messages name it."""
+    return _config().path.name
 
 
 def _effort(role: str) -> str:
-    """`{ROLE}_EFFORT`, else the role's models.yaml effort. `_check_effort` validates it.
+    """`{ROLE}_EFFORT`, else the role's effort in the models file. `_check_effort` validates it.
 
     On Anthropic ids this maps to `output_config.effort` and, because langchain-anthropic
     defaults `thinking` to adaptive whenever effort is set, setting it also turns thinking
@@ -630,7 +778,7 @@ def _anthropic_efforts() -> tuple[str, ...]:
     """The levels `ChatAnthropic` accepts at all, read off its `reasoning_effort` Literal.
 
     Pydantic checks that Literal when the model is built, so anything else fails there
-    with a bare ValidationError naming neither the role nor models.yaml.
+    with a bare ValidationError naming neither the role nor the models file.
     """
     from langchain_anthropic import ChatAnthropic
 
@@ -673,19 +821,69 @@ def rejection_message(role: str, exc: BaseException) -> str | None:
     unreadable image as a setting. Both SDKs' `APIStatusError` carry `status_code`, so no
     provider import is needed. Reads the settings without `_resolve`'s checks, so this
     cannot raise in place of the error it reports.
+
+    A connection that never opened is reported too, naming the host, because nothing else
+    would: the API shows it as "An internal error occurred". Only that, not a timeout,
+    which `ROOT_TIMEOUT` and the per-role ceilings already account for. Matched by class
+    name, the same `APIConnectionError` in both SDKs, of which a timeout is a subclass.
+    So is an error from the AWS SDK, which on a model call here can only be getting the
+    user's own Bedrock credentials: an SSO session that expired overnight, a profile that
+    does not exist. Matched by module, so botocore is not imported for it.
     """
+    if _is_connection_failure(exc):
+        return _connection_message(role, exc)
+    if _is_aws_failure(exc):
+        return _aws_message(role, exc)
     status = getattr(exc, "status_code", None)
     if not isinstance(status, int) or isinstance(exc, ContextOverflowError):
         return None
+    direct = _config().access == "direct"
     return (
-        f"The LLM Gateway returned an error for the {role} model's request ({status}): "
+        f"The {'model provider' if direct else 'LLM Gateway'} returned an error for the "
+        f"{role} model's request ({status}): "
         f"{exc}\n\n({role} role: model {_setting(role, 'model')!r}, effort "
-        f"{_effort(role) or '(none)'!r}, from models.yaml or {role.upper()}_* env vars.)"
+        f"{_effort(role) or '(none)'!r}, from {_file_name()} or {role.upper()}_* env vars.)"
     )
 
 
+def _is_connection_failure(exc: BaseException) -> bool:
+    names = [cls.__name__ for cls in type(exc).__mro__]
+    return "APIConnectionError" in names and "APITimeoutError" not in names
+
+
+def _is_aws_failure(exc: BaseException) -> bool:
+    return any(cls.__module__.partition(".")[0] == "botocore" for cls in type(exc).__mro__)
+
+
+def _connection_message(role: str, exc: BaseException) -> str:
+    """A connection failure, naming the host it could not reach. On Bedrock the usual
+    cause is a region without Mantle, whose hostname then does not resolve."""
+    try:
+        host = exc.request.url.host
+    except AttributeError:
+        host = "the model provider"
+    message = f"Could not connect to {host} for the {role} model's request: {exc}"
+    if host.startswith("bedrock"):
+        message += (
+            f"\n\nBedrock serves different models in different regions, and AWS_REGION is "
+            f"{aws_region()!r}. See the Bedrock notes in models.bedrock.yaml."
+        )
+    return message
+
+
+def _aws_message(role: str, exc: BaseException) -> str:
+    """AWS could not hand over the user's credentials, with the fix for the usual cause."""
+    message = f"AWS could not supply credentials for the {role} model's request: {exc}\n\n"
+    if profile := os.environ.get("AWS_PROFILE", "").strip():
+        message += (
+            f"AWS_PROFILE is {profile!r}; for an SSO profile, sign in again with "
+            f"`aws sso login --profile {profile}`. "
+        )
+    return message + "A Bedrock API key in .env (AWS_BEARER_TOKEN_BEDROCK) avoids this."
+
+
 def _resolve(role: str) -> tuple[str, str, str]:
-    """(model id, gateway path, effort) for one role, from the env or models.yaml.
+    """(model id, gateway path, effort) for one role, from the env or the models file.
 
     Refuses any combination that cannot work, naming where each value came from.
     """
@@ -697,20 +895,124 @@ def _resolve(role: str) -> tuple[str, str, str]:
     provider_source = f"{upper}_PROVIDER"
     if not provider:
         # A default provider describes the default model it sits beside, so it does not
-        # survive that model being replaced: `ROOT_MODEL=claude-sonnet-5` alone would
-        # otherwise contradict a models.yaml `provider: openai` and refuse to run.
+        # survive that model being replaced: `ROOT_MODEL=claude-sonnet-5-5` alone would
+        # otherwise contradict a models file's `provider: openai` and refuse to run.
         provider = defaults["provider"] if model == defaults["model"] else _infer_provider(model)
         if not from_env:
-            provider_source = f"models.yaml {role}.provider"
+            provider_source = f"{_file_name()} {role}.provider"
     provider = _provider_for(
         role, model, provider, model_source=model_source, provider_source=provider_source
     )
+    if model_access() == "direct":
+        _check_direct(role, model, provider, model_source)
     effort = _effort(role)
     effort_source = (
-        f"{upper}_EFFORT" if f"{upper}_EFFORT" in os.environ else f"models.yaml {role}.effort"
+        f"{upper}_EFFORT" if f"{upper}_EFFORT" in os.environ else f"{_file_name()} {role}.effort"
     )
     _check_effort(model, provider, effort, effort_source)
     return model, provider, effort
+
+
+def direct_problem(model: str, provider: str) -> str | None:
+    """Why no destination's own API can take this id, or None when one can.
+
+    Bare ids go out as they are, `openai/` and `bedrock/` ids without their prefix
+    (`_direct_id`). Any other prefix is a provider only the gateway reaches.
+    """
+    if "/" not in model or _destination(model, provider) == "bedrock":
+        return None
+    if provider == "openai" and model.startswith("openai/"):
+        return None
+    return (
+        "the gateway alone reaches that prefix; without it, use a bare Anthropic id "
+        "('claude-sonnet-5-5'), an 'openai/' one or a 'bedrock/' one"
+    )
+
+
+def has_direct_credentials(
+    destination: str, env: Callable[[str], str | None] = os.environ.get
+) -> bool:
+    """Whether direct access has what it needs to call one destination.
+
+    Bedrock also takes an AWS profile (SSO, or `aws configure --profile`) or AWS access
+    keys in place of a Bedrock API key; its region is `_check_direct`'s, and so is what
+    Claude on Bedrock cannot use. Only variable names are read: resolving the AWS credential
+    chain can reach the instance metadata service, which is network I/O at assembly.
+    `env` reads one variable; `scripts/setup.py` passes its .env reader.
+    """
+    def value(name: str) -> str:
+        return (env(name) or "").strip()
+
+    if destination != "bedrock":
+        return bool(value(DIRECT_KEYS[destination]))
+    return any(all(map(value, names)) for names in _BEDROCK_CREDENTIALS)
+
+
+def _direct_id(model: str) -> str:
+    """The id a destination's own API takes: the models file's, less its routing prefix."""
+    vendor, _, rest = model.partition("/")
+    return rest if vendor in ("openai", "bedrock") and rest else model
+
+
+def _check_direct(role: str, model: str, provider: str, model_source: str) -> None:
+    """Refuse a role its destination cannot serve under direct access."""
+    if problem := direct_problem(model, provider):
+        raise SystemExit(
+            f"{model_source}={model!r} cannot run with your own provider keys "
+            f"({_file_name()} says `access: direct`): {problem}. Choose another model, "
+            "or run through the gateway (MODELS_FILE=models.gateway.yaml)."
+        )
+    destination = _destination(model, provider)
+    if destination == "bedrock" and not aws_region():
+        raise SystemExit(
+            f"The {role} model, {model!r}, runs on Amazon Bedrock, which needs a region, but "
+            "AWS_REGION is not set. Add it to .env; see the Bedrock notes in models.bedrock.yaml."
+        )
+    if destination == "bedrock" and provider == "anthropic":
+        _check_claude_on_bedrock(role, model)
+    if has_direct_credentials(destination):
+        return
+    name = DIRECT_NAMES[destination]
+    needs = (
+        "none of AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE or AWS_ACCESS_KEY_ID with "
+        "AWS_SECRET_ACCESS_KEY is set"
+        if destination == "bedrock" else f"{DIRECT_KEYS[destination]} is not set"
+    )
+    raise SystemExit(
+        f"The {role} model, {model!r}, runs on {name}, and {_file_name()} calls {name} "
+        f"with your own credentials, but {needs}. Add "
+        f"{'one' if destination == 'bedrock' else 'it'} to .env (re-run "
+        f"`uv run scripts/setup.py`), or choose a model in {model_source.split()[0]} for "
+        "a provider you have credentials for."
+    )
+
+
+def _check_claude_on_bedrock(role: str, model: str) -> None:
+    """Refuse credentials `ChatAnthropicBedrock` would mishandle, which the others take.
+
+    Its SDK (anthropic's `AnthropicBedrock`) reads AWS_BEARER_TOKEN_BEDROCK whenever it is
+    present, so an empty one is sent as a key rather than skipped. Without a key it signs
+    each request itself, synchronously inside the async request path: with a profile that
+    means resolving the profile's credentials on the server's event loop (an SSO or STS call,
+    or a credential_process), which `langgraph dev` refuses as blocking I/O and which stalls
+    every other run on the loop anywhere else. AWS access keys sign without any of that.
+    `ChatOpenAIMantle` takes all three, minting its key off the loop.
+    """
+    token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+    if token is not None and not token.strip():
+        raise SystemExit(
+            f"The {role} model, {model!r}, is Claude on Amazon Bedrock, whose SDK reads an "
+            "empty AWS_BEARER_TOKEN_BEDROCK as a Bedrock API key. Remove the empty line from "
+            ".env, or put a key on it."
+        )
+    keys = all(os.environ.get(name, "").strip() for name in _BEDROCK_CREDENTIALS[2])
+    if not token and not keys and os.environ.get("AWS_PROFILE", "").strip():
+        raise SystemExit(
+            f"The {role} model, {model!r}, is Claude on Amazon Bedrock, which cannot sign in "
+            "with AWS_PROFILE: its SDK would resolve the profile's credentials on the "
+            "server's event loop. Add a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) or AWS "
+            "access keys to .env. Bedrock's GPT models can use the profile."
+        )
 
 
 class WebSearchUnavailable(ValueError):
@@ -737,10 +1039,9 @@ def _web_search_spec(model: str, provider: str) -> dict:
         return _BEDROCK_WEB_SEARCH_SPEC
     raise WebSearchUnavailable(
         f"{_model_source('search')}={model!r} cannot be the search model: Bedrock's web "
-        "search runs only on its OpenAI GPT models from GPT-5.4 on (e.g. "
-        "'bedrock/openai.gpt-5.6-luna', in us-east-1, us-east-2 or us-west-2), and Claude "
-        "has no server-side search on Bedrock. Use one of those, or a model on OpenAI or "
-        "Anthropic directly."
+        "search runs only on OpenAI's GPT models, from GPT-5.4 on, and Claude has no "
+        "server-side search on Bedrock. Use one of those, or a model on OpenAI or Anthropic "
+        "directly; see the Bedrock notes in models.bedrock.yaml."
     )
 
 
@@ -770,14 +1071,14 @@ _reported_search_problem: str | None = None
 def report_web_search_problem() -> None:
     """Log `web_search_problem()` once per distinct reason, on every graph build.
 
-    Per build because models.yaml hot-reloads: a check only at server start misses an edit
+    Per build because the models file hot-reloads: a check only at server start misses an edit
     that takes search out, and the CLI and evals never start the server. Once per reason
     because reads build the graph too, on every page of a thread's history.
     """
     global _reported_search_problem
     problem = web_search_problem()
     if problem and problem != _reported_search_problem:
-        print(f"[models] warning: web search is unavailable. {problem}")
+        print(f"[models] WARNING: web search is unavailable. {problem}")
     _reported_search_problem = problem
 
 
@@ -811,38 +1112,31 @@ def _gateway_url(name: str, default: str) -> str:
 
 
 def _build(model: str, provider: str, **kwargs):
-    check_gateway_config()
-    key = gateway_key()
+    direct = model_access() == "direct"
+    if direct and _bedrock_parts(model) is not None:
+        return _build_bedrock(model, provider, **kwargs)
+    if direct:
+        # Sent to the provider's own API, named rather than left to the SDK (see
+        # OPENAI_DIRECT_URL).
+        key = direct_key(provider)
+    else:
+        check_model_access()
+        key = gateway_key()
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        # ChatAnthropic types `timeout` as a float and refuses an httpx.Timeout, which is
-        # what ROOT_TIMEOUT is, so an Anthropic root could not be built at all. Its `read`
-        # is the part that matters (the gap between streamed chunks); a float applies that
-        # one value to every phase, so connect and pool wait 30s here rather than 5s.
-        # ChatOpenAI takes the components as they are, so only this path collapses them.
-        if isinstance(timeout := kwargs.get("timeout"), httpx.Timeout):
-            kwargs["timeout"] = timeout.read
-        # langchain-anthropic keys its profiles by bare id, so a Bedrock id matches none,
-        # and without one ChatAnthropic caps output at 4096 tokens and leaves thinking off
-        # when effort is set. It is the same model, so it takes the bare id's profile.
-        # `max_tokens` too: ChatAnthropic reads that default from the model name alone.
-        if (bedrock := _bedrock_parts(model)) and (profile := _default_profile(*bedrock)):
-            kwargs.setdefault("profile", profile)
-            if max_output := profile.get("max_output_tokens"):
-                kwargs.setdefault("max_tokens", max_output)
-        return ChatAnthropic(
-            model=model,
-            base_url=_messages_base_url(model),
-            api_key=key,
-            **kwargs,
-        )
+        _anthropic_kwargs(model, kwargs)
+        kwargs["base_url"] = ANTHROPIC_DIRECT_URL if direct else _messages_base_url(model)
+        return ChatAnthropic(model=model, api_key=key, **kwargs)
 
     from langchain_openai import ChatOpenAI
 
+    kwargs["base_url"] = (
+        OPENAI_DIRECT_URL if direct
+        else _gateway_url("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL)
+    )
     return ChatOpenAI(
-        model=model,
-        base_url=_gateway_url("LANGSMITH_GATEWAY_BASE_URL", OPENAI_BASE_URL),
+        model=_direct_id(model) if direct else model,
         api_key=key,
         # Chat Completions cannot carry an image, and `read_file` on a figure returns one:
         # a tool result is a `tool`-role message whose content is text, so the block goes
@@ -852,6 +1146,74 @@ def _build(model: str, provider: str, **kwargs):
         use_responses_api=True,
         **kwargs,
     )
+
+
+def _anthropic_kwargs(model: str, kwargs: dict) -> None:
+    """What every Anthropic Messages model built here needs, Bedrock's Claude included."""
+    # ChatAnthropic types `timeout` as a float and refuses an httpx.Timeout, which is
+    # what ROOT_TIMEOUT is, so an Anthropic root could not be built at all. Its `read`
+    # is the part that matters (the gap between streamed chunks); a float applies that
+    # one value to every phase, so connect and pool wait 30s here rather than 5s.
+    # ChatOpenAI takes the components as they are, so only this path collapses them.
+    if isinstance(timeout := kwargs.get("timeout"), httpx.Timeout):
+        kwargs["timeout"] = timeout.read
+    # langchain-anthropic keys its profiles by bare id, so a Bedrock id matches none,
+    # and without one ChatAnthropic caps output at 4096 tokens and leaves thinking off
+    # when effort is set. It is the same model, so it takes the bare id's profile.
+    # `max_tokens` too: ChatAnthropic reads that default from the model name alone.
+    if (bedrock := _bedrock_parts(model)) and (profile := _default_profile(*bedrock)):
+        kwargs.setdefault("profile", profile)
+        if max_output := profile.get("max_output_tokens"):
+            kwargs.setdefault("max_tokens", max_output)
+
+
+def _build_bedrock(model: str, provider: str, **kwargs):
+    """A Bedrock model called with the user's own AWS credentials (direct access).
+
+    Neither class is handed a key: both read `AWS_BEARER_TOKEN_BEDROCK`, else the AWS
+    credentials, and both read `AWS_REGION`. `_check_direct` has already established those
+    are there, and refused what Claude's SDK cannot use (`_check_claude_on_bedrock`).
+    """
+    if provider == "anthropic":
+        from langchain_aws import ChatAnthropicBedrock
+
+        _anthropic_kwargs(model, kwargs)
+        if os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
+            # ChatAnthropicBedrock hands its client any AWS access keys in the environment,
+            # and that client refuses a Bedrock API key beside them; the key wins, as it
+            # does for every other AWS SDK.
+            kwargs.update(aws_access_key_id=None, aws_secret_access_key=None,
+                          aws_session_token=None)
+        return ChatAnthropicBedrock(model=_direct_id(model), **kwargs)
+
+    from langchain_aws import ChatOpenAIMantle
+
+    # The Responses API, for the same image-in-tool-result reason as `ChatOpenAI` in
+    # `_build`, and because Bedrock's web search exists only there.
+    return ChatOpenAIMantle(model=_direct_id(model), use_responses_api=True, **kwargs)
+
+
+def takes_system_midway(model) -> bool:
+    """Whether a model built here accepts a system message after the conversation began.
+
+    OpenAI's APIs take one anywhere. langchain-anthropic sends one in place only for the
+    ids it lists (bare first-party ids such as `claude-sonnet-5-5`) and otherwise refuses
+    the whole request: a Bedrock id never matches, though the model behind it is the same,
+    and neither do older Claude ids. Its list is a private helper, so if that moves the
+    answer is no, which only costs the caller a user-turn note instead.
+    """
+    from langchain_anthropic import ChatAnthropic
+
+    if not isinstance(model, ChatAnthropic):
+        return True
+    try:
+        from langchain_anthropic.chat_models import (
+            _supports_mid_conversation_system_messages as supported,
+        )
+
+        return bool(supported(model.model))
+    except Exception:  # noqa: BLE001 - a private helper; if it moves, assume it cannot
+        return False
 
 
 def _model_for(role: str, **kwargs):
@@ -912,7 +1274,7 @@ def web_search_model(**kwargs):
 
     Binding in this module is also what keeps a provider swap from silently sending the
     wrong spec: `SEARCH_PROVIDER` is an env axis like every other, so a hard-coded spec
-    at the call site would answer `SEARCH_MODEL=claude-sonnet-5` with an Anthropic model
+    at the call site would answer `SEARCH_MODEL=claude-sonnet-5-5` with an Anthropic model
     holding an OpenAI tool definition, which the gateway rejects with a 400.
 
     Timed out at SEARCH_TIMEOUT_SECONDS rather than the leaves' 30s; see that constant.
@@ -957,7 +1319,7 @@ def describe(*roles: str) -> str:
 def summary(*roles: str) -> list[dict[str, str]]:
     """Each role's resolved model, for the chat UI's model badge (`webapp.py`).
 
-    Resolved rather than read from models.yaml, so the UI shows what this process actually
+    Resolved rather than read from the models file, so the UI shows what this process actually
     runs, environment overrides included. `label` falls back to the model id.
     """
     rows = []
@@ -976,7 +1338,7 @@ def summary(*roles: str) -> list[dict[str, str]]:
 def slug() -> str:
     """A short name for the current configuration, used as the eval experiment prefix.
 
-    Just the root model and its effort — `gpt-5.6-terra`, or `claude-sonnet-5-medium` —
+    Just the root model and its effort — `gpt-5.6-terra`, or `claude-sonnet-5-5-medium` —
     because the root is what a sweep almost always varies. Two sweeps that differ only in
     their leaves therefore share a prefix and sort together in LangSmith, which is the
     comparison you wanted anyway; `describe()` goes into the experiment metadata, so the

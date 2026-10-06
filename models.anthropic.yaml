@@ -1,0 +1,33 @@
+# Model and effort per role, on Anthropic with your own API key. Used when MODELS_FILE in .env
+# says models.anthropic.yaml, which setup.py writes when you choose your own Anthropic key.
+# Edits apply to the next message; no restart needed.
+
+# Effort must be a level the model supports; leave it empty to omit it
+
+# How model calls are made: straight to Anthropic, with ANTHROPIC_API_KEY in .env
+access: direct
+
+# Main agent
+root:
+  model: claude-sonnet-5-5
+  effort: high
+
+# Sub-agents spawned for tasks like reading papers
+subagent:
+  model: claude-haiku-4-5-20251001
+  effort:                      # Haiku 4.5 has no effort setting
+
+# Web search
+search:
+  model: claude-haiku-4-5-20251001
+  effort:
+
+# Judge for LLM-as-a-judge evals in LangSmith
+judge:
+  model: claude-sonnet-5-5
+  effort: low
+
+labels:
+  claude-sonnet-5-5: Claude Sonnet 5.5
+  claude-sonnet-5: Claude Sonnet 5
+  claude-haiku-4-5-20251001: Claude Haiku 4.5

@@ -32,7 +32,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain.agents.middleware.types import ModelRequest
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import Runtime
 
 # Below this, the user has not been kept waiting and the reminder is pure token cost.
@@ -77,13 +77,18 @@ class UpdateCadence(AgentMiddleware):
 
     Args:
         quiet_seconds: Silence below this is not worth a reminder.
+        system_turns: Whether the model takes a system message mid-conversation
+            (`models.takes_system_midway`). Claude on Bedrock and older Claude ids do not:
+            langchain-anthropic refuses the whole request, so there the reminder rides in
+            a user turn instead, after the tool results it follows.
     """
 
     state_schema = CadenceState
 
-    def __init__(self, *, quiet_seconds: float = QUIET_SECONDS) -> None:
+    def __init__(self, *, quiet_seconds: float = QUIET_SECONDS, system_turns: bool = True) -> None:
         super().__init__()
         self.quiet_seconds = quiet_seconds
+        self.system_turns = system_turns
 
     def before_agent(self, state: CadenceState, runtime: Runtime) -> dict[str, Any] | None:
         """Restart the clock at each turn.
@@ -107,7 +112,8 @@ class UpdateCadence(AgentMiddleware):
         elapsed = time.time() - since
         if elapsed < self.quiet_seconds:
             return request
-        note = SystemMessage(REMINDER.format(elapsed=int(elapsed)))
+        text = REMINDER.format(elapsed=int(elapsed))
+        note = SystemMessage(text) if self.system_turns else HumanMessage(text)
         return request.override(messages=[*request.messages, note])
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable) -> Any:

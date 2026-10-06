@@ -72,7 +72,7 @@ os.environ.setdefault("DEEP_LIFE_SCI_CACHE_TTL", "off")
 
 from langsmith import tracing_context  # noqa: E402
 
-from deep_life_sci.models import check_gateway_config, describe  # noqa: E402
+from deep_life_sci.models import check_model_access, describe  # noqa: E402
 from deep_life_sci.runner import run_once  # noqa: E402
 from deep_life_sci.sources import web  # noqa: E402
 
@@ -329,7 +329,7 @@ def main() -> None:
         )
         raise SystemExit(0 if fired else 1)
 
-    check_gateway_config()
+    check_model_access()
     print(f"[demo] models          : {describe()}")
     install_counters()
 

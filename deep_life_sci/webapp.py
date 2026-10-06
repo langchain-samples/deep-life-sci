@@ -1,9 +1,11 @@
 """Custom HTTP routes served beside the LangGraph API (`langgraph.json`'s `http.app`).
 
 `GET /models` reports the model, gateway path and effort each role resolved to, for the chat
-UI's model badge. It is read-only: models are chosen in `models.yaml` (or by env override),
-so the server that runs them is the only honest source for what is running. It re-reads
-models.yaml first, as each run does, so the badge and the next run agree after an edit.
+UI's model badge, with the models file they came from and how it says calls are made. It is
+read-only: models are chosen in the models file MODELS_FILE names (models.gateway.yaml
+unless it says), or by env override, so the server that runs them is the only honest
+source for what is running. It re-reads the file first, as each run does, so the badge and
+the next run agree after an edit.
 
 A setting that cannot work answers 500 with `{"error": message}` for the badge to show.
 It must not raise: the config checks raise SystemExit, which inside a request stops the
@@ -45,12 +47,17 @@ def _signing_in() -> bool:
 
 
 async def models_route(_: Request) -> JSONResponse:
+    # Which file the models come from, and how calls reach them, so the badge can say where
+    # to change either: models and keys live in different places through the gateway and
+    # with the user's own keys.
+    where = {"file": paths.MODELS_FILE.name}
     try:
         await asyncio.to_thread(models.refresh)
+        where["access"] = models.model_access()  # the file's own say, read just above
         # The judge is left out: it grades evals and never runs behind the chat UI.
-        return JSONResponse({"roles": models.summary(*models.CHAT_ROLES)})
+        return JSONResponse({"roles": models.summary(*models.CHAT_ROLES), **where})
     except SystemExit as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"error": str(exc), **where}, status_code=500)
 
 
 async def ui_config(_: Request) -> JSONResponse:

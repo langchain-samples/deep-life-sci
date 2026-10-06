@@ -39,6 +39,7 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -86,6 +87,10 @@ def spawn(name: str, cwd, argv: list[str], env: dict[str, str] | None = None) ->
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,  # line buffered: the prefix appears as the server logs it, not at exit
+        # UTF-8 rather than the locale's encoding, which on Windows is an ANSI code page:
+        # Node and (with PYTHONUTF8) the agent server both write UTF-8, and decoding it as
+        # cp1252 turns Next's `▲` banner into mojibake.
+        encoding="utf-8",
         errors="replace",
         env={**os.environ, **env} if env else None,
         **group,
@@ -95,10 +100,15 @@ def spawn(name: str, cwd, argv: list[str], env: dict[str, str] | None = None) ->
 
 
 def _pump(name: str, proc: subprocess.Popen[str]) -> None:
+    """Forward a server's output, prefixed. Must not die: nothing else drains the pipe, and
+    a server whose pipe fills blocks on its next log line and stops answering."""
     if proc.stdout is None:
         return
     for line in proc.stdout:
-        print(f"[{name}] {line.rstrip()}", flush=True)
+        # Dropped rather than raised when our own stdout cannot take it — a closed pipe, a
+        # hung-up terminal, a character its encoding lacks: the server still needs draining.
+        with contextlib.suppress(OSError, ValueError):
+            print(f"[{name}] {line.rstrip()}", flush=True)
 
 
 def stop_all() -> None:
@@ -108,8 +118,14 @@ def stop_all() -> None:
         # shutdown would make the "everything was already up" exit read as though this
         # had torn down servers it never owned.
         return
-    print()
-    say("dev", "shutting down")
+    # Ignored from here on: an impatient second Ctrl-C would raise out of the waits below
+    # and skip the SIGKILL that a server which ignored its SIGTERM still needs.
+    _handle_signals(signal.SIG_IGN)
+    # A closed terminal (SIGHUP) is a common way to get here, and a write to a hung-up tty
+    # raises: unguarded, the announcement would abort the teardown it announces.
+    with contextlib.suppress(OSError, ValueError):
+        print()
+        say("dev", "shutting down")
     for _, proc in _started:
         if proc.poll() is not None:
             continue
@@ -142,29 +158,70 @@ def stop_all() -> None:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
-def open_ui_when_ready() -> None:
-    """Open the window once :3000 answers.
+# How long the window waits for both servers. Generous: a cold first start compiles the
+# UI's page and imports the graph, and a server that answers late is still worth a window.
+READY_TIMEOUT_SECONDS = 180
 
-    Polled rather than opened straight away: `next dev` needs a few seconds to bind, and a
-    browser that arrives first shows a connection error the user has to reload past.
-    `webbrowser` covers macOS, Linux, Windows and WSL in one call, which is what the
-    open/xdg-open/wslview trio was doing by hand.
+
+def open_ui_when_ready(*, wait_for_agent: bool) -> None:
+    """Open the window once :3000 listens and, for a local agent server, :2024 answers.
+
+    Polled rather than opened straight away: `next dev` needs a few seconds to bind, and
+    the agent server longer to import the graph. The page checks the server as it loads,
+    so a window that beats it showed "Failed to connect to LangGraph server" until a
+    reload. `--remote` has no local server to wait for. A stack that is still not ready at
+    the deadline is said so here rather than left to a window that would only error.
+    `webbrowser` covers macOS, Linux, Windows and WSL in one call.
     """
     if os.environ.get("NO_BROWSER"):
         return
 
+    def ready() -> bool:
+        return listening(3000) and (not wait_for_agent or answering(2024, timeout=2.0))
+
     def wait_and_open() -> None:
-        for _ in range(120):
-            if listening(3000):
+        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if ready():
                 webbrowser.open(UI_URL)
                 return
             time.sleep(0.5)
+        say("dev", f"not opening a browser: the {'agent server' if listening(3000) else 'chat UI'}"
+                   f" is still not answering after {READY_TIMEOUT_SECONDS}s. Check its log "
+                   f"above, or open {UI_URL} once it is up.")
 
     threading.Thread(target=wait_and_open, daemon=True).start()
 
 
 def _raise_interrupt(signum: int, frame: object) -> None:
     raise KeyboardInterrupt
+
+
+def _handle_signals(handler: signal.Handlers | Callable[[int, object], None]) -> None:
+    """Every signal that ends us explicitly — the `trap cleanup INT TERM` the shell version
+    had, plus the two it was missing. Each default disposition skips the teardown in `main`
+    in its own way, and the cost is identical every time: both servers outlive us still
+    holding their ports, and the *next* launch finds them listening and reuses them, so a
+    stale stack silently serves the run.
+
+    SIGTERM, SIGHUP and SIGQUIT because Python's default handler exits without unwinding.
+    SIGHUP is the one that actually bites: closing the terminal signals the foreground
+    process group, and the servers are deliberately in sessions of their own (see `spawn`),
+    so the signal reaches only us — exactly the process whose job was to kill them. SIGINT
+    because its default handler is not guaranteed to be installed at all: a process started
+    in the background by a non-interactive shell inherits SIGINT as SIG_IGN, and Python
+    keeps that disposition rather than raising KeyboardInterrupt.
+
+    Looked up by name rather than named directly: SIGHUP and SIGQUIT do not exist on
+    Windows, and `signal.SIGHUP` there is an AttributeError raised while building the
+    loop's sequence, i.e. before any suppression inside it can apply.
+    """
+    for name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(sig, handler)
 
 
 def _ask(question: str, *, default: bool = False) -> bool:
@@ -223,7 +280,7 @@ def _kill_holder(port: int, pid: int) -> bool:
                 say("dev", f"stopped pid {pid}; :{port} is free")
                 return True
             time.sleep(0.25)
-    say("dev", f"warning: :{port} is still held after SIGKILL — reusing it")
+    say("dev", f"WARNING: :{port} is still held after SIGKILL — reusing it")
     return False
 
 
@@ -267,6 +324,31 @@ def remote_ui_env(url: str) -> dict[str, str]:
 
 
 def main() -> int:
+    """`_launch`, with whatever it started stopped however it ends.
+
+    The teardown wraps the whole launch, not only the supervision loop at its end: the
+    :3000 check can `die()` after the agent server is already up, and a Ctrl-C can land
+    while it waits on a cold UI, and either used to leave `langgraph dev` holding :2024 for
+    the next launch to adopt. `stop_all` touches only what this run spawned.
+    """
+    # The servers' output can hold characters our own stdout cannot encode: on Windows,
+    # redirected to a file or pipe, it is cp1252. Raising there would kill a pump thread.
+    with contextlib.suppress(AttributeError, ValueError):
+        sys.stdout.reconfigure(errors="replace")
+    # Before anything is spawned, so there is no stretch of the launch in which a signal can
+    # end this process with a server already running and the teardown below skipped.
+    _handle_signals(_raise_interrupt)
+    try:
+        return _launch()
+    except KeyboardInterrupt:
+        # Interrupted before the stack was up; the supervision loop handles its own Ctrl-C,
+        # the normal way to stop. Not a success, so the status a shell gives an interrupt.
+        return 130
+    finally:
+        stop_all()
+
+
+def _launch() -> int:
     parser = argparse.ArgumentParser(prog="uv run scripts/dev.py")
     parser.add_argument("--remote", metavar="URL",
                         help="start only the chat UI, against this deployment")
@@ -301,6 +383,9 @@ def main() -> int:
     # server: every request from the chat UI then hangs, so the window shows its thinking
     # indicator forever with no error to explain it. `_take_over` asks before stopping
     # anything, so a :2024 of your own still survives a run of this.
+    # Finish all port prompts before starting log-pumping threads. Otherwise API logs
+    # bury the UI replacement prompt while the launcher waits for an unseen answer.
+    start_agent = False
     if args.remote:
         say("dev", f"agent server: {args.remote}")
     elif listening(2024) and not _take_over(
@@ -310,21 +395,7 @@ def main() -> int:
     ):
         say("dev", ":2024 already serving — reusing it")
     else:
-        # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies
-        # the only worker and every later run queues behind it. That bites hardest across
-        # restarts: the server persists its queue to .langgraph_api/, so a run abandoned by
-        # a Ctrl-C is resumed on the next boot, takes the worker, and starves the query you
-        # just typed — which sits `pending` forever, produces no LangSmith trace, and looks
-        # like a hang while the console streams the *old* run's progress.
-        #
-        # This makes the asyncio.to_thread rule in sources/cache_io.py load-bearing rather
-        # than theoretical: runs share one event loop, so a blocking call stalls neighbours.
-        spawn(
-            "agent",
-            REPO_ROOT,
-            ["uv", "run", "--group", "dev", "langgraph", "dev",
-             "--no-browser", "--n-jobs-per-worker", "5"],
-        )
+        start_agent = True
 
     # Same wedge, same rule as :2024 above — `next dev` can end up bound to the port and
     # answering nothing, and adopting that paints a window that never fills in. No /ok
@@ -335,6 +406,7 @@ def main() -> int:
     ui_kill_hint = (
         "lsof -ti tcp:3000 | xargs kill   (add -9 if it survives; Windows: npx kill-port 3000)"
     )
+    start_ui = True
     if listening(3000) and not _take_over(
         3000, "the chat UI", answering(3000, path="/", timeout=20.0), ui_kill_hint,
     ):
@@ -342,12 +414,44 @@ def main() -> int:
             # Reusing it would chat with whichever server it was started against.
             die("dev", f"a chat UI is already on :3000; stop it to use --remote:  {ui_kill_hint}")
         say("dev", ":3000 already serving — reusing it")
-        if not os.environ.get("NO_BROWSER"):
-            webbrowser.open(UI_URL)
-    else:
+        start_ui = False
+
+    if start_agent:
+        # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies
+        # the only worker and every later run queues behind it. That bites hardest across
+        # restarts: the server persists its queue to .langgraph_api/, so a run abandoned by
+        # a Ctrl-C is resumed on the next boot, takes the worker, and starves the query you
+        # just typed — which sits `pending` forever, produces no LangSmith trace, and looks
+        # like a hang while the console streams the *old* run's progress.
+        #
+        # This makes the asyncio.to_thread rule in sources/cache_io.py load-bearing rather
+        # than theoretical: runs share one event loop, so a blocking call stalls neighbours.
+        #
+        # Disable reload on every platform: watching the repo also sees generated files
+        # in .venv and can restart repeatedly while dependencies or imports change them.
+        # Restart this launcher after editing Python code. On Windows, reload also uses a
+        # SelectorEventLoop there, which cannot start subprocesses. The server starts the
+        # artifact bundler (`npx @langchain/langgraph-ui`) as one at boot, and when that
+        # raises the server exits, so `langgraph dev` dies on every start. Without reload
+        # uvicorn uses the ProactorEventLoop, which can. The cost is restarting by hand
+        # after a code change.
+        #
+        # PYTHONUTF8 because the server's output reaches us through a pipe, which Windows
+        # Python encodes in the ANSI code page: the startup banner's emoji then fail to
+        # encode and the log fills with UnicodeEncodeError tracebacks that look fatal.
+        argv = ["uv", "run", "--no-sync", "--group", "dev", "langgraph", "dev",
+                "--no-browser", "--no-reload", "--n-jobs-per-worker", "5"]
+        spawn("agent", REPO_ROOT, argv, env={"PYTHONUTF8": "1"} if WINDOWS else None)
+
+    if start_ui:
         spawn("ui", ui_dir, [*pnpm.argv, "dev"],
               env=remote_ui_env(args.remote) if args.remote else None)
-        open_ui_when_ready()
+    if start_ui or start_agent:
+        open_ui_when_ready(wait_for_agent=not args.remote)
+    elif not os.environ.get("NO_BROWSER"):
+        # Both reused, and both answered `_take_over`'s check, so open now: this process
+        # exits straight after, taking a waiting thread with it.
+        webbrowser.open(UI_URL)
 
     # Both already up. Nothing to supervise and nothing this script may stop — the servers
     # belong to whoever started them — so say so and get out of the way.
@@ -357,29 +461,6 @@ def main() -> int:
         return 0
 
     say("dev", f"chat UI -> {UI_URL}   (Ctrl-C stops what this script started)")
-    # Every signal explicitly — the `trap cleanup INT TERM` the shell version had, plus the
-    # two it was missing. Each default disposition skips the teardown below in its own way,
-    # and the cost is identical every time: both servers outlive us still holding their
-    # ports, and the *next* launch finds them listening and reuses them, so a stale stack
-    # silently serves the run.
-    #
-    # SIGTERM, SIGHUP and SIGQUIT because Python's default handler exits without unwinding.
-    # SIGHUP is the one that actually bites: closing the terminal signals the foreground
-    # process group, and the servers are deliberately in sessions of their own (see
-    # `spawn`), so the signal reaches only us — exactly the process whose job was to kill
-    # them. SIGINT because its default handler is not guaranteed to be installed at all: a
-    # process started in the background by a non-interactive shell inherits SIGINT as
-    # SIG_IGN, and Python keeps that disposition rather than raising KeyboardInterrupt.
-    #
-    # Looked up by name rather than named directly: SIGHUP and SIGQUIT do not exist on
-    # Windows, and `signal.SIGHUP` there is an AttributeError raised while building the
-    # loop's sequence, i.e. before any suppression inside it can apply.
-    for name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"):
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
-        with contextlib.suppress(ValueError, OSError):
-            signal.signal(sig, _raise_interrupt)
     try:
         while True:
             for name, proc in _started:
@@ -388,9 +469,7 @@ def main() -> int:
                     return proc.returncode or 1
             time.sleep(0.25)
     except KeyboardInterrupt:
-        return 0
-    finally:
-        stop_all()
+        return 0  # how a running stack is stopped; `main` stops the servers
 
 
 if __name__ == "__main__":

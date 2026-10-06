@@ -16,7 +16,7 @@ webapp = pytest.importorskip("deep_life_sci.webapp")
 def client_for(monkeypatch, tmp_path):
     """A test client for the app as a deployment in the given auth mode would build it."""
     ui = tmp_path / "ui"
-    monkeypatch.setattr(models, "refresh", lambda: None)
+    # The pinned models file is read for real (tests/conftest.py): it says how calls are made.
     monkeypatch.setattr(models, "summary", lambda *roles: [{"role": r} for r in roles])
 
     def make(mode: str | None, *, built: bool = True) -> TestClient:
@@ -32,12 +32,21 @@ def client_for(monkeypatch, tmp_path):
     return make
 
 
+# What `/models` answers with the pinned models file through the gateway: the roles, and where
+# the models and keys behind them are set, for the badge to say so.
+_CHAT_ROLES_REPLY = {
+    "roles": [{"role": r} for r in models.CHAT_ROLES],
+    "file": "models.gateway.yaml",
+    "access": "gateway",
+}
+
+
 def test_a_local_or_langsmith_only_server_serves_no_ui(client_for):
     for mode in (None, "langsmith"):
         client = client_for(mode)
         assert client.get("/app/").status_code == 404
         assert client.get("/app/config.json").status_code == 404
-        assert client.get("/models").json() == {"roles": [{"role": r} for r in models.CHAT_ROLES]}
+        assert client.get("/models").json() == _CHAT_ROLES_REPLY
 
 
 def test_a_signed_in_deployment_serves_the_ui_at_app(client_for, monkeypatch):
@@ -72,9 +81,29 @@ def test_models_answers_every_caller_with_sign_in_on(client_for, headers):
     """`dev.py --remote` sends a LangSmith key, which this route cannot verify; what it says
     is public anyway, so it answers in both modes alike rather than refusing that caller."""
     response = client_for("oidc").get("/models", headers=headers)
-    assert response.json() == {"roles": [{"role": r} for r in models.CHAT_ROLES]}
+    assert response.json() == _CHAT_ROLES_REPLY
 
 
 def test_an_image_without_the_ui_says_so(client_for):
     response = client_for("oidc", built=False).get("/app/index.html")
     assert response.status_code == 503 and "not built" in response.text
+
+
+def test_models_says_where_models_and_keys_are_set(client_for, monkeypatch, tmp_path):
+    """With the user's own keys, keys live in .env rather than in LangSmith, and models come
+    from the file MODELS_FILE names; the badge says both, errors included."""
+    path = tmp_path / "models.anthropic.yaml"
+    path.write_text(paths.MODELS_FILE.read_text().replace("access: gateway", "access: direct"))
+    monkeypatch.setattr(paths, "MODELS_FILE", path)
+    client = client_for(None)
+    body = client.get("/models").json()
+    assert (body["file"], body["access"]) == ("models.anthropic.yaml", "direct")
+
+    def refused(*_roles):
+        raise SystemExit("ANTHROPIC_API_KEY is not set")
+
+    monkeypatch.setattr(models, "summary", refused)
+    response = client.get("/models")
+    assert response.status_code == 500
+    assert response.json() == {"error": "ANTHROPIC_API_KEY is not set",
+                               "file": "models.anthropic.yaml", "access": "direct"}

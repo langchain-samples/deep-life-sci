@@ -35,7 +35,7 @@ uv run scripts/deploy.py               # create or update a LangSmith deployment
 uv run scripts/dev.py --remote <URL>   # local chat UI against a deployment
 uv run agent ["question"]              # one-shot CLI; no question uses the demo
 uv run scripts/build_snapshot.py       # rebuild the scientific Python sandbox image
-uv run langgraph dev                   # API only, port 2024
+uv run langgraph dev                   # API only, port 2024; add --no-reload on Windows
 uv run --group test pytest             # offline tests
 uv run --group test pytest tests/test_pubmed.py  # example focused check
 uv run ruff check .                    # repository lint configuration in pyproject.toml
@@ -58,6 +58,11 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   not trigger dependency installation.
 - The gateway authenticates with a LangSmith key. Provider credentials belong in the
   workspace's provider integrations. See `models.py:gateway_key()` for precedence.
+  Each models file declares `access: gateway|direct`, and `MODELS_FILE` (`paths.py`) picks
+  the file (`models.MODEL_FILES`): direct is the bring-your-own-key path (Anthropic, OpenAI
+  or Bedrock credentials in `.env`, Bedrock through langchain-aws). Read provider keys only
+  under direct access, and keep the same model ids working in both. Never have a script
+  edit a tracked file such as a models file: a local change blocks `git pull`.
 - Model roles and environment axes live in `models.py:ENV_VARS`. Entry points import
   that list; do not copy it. Preserve explicitly empty values across dotenv loading:
   empty effort disables the parameter for models that do not support it.

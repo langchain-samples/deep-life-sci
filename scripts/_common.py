@@ -74,15 +74,34 @@ def use_local_node() -> None:
 use_local_node()
 
 
-def run(argv: list[str], *, cwd: Path | None = None, check: bool = True) -> int:
-    """Run a command, letting its output through to the terminal."""
+def run(
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run a command, letting its output through to the terminal. `env` is added to ours."""
     exe = tool(argv[0])
     if exe is None:
         raise FileNotFoundError(argv[0])
-    completed = subprocess.run([exe, *argv[1:]], cwd=cwd)
+    completed = subprocess.run(
+        [exe, *argv[1:]], cwd=cwd, env={**os.environ, **env} if env else None
+    )
     if check and completed.returncode != 0:
         raise SystemExit(completed.returncode)
     return completed.returncode
+
+
+def quiet_node() -> dict[str, str]:
+    """`NODE_OPTIONS` that stop Node printing deprecation warnings, keeping any already set.
+
+    For the package installs setup runs, where the warnings are about the tools' own code
+    and nothing the user can act on: the pinned pnpm 10.5.1 calls `url.parse()`, which
+    Node 24 reports as DEP0169 in the middle of an otherwise silent install, and a security-
+    sounding warning there reads like the install went wrong.
+    """
+    return {"NODE_OPTIONS": f"{os.environ.get('NODE_OPTIONS', '')} --no-deprecation".strip()}
 
 
 def listening(port: int) -> bool:
@@ -172,6 +191,16 @@ def set_env(key: str, value: str) -> None:
     else:
         lines.append(f"{key}={value}")
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def unset_env(key: str) -> None:
+    """Drop every line assigning `key` in .env, leaving comments untouched."""
+    if not ENV_FILE.exists():
+        return
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    kept = [line for line in lines if not ((found := _assignment(line)) and found[0] == key)]
+    if kept != lines:
+        ENV_FILE.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
 def frontend_dir() -> Path:
@@ -348,6 +377,8 @@ def require_setup(tag: str) -> None:
         die(tag, f"no .env in {REPO_ROOT}. Run:  uv run scripts/setup.py")
     if not (REPO_ROOT / ".venv").is_dir():
         die(tag, f"no virtualenv in {REPO_ROOT}. Run:  uv run scripts/setup.py")
+    # Setup writes both whichever way model calls are made. The provider keys a models file
+    # with `access: direct` needs depend on that file, so the server checks them as it starts.
     for key in ("LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY"):
         if not env_value(key):
             die(tag, f"{key} is not set in .env. Run:  uv run scripts/setup.py")
