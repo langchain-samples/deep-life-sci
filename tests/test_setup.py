@@ -150,9 +150,11 @@ class TestModelAccess:
 class TestSwitchModels:
     @pytest.fixture
     def models_file(self, tmp_path):
-        """A copy of the shipped models.yaml, which is what a user's setup would edit."""
+        """A copy of the pinned defaults (tests/conftest.py), not the repository's
+        models.yaml: setup itself rewrites that one in a clone set up for Anthropic or
+        Bedrock, which would decide these assertions."""
         path = tmp_path / "models.yaml"
-        shutil.copy(paths.REPO_ROOT / "models.yaml", path)
+        shutil.copy(paths.MODELS_FILE, path)
         return path
 
     def test_an_anthropic_key_moves_every_role_to_claude(self, models_file):
@@ -165,11 +167,17 @@ class TestSwitchModels:
         assert models.roles_without_key(("anthropic",), models_file) == {}
 
     def test_comments_survive_and_keep_the_old_model(self, models_file):
-        before = models_file.read_text()
+        # The shipped file's shape: a comment above each role, and the alternative trailing.
+        before = models_file.read_text().replace(
+            "root:\n  model: openai/gpt-5.6-terra\n  effort: high\n",
+            "# Main agent\nroot:\n  model: openai/gpt-5.6-terra  # Anthropic: claude-sonnet-5\n"
+            "  effort: high                 # Anthropic: high\n",
+        )
+        models_file.write_text(before)
         setup.switch_models(models_file, "anthropic", {"root": "openai"})
         after = models_file.read_text()
-        assert "  model: claude-sonnet-5" in after
-        assert "# OpenAI: openai/gpt-5.6-terra" in after
+        assert "# Main agent\nroot:\n" in after
+        assert "  model: claude-sonnet-5       # OpenAI: openai/gpt-5.6-terra" in after
         # Only the root's lines changed.
         pairs = zip(after.splitlines(), before.splitlines(), strict=True)
         assert sum(a != b for a, b in pairs) == 2
@@ -189,7 +197,7 @@ class TestSwitchModels:
 
     def test_a_declared_provider_follows_the_model(self, models_file):
         text = models_file.read_text().replace(
-            "  effort: high ", "  provider: openai\n  effort: high ", 1
+            "  effort: high\n", "  provider: openai\n  effort: high\n", 1
         )
         models_file.write_text(text)
         setup.switch_models(models_file, "anthropic", {"root": "openai"})
