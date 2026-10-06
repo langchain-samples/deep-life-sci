@@ -37,7 +37,10 @@ def launcher(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dev, "spawn", spawn)
     monkeypatch.setattr(dev.time, "sleep", interrupt)
-    monkeypatch.setattr(dev, "open_ui_when_ready", lambda: events.append("wait for UI"))
+    monkeypatch.setattr(
+        dev, "open_ui_when_ready",
+        lambda *, wait_for_agent: events.append(("wait for UI", wait_for_agent)),
+    )
     monkeypatch.setattr(dev.webbrowser, "open", lambda url: events.append(("browser", url)))
     return events
 
@@ -66,9 +69,10 @@ def test_ui_port_prompt_finishes_before_agent_logs_start(
     assert env == ({"PYTHONUTF8": "1"} if windows else None)
     if replace_ui:
         assert launcher[2][0] == "ui"
-        assert launcher[3] == "wait for UI"
+        assert launcher[3] == ("wait for UI", True)
     else:
-        assert launcher[2] == ("browser", dev.UI_URL)
+        # A reused UI still waits: the agent server this run started may not answer yet.
+        assert launcher[2] == ("wait for UI", True)
 
 
 def test_refusing_an_unresponsive_ui_starts_no_server(launcher, monkeypatch):
@@ -99,10 +103,10 @@ def test_remote_ui_conflict_starts_no_server(launcher, monkeypatch):
     assert launcher == []
 
 
-def test_browser_waits_until_ui_listens(monkeypatch):
+@pytest.fixture
+def opener(monkeypatch):
+    """`open_ui_when_ready` run inline, with no real sleeping, recording what it opens."""
     monkeypatch.delenv("NO_BROWSER", raising=False)
-    states = iter([False, False, True])
-    monkeypatch.setattr(dev, "listening", lambda port: next(states))
     pauses, opened = [], []
     monkeypatch.setattr(dev.time, "sleep", pauses.append)
     monkeypatch.setattr(dev.webbrowser, "open", opened.append)
@@ -110,6 +114,43 @@ def test_browser_waits_until_ui_listens(monkeypatch):
         dev.threading, "Thread",
         lambda target, **kwargs: SimpleNamespace(start=target),
     )
-    dev.open_ui_when_ready()
+    return pauses, opened
+
+
+def test_browser_waits_until_ui_listens(opener, monkeypatch):
+    pauses, opened = opener
+    states = iter([False, False, True])
+    monkeypatch.setattr(dev, "listening", lambda port: next(states))
+    dev.open_ui_when_ready(wait_for_agent=False)
     assert pauses == [0.5, 0.5]
     assert opened == [dev.UI_URL]
+
+
+def test_browser_also_waits_for_a_local_agent_server(opener, monkeypatch):
+    """The page checks the server as it loads; arriving first showed a connection error."""
+    pauses, opened = opener
+    monkeypatch.setattr(dev, "listening", lambda port: True)
+    answers = iter([False, False, True])
+    monkeypatch.setattr(dev, "answering", lambda port, **kwargs: port == 2024 and next(answers))
+    dev.open_ui_when_ready(wait_for_agent=True)
+    assert pauses == [0.5, 0.5]
+    assert opened == [dev.UI_URL]
+
+
+def test_a_server_that_never_answers_is_named_not_opened(opener, monkeypatch, capsys):
+    _, opened = opener
+    clock = iter(range(0, 10_000, 60))
+    monkeypatch.setattr(dev.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(dev, "listening", lambda port: True)
+    monkeypatch.setattr(dev, "answering", lambda *args, **kwargs: False)
+    dev.open_ui_when_ready(wait_for_agent=True)
+    assert opened == []
+    assert "agent server is still not answering" in capsys.readouterr().out
+
+
+def test_no_browser_opens_nothing(opener, monkeypatch):
+    _, opened = opener
+    monkeypatch.setenv("NO_BROWSER", "1")
+    monkeypatch.setattr(dev, "listening", lambda port: True)
+    dev.open_ui_when_ready(wait_for_agent=False)
+    assert opened == []

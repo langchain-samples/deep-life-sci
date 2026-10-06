@@ -68,20 +68,25 @@ async function sleep(ms = 4000) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Whether the agent server answers, and if not, whether asking again could change that.
+// "starting" is what a server still loading the graph looks like: the connection is
+// refused, or a proxy in front of it answers 502-504. Anything else is final, a 401 or 403
+// above all, which waiting will not fix.
 async function checkGraphStatus(
   apiUrl: string,
-  authScheme?: string,
-): Promise<boolean> {
+  authScheme: string | undefined,
+  signal: AbortSignal,
+): Promise<"ok" | "starting" | "refused"> {
   try {
     const headers = new Headers();
     if (authScheme) headers.set("X-Auth-Scheme", authScheme);
 
-    const res = await authFetch(`${apiUrl}/info`, { headers });
+    const res = await authFetch(`${apiUrl}/info`, { headers, signal });
 
-    return res.ok;
-  } catch (e) {
-    console.error(e);
-    return false;
+    if (res.ok) return "ok";
+    return [502, 503, 504].includes(res.status) ? "starting" : "refused";
+  } catch {
+    return "starting";
   }
 }
 
@@ -125,21 +130,38 @@ const StreamSession = ({
     },
   });
 
+  // The page can load before the agent server has: a reload while `dev.py` is still
+  // starting it, or a deployment waking up. So a server that is still starting is asked
+  // again, with backoff, for about a minute (as `ModelBadge` does for /models), and the
+  // error shows only once that runs out or the answer is final. Leaving the page or
+  // changing server stops the retries.
   useEffect(() => {
-    checkGraphStatus(apiUrl, authScheme).then((ok) => {
-      if (!ok) {
-        toast.error("Failed to connect to LangGraph server", {
-          description: () => (
-            <p>
-              Please ensure your graph is running at <code>{apiUrl}</code>.
-            </p>
-          ),
-          duration: 10000,
-          richColors: true,
-          closeButton: true,
-        });
+    const controller = new AbortController();
+    (async () => {
+      const deadline = Date.now() + 60_000;
+      for (let delay = 500; ; delay = Math.min(delay * 2, 8000)) {
+        const status = await checkGraphStatus(
+          apiUrl,
+          authScheme,
+          controller.signal,
+        );
+        if (controller.signal.aborted || status === "ok") return;
+        if (status === "refused" || Date.now() + delay > deadline) break;
+        await sleep(delay);
+        if (controller.signal.aborted) return;
       }
-    });
+      toast.error("Failed to connect to LangGraph server", {
+        description: () => (
+          <p>
+            Please ensure your graph is running at <code>{apiUrl}</code>.
+          </p>
+        ),
+        duration: 10000,
+        richColors: true,
+        closeButton: true,
+      });
+    })();
+    return () => controller.abort();
   }, [apiUrl, authScheme]);
 
   // A finished run's last line is not progress any more. Clearing on `isLoading` also covers

@@ -158,23 +158,37 @@ def stop_all() -> None:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
-def open_ui_when_ready() -> None:
-    """Open the window once :3000 answers.
+# How long the window waits for both servers. Generous: a cold first start compiles the
+# UI's page and imports the graph, and a server that answers late is still worth a window.
+READY_TIMEOUT_SECONDS = 180
 
-    Polled rather than opened straight away: `next dev` needs a few seconds to bind, and a
-    browser that arrives first shows a connection error the user has to reload past.
-    `webbrowser` covers macOS, Linux, Windows and WSL in one call, which is what the
-    open/xdg-open/wslview trio was doing by hand.
+
+def open_ui_when_ready(*, wait_for_agent: bool) -> None:
+    """Open the window once :3000 listens and, for a local agent server, :2024 answers.
+
+    Polled rather than opened straight away: `next dev` needs a few seconds to bind, and
+    the agent server longer to import the graph. The page checks the server as it loads,
+    so a window that beats it showed "Failed to connect to LangGraph server" until a
+    reload. `--remote` has no local server to wait for. A stack that is still not ready at
+    the deadline is said so here rather than left to a window that would only error.
+    `webbrowser` covers macOS, Linux, Windows and WSL in one call.
     """
     if os.environ.get("NO_BROWSER"):
         return
 
+    def ready() -> bool:
+        return listening(3000) and (not wait_for_agent or answering(2024, timeout=2.0))
+
     def wait_and_open() -> None:
-        for _ in range(120):
-            if listening(3000):
+        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if ready():
                 webbrowser.open(UI_URL)
                 return
             time.sleep(0.5)
+        say("dev", f"not opening a browser: the {'agent server' if listening(3000) else 'chat UI'}"
+                   f" is still not answering after {READY_TIMEOUT_SECONDS}s. Check its log "
+                   f"above, or open {UI_URL} once it is up.")
 
     threading.Thread(target=wait_and_open, daemon=True).start()
 
@@ -432,8 +446,11 @@ def _launch() -> int:
     if start_ui:
         spawn("ui", ui_dir, [*pnpm.argv, "dev"],
               env=remote_ui_env(args.remote) if args.remote else None)
-        open_ui_when_ready()
+    if start_ui or start_agent:
+        open_ui_when_ready(wait_for_agent=not args.remote)
     elif not os.environ.get("NO_BROWSER"):
+        # Both reused, and both answered `_take_over`'s check, so open now: this process
+        # exits straight after, taking a waiting thread with it.
         webbrowser.open(UI_URL)
 
     # Both already up. Nothing to supervise and nothing this script may stop — the servers
