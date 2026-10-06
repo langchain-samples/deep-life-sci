@@ -70,6 +70,30 @@ class TestInferProvider:
         assert _infer_provider("some-new-model") == ""
 
 
+class TestWebSearchSpec:
+    def test_openai_search_uses_only_responses_api_tool_keys(self, monkeypatch):
+        monkeypatch.setenv("SEARCH_MODEL", "openai/search-model")
+        monkeypatch.setenv("SEARCH_EFFORT", "")
+        assert "name" not in WEB_SEARCH_SPECS["openai"]
+        assert "max_uses" not in WEB_SEARCH_SPECS["openai"]
+
+        class CapturingModel:
+            def bind_tools(self, tools):
+                self.tools = tools
+                return self
+
+        model = CapturingModel()
+        monkeypatch.setattr(models, "_build", lambda *args, **kwargs: model)
+        web_search_model()
+
+        assert set(model.tools[0]) <= {
+            "type",
+            "search_context_size",
+            "user_location",
+            "filters",
+        }
+
+
 class TestProviderFor:
     def test_a_declared_path_that_agrees_with_the_form_is_kept(self):
         assert _provider_for("root", "claude-sonnet-5", "anthropic") == "anthropic"

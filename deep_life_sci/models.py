@@ -163,16 +163,12 @@ SEARCH_TIMEOUT_SECONDS = 120.0
 # `AttributeError: 'dict' object has no attribute 'name'` — the PTC tool filter reads
 # `.name` off every entry of `request.tools`, which LangChain types as
 # `list[BaseTool | dict[str, Any]]`. Verified against langchain-quickjs 0.3.5.
-# One shape for both paths. The tool is named and capped identically either way; only the
-# dated `type` differs, and the gateway normalises the rest per provider on its way out.
-# Five uses is enough for a real question and bounds the cost of a runaway query.
-_SEARCH_TOOL = {"name": "web_search", "max_uses": 5}
-
 WEB_SEARCH_SPECS = {
-    "anthropic": {"type": "web_search_20250305", **_SEARCH_TOOL},
+    # Anthropic's tool accepts a name and a per-request use cap.
+    "anthropic": {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
     # Needs the Responses API, which `_build` already sets on this path — Chat
     # Completions has no server-side web search at all.
-    "openai": {"type": "web_search", **_SEARCH_TOOL},
+    "openai": {"type": "web_search"},
 }
 
 # Bedrock's own search, for its GPT models on the OpenAI-compatible path, which it takes
