@@ -270,7 +270,7 @@ def resize(host: Host, name: str, deployment_id: str, wanted: str) -> str | None
     try:
         host.set_tier(deployment_id, wanted)
     except Exception as exc:  # noqa: BLE001 - reported; the deploy can go ahead
-        say(TAG, f"warning: could not size {name} as {wanted} ({exc}); change it on its "
+        say(TAG, f"WARNING: could not size {name} as {wanted} ({exc}); change it on its "
                  "LangSmith page.")
         return None
     say(TAG, f"sized {name} as {wanted}")
@@ -307,7 +307,7 @@ def ensure_snapshot(name: str, key: str, assume_yes: bool) -> None:
         say(TAG, f"sandbox snapshot {name} ready.")
         return
     if not _confirm(f"build the deployment's sandbox snapshot {name} now (~2 min)?", assume_yes):
-        say(TAG, f"warning: no snapshot {name}; each new thread will install its packages "
+        say(TAG, f"WARNING: no snapshot {name}; each new thread will install its packages "
                  f"at runtime (~95s). Build it later with:  "
                  f"uv run scripts/build_snapshot.py --name {name}")
         return
@@ -368,11 +368,11 @@ def main() -> int:
     write_deploy_env(settings)
     say(TAG, f"wrote {DEPLOY_ENV.name}: {', '.join(sorted(settings))}")
     if "NCBI_API_KEY" not in settings:
-        say(TAG, "warning: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
+        say(TAG, "WARNING: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
                  "every user, and without a key that caller is held to 3 requests/sec.")
     direct = settings.get("MODEL_ACCESS") == "direct"
     if direct and env_value("AWS_PROFILE") and "AWS_BEARER_TOKEN_BEDROCK" not in settings:
-        say(TAG, "warning: .env signs in to Bedrock with AWS_PROFILE, which exists only on "
+        say(TAG, "WARNING: .env signs in to Bedrock with AWS_PROFILE, which exists only on "
                  "this machine. Bedrock models will not start on the deployment until "
                  "AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key) is in .env.")
 
@@ -397,7 +397,7 @@ def main() -> int:
             created = False
             asked = args.type or DEFAULT_TYPE
             if deployment_type and asked != deployment_type:
-                say(TAG, f"warning: {name} is {deployment_type}, and a type cannot change, so "
+                say(TAG, f"WARNING: {name} is {deployment_type}, and a type cannot change, so "
                          f"it stays {deployment_type}. Deploy under another --name for {asked}.")
     except Exception as exc:  # noqa: BLE001 - refused or unreachable, the same dead end
         die(TAG, f"the Deployments API refused: {exc}")

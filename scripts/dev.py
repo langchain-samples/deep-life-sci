@@ -266,7 +266,7 @@ def _kill_holder(port: int, pid: int) -> bool:
                 say("dev", f"stopped pid {pid}; :{port} is free")
                 return True
             time.sleep(0.25)
-    say("dev", f"warning: :{port} is still held after SIGKILL — reusing it")
+    say("dev", f"WARNING: :{port} is still held after SIGKILL — reusing it")
     return False
 
 

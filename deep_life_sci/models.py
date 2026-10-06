@@ -981,7 +981,7 @@ def report_web_search_problem() -> None:
     global _reported_search_problem
     problem = web_search_problem()
     if problem and problem != _reported_search_problem:
-        print(f"[models] warning: web search is unavailable. {problem}")
+        print(f"[models] WARNING: web search is unavailable. {problem}")
     _reported_search_problem = problem
 
 

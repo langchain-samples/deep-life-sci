@@ -91,13 +91,13 @@ class TestModelAccess:
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == "us-west-2"
         out = capsys.readouterr().out
-        assert "note: Bedrock serves different models" in out and "warning" not in out
+        assert "note: Bedrock serves different models" in out and "WARNING" not in out
 
     def test_any_other_region_is_kept_with_a_warning(self, env_file, answers, capsys):
         answers("4", "ABSKbedrock", "eu-west-1")
         setup.ensure_model_access()
         assert _common.env_value("AWS_REGION") == "eu-west-1"
-        assert "warning: the default Bedrock models do not run in eu-west-1" in (
+        assert "WARNING: the default Bedrock models do not run in eu-west-1" in (
             capsys.readouterr().out
         )
 

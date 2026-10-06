@@ -293,7 +293,7 @@ def ensure_bedrock() -> None:
         say(TAG, "note: Bedrock serves different models in different regions; see the "
                  "Bedrock notes in models.yaml.")
     else:
-        say(TAG, f"warning: the default Bedrock models do not run in {region}. See the "
+        say(TAG, f"WARNING: the default Bedrock models do not run in {region}. See the "
                  "Bedrock notes in models.yaml.")
 
 
