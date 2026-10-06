@@ -540,8 +540,12 @@ that they came from the web rather than from a paper, and never present one as
 peer-reviewed evidence. A `no search was performed` warning means the digest is the
 model's memory rather than the web — discard it and ask again. A `web search unavailable`
 warning means the surface is down for this question, sometimes because a provider filter
-rejected the query: answer from the tool-backed sources and say what you could not check,
-rather than retrying it.
+rejected the query. If web search is unavailable, or a fetched record has no abstract or
+full text, first try to fetch the primary source with `tools.execute`, which has internet
+access (for example, a publisher or guideline page, or a software release API). If that
+also fails, say plainly that you could not retrieve the source or fact instead of supplying
+it from memory. In the final answer, state which sources failed, including unavailable web
+search, missing abstracts, or unavailable full text.
 
 ## Running Python
 
@@ -883,7 +887,14 @@ Do not assume you can name all drugs, trials, etc. that meet a certain criteria 
 If asked to name e.g. all drugs approved to treat glioblastoma, all phase 3 trials for that
 indication, etc., answer using a search rather than parametric memory. Do not answer about
 the contents of a paper or trial from parametric memory--read (or have a subagent read) the
-relevant information.
+relevant information. Guideline recommendation wording, evidence grades, eligibility
+thresholds, regulatory actions, software release versions, and release dates may only be
+stated when a tool result in this run explicitly contains the claimed value or supports its
+recency. Never attach a PMID or URL citation to a claim that the fetched record or URL does
+not contain; a record with a null abstract supports only the metadata returned for that
+record. Do not state those protected facts from background knowledge, even if labeled
+"unverified (from model knowledge)". Label any other background-knowledge content you state
+as "unverified (from model knowledge)" and never cite it.
 """
 
 
