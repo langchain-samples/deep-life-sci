@@ -1,5 +1,11 @@
+import tailwindScrollbar from "tailwind-scrollbar";
+import tailwindcssAnimate from "tailwindcss-animate";
+
+// An ES module because package.json says `"type": "module"`: as CommonJS, `next dev`
+// warned about the mismatch on every start. Tailwind 4 reads its settings from
+// src/app/globals.css; this file is kept for components.json (the shadcn CLI).
 /** @type {import('tailwindcss').Config} */
-module.exports = {
+export default {
   darkMode: ["class"],
   content: [
     "./index.html",
@@ -61,5 +67,5 @@ module.exports = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate"), require("tailwind-scrollbar")],
+  plugins: [tailwindcssAnimate, tailwindScrollbar],
 };

@@ -17,7 +17,7 @@ import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from deep_life_sci import paths
+from deep_life_sci import models, paths
 
 REPO = paths.REPO_ROOT
 sys.path.insert(0, str(REPO / "scripts"))
@@ -101,7 +101,8 @@ class TestTheImageCanInstallThePackage:
     @pytest.mark.parametrize(
         "needed",
         ["langgraph.json", "langgraph.deploy.json", "package.json", "package-lock.json",
-         "models.yaml", "pyproject.toml", "README.md", "deep_life_sci/", "ui/", "frontend/"],
+         "pyproject.toml", "README.md", "deep_life_sci/", "ui/", "frontend/",
+         *models.MODEL_FILES.values()],
     )
     def test_build_inputs_are_not_ignored(self, needed):
         entries = [line.strip() for line in _read(".dockerignore").splitlines()]
@@ -139,6 +140,8 @@ class TestDeploySecrets:
             "NCBI_TOOL": "deep_life_sci_ab12cd34_my_lab",
             "NCBI_EMAIL": "me@example.org",
             "DEEP_LIFE_SCI_AUTH": "langsmith",
+            # Explicit, so a deployment once deployed with another file does not keep it.
+            "MODELS_FILE": "models.gateway.yaml",
         }
 
     def test_oidc_settings_ship_only_in_oidc_mode(self, dotenv):
@@ -323,3 +326,46 @@ def test_a_signed_in_owners_sandbox_names_fit_and_differ_by_owner(monkeypatch):
     member = scope("studio-user", signed_in=False, owner="alice")
     assert graph._sandbox_name(member) == alice
     assert graph._sandbox_name(scope("bob", owner="alice")) == bob
+
+
+class TestDirectAccessSecrets:
+    def test_provider_keys_ship_only_for_the_provider_the_file_calls(self, dotenv):
+        """Never beside the gateway, and with the user's own keys only the one in use."""
+        keys = {"ANTHROPIC_API_KEY": "sk-ant-x", "OPENAI_API_KEY": "sk-x"}
+        dotenv(LANGSMITH_API_KEY="k", **keys)
+        assert not set(keys) & set(deploy.deploy_settings("x"))
+        dotenv(LANGSMITH_API_KEY="k", MODELS_FILE="models.anthropic.yaml", **keys)
+        secrets = deploy.deploy_settings("x")
+        assert secrets["MODELS_FILE"] == "models.anthropic.yaml"
+        assert secrets["ANTHROPIC_API_KEY"] == "sk-ant-x"
+        assert "OPENAI_API_KEY" not in secrets
+
+    def test_bedrock_ships_its_key_and_either_region_but_not_a_local_profile(self, dotenv):
+        dotenv(LANGSMITH_API_KEY="k", MODELS_FILE="models.bedrock.yaml",
+               AWS_BEARER_TOKEN_BEDROCK="b", AWS_PROFILE="research",
+               AWS_DEFAULT_REGION="us-west-2")
+        secrets = deploy.deploy_settings("x")
+        assert secrets["AWS_BEARER_TOKEN_BEDROCK"] == "b"
+        assert secrets["AWS_DEFAULT_REGION"] == "us-west-2"
+        assert "AWS_PROFILE" not in secrets
+
+    def test_a_deployment_that_could_not_start_is_caught_before_it_ships(self, tmp_path):
+        """The server's own start-up check, in an interpreter that sees only what ships:
+        credentials that stay on this machine count for nothing there."""
+        base = {"MODELS_FILE": "models.bedrock.yaml", "AWS_REGION": "us-east-1"}
+        assert "none of AWS_BEARER_TOKEN_BEDROCK" in deploy.deployment_problem(base)
+        assert deploy.deployment_problem({**base, "AWS_BEARER_TOKEN_BEDROCK": "b"}) is None
+        bad = tmp_path / "models.yaml"
+        bad.write_text((REPO / "tests/fixtures/models.gateway.yaml").read_text().replace(
+            "access: gateway", "access: byok"))
+        assert "access is 'byok'" in deploy.deployment_problem({"MODELS_FILE": str(bad)})
+
+    def test_provider_settings_are_read_by_the_package_and_not_reserved(self, dotenv):
+        reserved = pytest.importorskip("langgraph_cli.deploy").RESERVED_ENV_VARS
+        source = "".join(
+            path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
+        )
+        for name in ("MODELS_FILE", *(n for names in deploy.PROVIDER_SETTINGS.values()
+                                      for n in names)):
+            assert name not in reserved
+            assert f'"{name}"' in source, name

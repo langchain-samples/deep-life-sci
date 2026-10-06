@@ -158,23 +158,37 @@ def stop_all() -> None:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
 
-def open_ui_when_ready() -> None:
-    """Open the window once :3000 answers.
+# How long the window waits for both servers. Generous: a cold first start compiles the
+# UI's page and imports the graph, and a server that answers late is still worth a window.
+READY_TIMEOUT_SECONDS = 180
 
-    Polled rather than opened straight away: `next dev` needs a few seconds to bind, and a
-    browser that arrives first shows a connection error the user has to reload past.
-    `webbrowser` covers macOS, Linux, Windows and WSL in one call, which is what the
-    open/xdg-open/wslview trio was doing by hand.
+
+def open_ui_when_ready(*, wait_for_agent: bool) -> None:
+    """Open the window once :3000 listens and, for a local agent server, :2024 answers.
+
+    Polled rather than opened straight away: `next dev` needs a few seconds to bind, and
+    the agent server longer to import the graph. The page checks the server as it loads,
+    so a window that beats it showed "Failed to connect to LangGraph server" until a
+    reload. `--remote` has no local server to wait for. A stack that is still not ready at
+    the deadline is said so here rather than left to a window that would only error.
+    `webbrowser` covers macOS, Linux, Windows and WSL in one call.
     """
     if os.environ.get("NO_BROWSER"):
         return
 
+    def ready() -> bool:
+        return listening(3000) and (not wait_for_agent or answering(2024, timeout=2.0))
+
     def wait_and_open() -> None:
-        for _ in range(120):
-            if listening(3000):
+        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if ready():
                 webbrowser.open(UI_URL)
                 return
             time.sleep(0.5)
+        say("dev", f"not opening a browser: the {'agent server' if listening(3000) else 'chat UI'}"
+                   f" is still not answering after {READY_TIMEOUT_SECONDS}s. Check its log "
+                   f"above, or open {UI_URL} once it is up.")
 
     threading.Thread(target=wait_and_open, daemon=True).start()
 
@@ -266,7 +280,7 @@ def _kill_holder(port: int, pid: int) -> bool:
                 say("dev", f"stopped pid {pid}; :{port} is free")
                 return True
             time.sleep(0.25)
-    say("dev", f"warning: :{port} is still held after SIGKILL — reusing it")
+    say("dev", f"WARNING: :{port} is still held after SIGKILL — reusing it")
     return False
 
 
@@ -369,6 +383,9 @@ def _launch() -> int:
     # server: every request from the chat UI then hangs, so the window shows its thinking
     # indicator forever with no error to explain it. `_take_over` asks before stopping
     # anything, so a :2024 of your own still survives a run of this.
+    # Finish all port prompts before starting log-pumping threads. Otherwise API logs
+    # bury the UI replacement prompt while the launcher waits for an unseen answer.
+    start_agent = False
     if args.remote:
         say("dev", f"agent server: {args.remote}")
     elif listening(2024) and not _take_over(
@@ -378,31 +395,7 @@ def _launch() -> int:
     ):
         say("dev", ":2024 already serving — reusing it")
     else:
-        # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies
-        # the only worker and every later run queues behind it. That bites hardest across
-        # restarts: the server persists its queue to .langgraph_api/, so a run abandoned by
-        # a Ctrl-C is resumed on the next boot, takes the worker, and starves the query you
-        # just typed — which sits `pending` forever, produces no LangSmith trace, and looks
-        # like a hang while the console streams the *old* run's progress.
-        #
-        # This makes the asyncio.to_thread rule in sources/cache_io.py load-bearing rather
-        # than theoretical: runs share one event loop, so a blocking call stalls neighbours.
-        #
-        # --no-reload on Windows: with reload on, uvicorn runs the server on a
-        # SelectorEventLoop there, which cannot start subprocesses. The server starts the
-        # artifact bundler (`npx @langchain/langgraph-ui`) as one at boot, and when that
-        # raises the server exits, so `langgraph dev` dies on every start. Without reload
-        # uvicorn uses the ProactorEventLoop, which can. The cost is restarting by hand
-        # after a code change, on Windows only.
-        #
-        # PYTHONUTF8 because the server's output reaches us through a pipe, which Windows
-        # Python encodes in the ANSI code page: the startup banner's emoji then fail to
-        # encode and the log fills with UnicodeEncodeError tracebacks that look fatal.
-        argv = ["uv", "run", "--group", "dev", "langgraph", "dev",
-                "--no-browser", "--n-jobs-per-worker", "5"]
-        if WINDOWS:
-            argv.append("--no-reload")
-        spawn("agent", REPO_ROOT, argv, env={"PYTHONUTF8": "1"} if WINDOWS else None)
+        start_agent = True
 
     # Same wedge, same rule as :2024 above — `next dev` can end up bound to the port and
     # answering nothing, and adopting that paints a window that never fills in. No /ok
@@ -413,6 +406,7 @@ def _launch() -> int:
     ui_kill_hint = (
         "lsof -ti tcp:3000 | xargs kill   (add -9 if it survives; Windows: npx kill-port 3000)"
     )
+    start_ui = True
     if listening(3000) and not _take_over(
         3000, "the chat UI", answering(3000, path="/", timeout=20.0), ui_kill_hint,
     ):
@@ -420,12 +414,44 @@ def _launch() -> int:
             # Reusing it would chat with whichever server it was started against.
             die("dev", f"a chat UI is already on :3000; stop it to use --remote:  {ui_kill_hint}")
         say("dev", ":3000 already serving — reusing it")
-        if not os.environ.get("NO_BROWSER"):
-            webbrowser.open(UI_URL)
-    else:
+        start_ui = False
+
+    if start_agent:
+        # --n-jobs-per-worker: `langgraph dev` defaults this to 1, so a single run occupies
+        # the only worker and every later run queues behind it. That bites hardest across
+        # restarts: the server persists its queue to .langgraph_api/, so a run abandoned by
+        # a Ctrl-C is resumed on the next boot, takes the worker, and starves the query you
+        # just typed — which sits `pending` forever, produces no LangSmith trace, and looks
+        # like a hang while the console streams the *old* run's progress.
+        #
+        # This makes the asyncio.to_thread rule in sources/cache_io.py load-bearing rather
+        # than theoretical: runs share one event loop, so a blocking call stalls neighbours.
+        #
+        # Disable reload on every platform: watching the repo also sees generated files
+        # in .venv and can restart repeatedly while dependencies or imports change them.
+        # Restart this launcher after editing Python code. On Windows, reload also uses a
+        # SelectorEventLoop there, which cannot start subprocesses. The server starts the
+        # artifact bundler (`npx @langchain/langgraph-ui`) as one at boot, and when that
+        # raises the server exits, so `langgraph dev` dies on every start. Without reload
+        # uvicorn uses the ProactorEventLoop, which can. The cost is restarting by hand
+        # after a code change.
+        #
+        # PYTHONUTF8 because the server's output reaches us through a pipe, which Windows
+        # Python encodes in the ANSI code page: the startup banner's emoji then fail to
+        # encode and the log fills with UnicodeEncodeError tracebacks that look fatal.
+        argv = ["uv", "run", "--no-sync", "--group", "dev", "langgraph", "dev",
+                "--no-browser", "--no-reload", "--n-jobs-per-worker", "5"]
+        spawn("agent", REPO_ROOT, argv, env={"PYTHONUTF8": "1"} if WINDOWS else None)
+
+    if start_ui:
         spawn("ui", ui_dir, [*pnpm.argv, "dev"],
               env=remote_ui_env(args.remote) if args.remote else None)
-        open_ui_when_ready()
+    if start_ui or start_agent:
+        open_ui_when_ready(wait_for_agent=not args.remote)
+    elif not os.environ.get("NO_BROWSER"):
+        # Both reused, and both answered `_take_over`'s check, so open now: this process
+        # exits straight after, taking a waiting thread with it.
+        webbrowser.open(UI_URL)
 
     # Both already up. Nothing to supervise and nothing this script may stop — the servers
     # belong to whoever started them — so say so and get out of the way.

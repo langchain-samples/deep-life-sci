@@ -31,8 +31,10 @@ bare Ubuntu 22.04 with no C compiler. Those are the two setups testers have brok
   it. Before raising either, check that every package in `uv.lock` has wheels for the new
   version. Changing the pin also makes uv rebuild every existing `.venv` at its next
   `uv run`, `dev.py` included, so tell existing users to re-run setup first.
-- On Windows `dev.py` runs `langgraph dev --no-reload`; the comment at the call says why.
-  A bare `uv run langgraph dev` needs the same flag there.
+- `dev.py` runs `langgraph dev --no-reload` on every platform to avoid restarts from
+  generated files in `.venv`. Restart the launcher after editing Python code. On Windows
+  it also avoids the subprocess limitation described at the call.
+  A bare `uv run langgraph dev` needs the same flag on Windows.
 - The workflow's `paths-ignore` lists what cannot affect an install or a boot. New
   directories are covered by default; add one there only if that is true of it.
 

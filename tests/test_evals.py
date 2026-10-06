@@ -392,3 +392,36 @@ async def test_judge_parses_real_message_text_and_includes_artifacts(monkeypatch
     assert "Deliverables this run published: chart" in prompt
     if expected is None:
         assert "unparseable" in result["comment"]
+
+
+class TestSweepEntryPoint:
+    async def test_a_structural_sweep_needs_no_judge_and_records_the_access_mode(
+        self, monkeypatch, direct
+    ):
+        """--structural never builds the judge, so with the user's own keys it must not ask
+        for the judge's; and gateway and direct runs of one models file must not look alike.
+        """
+        import sys
+
+        from evals import run
+
+        class Started(Exception):
+            """Stops main() at aevaluate, before any example or the exit watchdog."""
+
+        seen = {}
+
+        async def aevaluate(_target, **kwargs):
+            seen.update(kwargs["metadata"])
+            raise Started
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+        for role in ("ROOT", "SUBAGENT", "SEARCH"):
+            monkeypatch.setenv(f"{role}_MODEL", "claude-sonnet-5-5")
+            monkeypatch.setenv(f"{role}_EFFORT", "")
+        # The judge stays on the pinned models file's OpenAI model, with no OpenAI key.
+        monkeypatch.setattr(run, "aevaluate", aevaluate)
+        monkeypatch.setattr(sys, "argv", ["evals.run", "--structural"])
+        with pytest.raises(Started):
+            await run.main()
+        assert seen["access"] == "direct"
+        assert seen["judge"] is False and "judge=" not in seen["models"]

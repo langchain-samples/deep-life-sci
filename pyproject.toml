@@ -20,7 +20,9 @@ dependencies = [
     "httpx>=0.28.1",
     # Both SDKs, because any role can be pointed at either provider. Anthropic goes over
     # the native gateway path, OpenAI over the /v1 shim — see models.py.
-    "langchain-anthropic>=1.5.3",
+    # 1.7.5 is the first with a profile for claude-sonnet-5-5, the recommended Claude: without
+    # one ChatAnthropic caps output at 4096 tokens and leaves thinking off (models.py).
+    "langchain-anthropic>=1.7.5",
     "langchain-openai>=1.4.2",
     # QuickJS is the root model's orchestration surface (programmatic tool calling), not
     # an optional accelerator — the agent has no other way to reach the PubMed tools.
@@ -42,8 +44,15 @@ dependencies = [
     "python-dotenv>=1.2.2",
     # Verifying sign-in tokens from any OIDC provider (auth.py). [crypto] for RSA/EC keys.
     "pyjwt[crypto]>=2.13.0",
-    # models.yaml, the per-role model settings (models.py).
+    # The models files (models.*.yaml), the per-role model settings (models.py).
     "pyyaml>=6.0.3",
+    # Bedrock with the user's own credentials (models.bedrock.yaml, models.py):
+    # ChatAnthropicBedrock for Claude, ChatOpenAIMantle for everything else. Capped at the
+    # next major because the Mantle classes are new. models.py imports it only to build a
+    # Bedrock model, though deepagents imports it whenever installed. The extras bring
+    # aws-bedrock-token-generator, without which signing in with an AWS profile instead of
+    # a Bedrock API key fails at the first GPT call.
+    "langchain-aws[anthropic,openai]>=1.8.0,<2",
 ]
 
 [project.scripts]

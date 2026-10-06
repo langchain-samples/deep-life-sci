@@ -1,12 +1,14 @@
 """One-time setup. Run this once per clone, then ask questions with the chat UI.
 
-    uv run scripts/setup.py          # prompt for the API key, install everything
+    uv run scripts/setup.py          # prompt for the API keys, install everything
     uv run scripts/setup.py --yes    # never prompt; the key comes from LANGSMITH_API_KEY
     uv run scripts/setup.py --yes --no-snapshot   # CI with no LangSmith credentials
 
 Four steps, in the order they depend on each other:
 
-    1. .env        — the LangSmith API key, prompted for and written here
+    1. .env        — the LangSmith API key, and the models file to run (MODELS_FILE): the
+                     one through the LangSmith LLM gateway, or the one for the user's own
+                     Anthropic, OpenAI or Bedrock credentials, with that key
     2. uv sync     — the virtualenv
     3. a snapshot  — sandbox image with the scientific Python stack baked in
     4. the chat UI — the frontend, and the deps for the components it renders
@@ -45,16 +47,19 @@ from _common import (
     ENV_FILE,
     LOCAL_NODE_DIR,
     REPO_ROOT,
+    _assignment,
     deps_current,
     die,
     env_value,
     frontend_dir,
     pnpm_or_die,
+    quiet_node,
     run,
     say,
     set_env,
     stamp_deps,
     tool,
+    unset_env,
     use_local_node,
 )
 
@@ -165,11 +170,17 @@ def migrate_gateway_key() -> None:
     single most confusing thing about the setup. Nothing reads the old name any more, so
     an unmigrated .env would look unconfigured; the whole file is rewritten so the
     explanatory comment above the key follows it.
+
+    Decided by the value, a LangSmith key (`lsv2_`, the placeholder included): any other
+    OPENAI_API_KEY is the user's own OpenAI key, which models.openai.yaml reads, and an
+    old gateway key left under that name would otherwise be sent to OpenAI as one.
     """
     if not ENV_FILE.exists():
         return
     text = ENV_FILE.read_text(encoding="utf-8")
-    if "OPENAI_API_KEY" not in text or "LANGSMITH_GATEWAY_API_KEY" in text:
+    assigned = [found[1] for line in text.splitlines()
+                if (found := _assignment(line)) and found[0] == "OPENAI_API_KEY"]
+    if "LANGSMITH_GATEWAY_API_KEY" in text or not assigned or not assigned[-1].startswith("lsv2_"):
         return
     ENV_FILE.write_text(
         text.replace("OPENAI_API_KEY", "LANGSMITH_GATEWAY_API_KEY"), encoding="utf-8"
@@ -214,6 +225,141 @@ def ensure_langsmith_key() -> None:
     set_env("LANGSMITH_GATEWAY_API_KEY", env_value("LANGSMITH_API_KEY"))
 
 
+# The user's own credentials, for a models file that says `access: direct`: (variable, name,
+# key prefix) per destination, for the prompts. The variables are models.py's DIRECT_KEYS
+# (the tests hold them equal); whether .env has credentials is models.py's own rule
+# (`has_own_credentials`), importable here because `uv run` syncs the virtualenv before this
+# script starts.
+OWN_KEYS = {
+    "anthropic": ("ANTHROPIC_API_KEY", "Anthropic", "sk-ant-"),
+    "openai": ("OPENAI_API_KEY", "OpenAI", "sk-"),
+    "bedrock": ("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock", ""),
+}
+
+# How model calls are made, as the menu offers it. Each answer is one of the shipped models
+# files (models.MODEL_FILES), which says so itself (`access:`) and needs one credential.
+ACCESS_CHOICES = (
+    ("gateway", "LangSmith LLM Gateway: provider keys stay in your LangSmith workspace"),
+    ("anthropic", "your own Anthropic API key"),
+    ("openai", "your own OpenAI API key"),
+    ("bedrock", "your own Amazon Bedrock credentials"),
+)
+
+# The regions that serve the recommended Bedrock models: models.py's
+# RECOMMENDED_BEDROCK_REGIONS, repeated for the same reason as OWN_KEYS. The first is the
+# answer to Enter.
+RECOMMENDED_BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
+
+
+def choose(question: str, options: tuple[tuple[str, str], ...]) -> str:
+    """A numbered menu; Enter takes the first option. Only called behind `interactive()`."""
+    say(TAG, question)
+    for number, (_, label) in enumerate(options, 1):
+        say(TAG, f"  {number}) {label}")
+    while True:
+        reply = input(f"[{TAG}] choose 1-{len(options)} [1]: ").strip() or "1"
+        if reply.isdigit() and 1 <= int(reply) <= len(options):
+            return options[int(reply) - 1][0]
+
+
+def ask_provider_key(destination: str) -> None:
+    """The user's own credentials for one destination, typed in: never read from the shell,
+    so what .env holds is always what the user entered here."""
+    key, name, prefix = OWN_KEYS[destination]
+    if destination == "bedrock":
+        ensure_bedrock()
+    elif not env_value(key):
+        # No prefix check: provider key formats are the providers' to change, and a wrong
+        # key is named by the server at its first call.
+        ask_key(key, f"{name} API key ({prefix}...)", "")
+
+
+def has_own_credentials(destination: str) -> bool:
+    """Whether .env holds the user's own credentials for one destination, by the rule the
+    server checks them with, so setup never asks for what the server would accept."""
+    from deep_life_sci import models
+
+    return models.has_direct_credentials(destination, env_value)
+
+
+def ensure_bedrock() -> None:
+    """A Bedrock API key and a region.
+
+    An AWS profile or AWS access keys also work in place of the key (in .env, by hand), but
+    setup asks only for the key: it is the one form a deployment can use too, and the one
+    Claude on Bedrock signs in with. Any region is accepted, with a note: a stronger one
+    when it does not serve the default models. AWS_DEFAULT_REGION counts, as in the SDKs.
+    """
+    from deep_life_sci import models
+
+    if not has_own_credentials("bedrock"):
+        ask_key("AWS_BEARER_TOKEN_BEDROCK", "Amazon Bedrock API key", "")
+    if models.aws_region(env_value):
+        return
+    default = RECOMMENDED_BEDROCK_REGIONS[0]
+    region = default
+    if interactive():
+        region = "".join(input(f"[{TAG}] AWS region [{default}]: ").split()) or default
+    set_env("AWS_REGION", region)
+    if region in RECOMMENDED_BEDROCK_REGIONS:
+        say(TAG, "note: Bedrock serves different models in different regions; see the "
+                 "Bedrock notes in models.bedrock.yaml.")
+    else:
+        say(TAG, f"WARNING: the default Bedrock models do not run in {region}. See the "
+                 "Bedrock notes in models.bedrock.yaml.")
+
+
+def ensure_models_file() -> None:
+    """Which models file the agent runs (MODELS_FILE in .env), and the credentials it needs.
+
+    The file says how its calls are made (`access:`), so this is the one question: the
+    gateway (models.gateway.yaml), or the user's own Anthropic, OpenAI or Bedrock
+    credentials, each with a file of that provider's models (`models.MODEL_FILES`). Asked
+    whenever .env does not say, which includes a clone set up before there was a choice:
+    once, with the gateway as the answer to Enter. Recorded only once the credentials are
+    in, so a setup stopped at the key prompt offers the whole menu again. Without a terminal
+    the answer is the gateway, as it always was.
+
+    Changing it later is an edit to MODELS_FILE and another run of this script, which then
+    asks for whatever credential that file needs. The LangSmith key is asked for either
+    way: tracing and sandboxes need it.
+    """
+    from deep_life_sci import models
+
+    migrate_model_access()
+    if current := env_value("MODELS_FILE"):
+        for destination in models.file_needs(REPO_ROOT / current)[1]:
+            ask_provider_key(destination)  # each asks only for what .env lacks
+        return
+    chosen = (
+        choose("how should the agent reach its models?", ACCESS_CHOICES)
+        if interactive() else "gateway"
+    )
+    if chosen != "gateway":
+        ask_provider_key(chosen)
+    set_env("MODELS_FILE", models.MODEL_FILES[chosen])
+
+
+def migrate_model_access() -> None:
+    """Bring .env from an earlier draft of this setup up to date: MODEL_ACCESS gives way to
+    MODELS_FILE, and the gateway's file is no longer called models.yaml.
+
+    `direct` meant the provider whose key .env held, so the first with one picks the file,
+    unless MODELS_FILE already names one.
+    """
+    from deep_life_sci import models
+
+    gateway = models.MODEL_FILES["gateway"]
+    if env_value("MODELS_FILE") == "models.yaml" and not (REPO_ROOT / "models.yaml").exists():
+        set_env("MODELS_FILE", gateway)
+    access = env_value("MODEL_ACCESS").lower()
+    if access and not env_value("MODELS_FILE"):
+        own = [destination for destination in OWN_KEYS if has_own_credentials(destination)]
+        if access != "direct" or own:
+            set_env("MODELS_FILE", models.MODEL_FILES[own[0]] if access == "direct" else gateway)
+    unset_env("MODEL_ACCESS")
+
+
 # The `tool` every E-utilities request carries. NCBI enforces its rate limits against this
 # string as well as the IP, so a value shared by every clone of a public repo is one where
 # any single runaway loop gets *everyone* throttled or blocked — and the person who caused
@@ -243,17 +389,31 @@ def ensure_env() -> None:
         say(TAG, "created .env from .env.example")
     else:
         migrate_gateway_key()
+    # A first run, including one stopped partway: MODELS_FILE is recorded only once the
+    # model questions are answered, so until then the next run is still the first.
+    first = fresh or not env_value("MODELS_FILE")
 
     ensure_langsmith_key()
+    ensure_models_file()
     ensure_ncbi_tool()
+    if first:
+        ask_ncbi_credentials()
 
-    # Only on a first run: these are genuinely optional, so re-asking every time would be
-    # nagging someone who already decided to skip them.
-    if fresh:
-        say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
-                 "from 3 to 10 req/s.")
+
+def ask_ncbi_credentials() -> None:
+    """The optional NCBI key and email, on a first run only: re-asking every time would be
+    nagging someone who already decided to skip them. Asked right after the model
+    questions, so the questions stay together and come before the slow steps; one already
+    in .env is not asked for again."""
+    missing = [key for key in ("NCBI_API_KEY", "NCBI_EMAIL") if not env_value(key)]
+    if not interactive() or not missing:
+        return
+    say(TAG, "NCBI credentials are optional: they raise PubMed's rate limit "
+             "from 3 to 10 req/s.")
+    if "NCBI_API_KEY" in missing:
         ask_optional("NCBI_API_KEY", "NCBI API key", secret=True)
-        ask_optional("NCBI_EMAIL", "contact email for NCBI (their usage policy asks for one)")
+    if "NCBI_EMAIL" in missing:
+        ask_optional("NCBI_EMAIL", "contact email for NCBI")
 
 
 # --- 2. dependencies --------------------------------------------------------------
@@ -475,7 +635,7 @@ def ensure_frontend() -> None:
     pnpm = pnpm_or_die(TAG)
     say(TAG, "updating frontend dependencies…" if modules.is_dir()
         else "installing frontend dependencies (~1 min)…")
-    run([*pnpm.argv, "install", "--frozen-lockfile", "--silent"], cwd=ui_dir)
+    run([*pnpm.argv, "install", "--frozen-lockfile", "--silent"], cwd=ui_dir, env=quiet_node())
     stamp_deps(modules, lockfile)
 
 
@@ -497,7 +657,7 @@ def ensure_artifact_deps() -> None:
     # `--silent` below prints nothing at all until it finishes, so without the duration
     # this is a dead terminal for minutes at the very last step of setup.
     say(TAG, "installing artifact component dependencies (a few minutes)…")
-    run(["npm", "ci", "--silent"], cwd=REPO_ROOT)
+    run(["npm", "ci", "--silent"], cwd=REPO_ROOT, env=quiet_node())
     stamp_deps(modules, lockfile)
 
 

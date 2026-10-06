@@ -363,3 +363,41 @@ class TestUpdateCadence:
 
         assert await middleware.awrap_model_call(request, handler) == "done"
         assert len(seen[0].messages) == 1
+
+    def test_a_model_without_system_turns_hears_it_in_a_user_turn(self):
+        middleware = UpdateCadence(quiet_seconds=10.0, system_turns=False)
+        request = _Request({"last_update_at": time.time() - 45})
+        note = middleware._prepare(request).messages[-1]
+        assert isinstance(note, HumanMessage) and "45s" in note.content
+
+    @pytest.mark.parametrize(
+        "model",
+        ["bedrock/us.anthropic.claude-sonnet-5-5-v1:0", "claude-sonnet-5", "claude-sonnet-5-5"],
+    )
+    def test_the_reminder_reaches_claude_whatever_the_id(self, monkeypatch, direct, model):
+        """The real payload. langchain-anthropic refuses a system message after the first
+        unless the id is one it lists, and no Bedrock id is: it raised "multiple
+        non-consecutive system messages" on the first turn after any 20s eval."""
+        from langchain_core.messages import SystemMessage, ToolMessage
+
+        from deep_life_sci import models
+
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+        monkeypatch.setenv("ROOT_MODEL", model)
+        monkeypatch.setenv("ROOT_EFFORT", "")
+        root = models.root_model()
+        middleware = UpdateCadence(system_turns=models.takes_system_midway(root))
+        conversation = [
+            SystemMessage("You are a research agent."),
+            HumanMessage("Q"),
+            AIMessage("", tool_calls=[{"name": "eval", "args": {}, "id": "1",
+                                       "type": "tool_call"}]),
+            ToolMessage("done", tool_call_id="1"),
+        ]
+        prepared = middleware._prepare(
+            _Request({"last_update_at": time.time() - 45}, conversation)
+        )
+        payload = root._get_request_payload(prepared.messages)
+        assert "since the user last heard from you" in str(payload["messages"])

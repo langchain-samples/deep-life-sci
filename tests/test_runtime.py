@@ -393,3 +393,34 @@ console.log(JSON.stringify(answers));
     searches.assert_awaited_once()
     saved = (tmp_path / "workspace/trial-answers.json").read_text()
     assert "-12.44" in saved
+
+
+@pytest.mark.parametrize(
+    "root", ["bedrock/openai.gpt-5.6-terra", "bedrock/us.anthropic.claude-sonnet-5"]
+)
+def test_no_general_purpose_leaf_whichever_class_the_models_are(monkeypatch, direct, root):
+    """deepagents adds its general-purpose subagent, with every source tool and a shell,
+    unless the profile for the built model's provider says not to; and the Bedrock classes
+    with the user's own keys report providers of their own ("openai-mantle",
+    "anthropic-bedrock"). Real model classes, real registration."""
+    import deepagents.graph as deep_graph
+
+    from deep_life_sci.sandbox import ResilientSandbox
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "k")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    for role in ("ROOT", "SUBAGENT", "SEARCH"):
+        monkeypatch.setenv(f"{role}_MODEL", "bedrock/openai.gpt-5.6-luna")
+        monkeypatch.setenv(f"{role}_EFFORT", "")
+    monkeypatch.setenv("ROOT_MODEL", root)
+    offered = []
+    original = deep_graph.SubAgentMiddleware.__init__
+
+    def record(self, *args, **kwargs):
+        offered.extend(spec["name"] for spec in kwargs["subagents"])
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(deep_graph.SubAgentMiddleware, "__init__", record)
+    agent.build_agent(ResilientSandbox(SimpleNamespace()))
+    assert "abstract-analyst" in offered
+    assert "general-purpose" not in offered

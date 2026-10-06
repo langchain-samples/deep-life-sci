@@ -50,8 +50,11 @@ is set, and `langsmith` otherwise: only holders of a LangSmith API key for the w
 (Studio, scripts, `dev.py --remote`). LangSmith keys work in both. The deploy config always
 carries the auth handler; `DEEP_LIFE_SCI_AUTH` tells it which mode it is in.
 
-Models are whatever models.yaml says when this runs. Editing it changes a deployment only on
-the next deploy; the hot reload is a local-server convenience.
+Models are whatever the models file MODELS_FILE names (models.gateway.yaml by default) says
+when this runs. Editing it changes a deployment only on the next deploy; the hot reload is
+a local-server convenience.
+Before anything ships, the settings get the check the server makes as it starts
+(`deployment_problem`), so a deployment that would refuse to start is not built.
 """
 
 from __future__ import annotations
@@ -157,6 +160,15 @@ def sandbox_prefix(name: str) -> str:
     return f"{name[:7].rstrip('-')}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
 
 
+# The user's own credentials, per destination, shipped for the ones a models file with
+# `access: direct` calls. AWS_PROFILE is absent: it names a profile on this machine, which
+# a deployment has not got. So are AWS access keys, which are long-lived or soon expire;
+# `deployment_problem` says so before anything ships.
+PROVIDER_SETTINGS = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "bedrock": ("AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION", "AWS_DEFAULT_REGION"),
+}
 OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "OIDC_SCOPE", "OIDC_TOKEN",
                  "OIDC_ALLOWED_EMAIL_DOMAINS")
 
@@ -165,8 +177,10 @@ def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
     """Everything the deployed server reads from its environment, and nothing else.
 
     Empty values are dropped, as `langgraph deploy` would drop them. Model settings are
-    absent on purpose: the deployment runs what models.yaml says, not this machine's
-    overrides.
+    absent on purpose: the deployment runs what the models file says, not this machine's
+    overrides. MODELS_FILE always ships, so a deployment switched back to the gateway does
+    not keep an earlier file, and provider keys ship only for the providers that file calls
+    with them, never beside the gateway.
     """
     langsmith_key = env_value("LANGSMITH_API_KEY")
     # One `tool` per deployment, derived from this install's own so that two people who
@@ -183,11 +197,42 @@ def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
         "NCBI_EMAIL": env_value("NCBI_EMAIL"),
         "NCBI_API_KEY": env_value("NCBI_API_KEY"),
         "DEEP_LIFE_SCI_AUTH": auth_mode,
+        "MODELS_FILE": env_value("MODELS_FILE") or "models.gateway.yaml",
     }
+    from deep_life_sci import models
+
+    for destination in models.file_needs(REPO_ROOT / settings["MODELS_FILE"])[1]:
+        settings |= {key: env_value(key) for key in PROVIDER_SETTINGS[destination]}
     if auth_mode == "oidc":
         settings |= {key: env_value(key) for key in OIDC_SETTINGS}
     return {key: value for key, value in settings.items() if value}
 
+
+# What a check of the deployment's settings keeps from this process's environment: what
+# Python needs to start on each platform, and nothing that configures the agent.
+_PROCESS_ENV = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR",
+                "LANG", "LC_ALL", "LC_CTYPE")
+
+
+def deployment_problem(settings: dict[str, str]) -> str | None:
+    """Why the deployed server would refuse to start with `settings`, or None.
+
+    Runs the check the server makes as it starts (graph.py: `models.refresh`, then
+    `models.validate`) in a fresh interpreter that sees what a deployment would and nothing
+    more: these settings, without this machine's .env or shell. So AWS_PROFILE, AWS access
+    keys and anything else that never ships count for nothing, as they will there. Without
+    this, a deployment that cannot start is found only after its remote build.
+    """
+    env = {key: os.environ[key] for key in _PROCESS_ENV if key in os.environ}
+    check = ("from deep_life_sci import models; models.refresh(); "
+             "models.validate(*models.CHAT_ROLES)")
+    result = subprocess.run(
+        [sys.executable, "-c", check], cwd=REPO_ROOT, env={**env, **settings},
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if result.returncode == 0:
+        return None
+    return result.stderr.strip() or f"the check exited with status {result.returncode}"
 
 
 def auth_mode(asked: str | None) -> str:
@@ -264,7 +309,7 @@ def resize(host: Host, name: str, deployment_id: str, wanted: str) -> str | None
     try:
         host.set_tier(deployment_id, wanted)
     except Exception as exc:  # noqa: BLE001 - reported; the deploy can go ahead
-        say(TAG, f"warning: could not size {name} as {wanted} ({exc}); change it on its "
+        say(TAG, f"WARNING: could not size {name} as {wanted} ({exc}); change it on its "
                  "LangSmith page.")
         return None
     say(TAG, f"sized {name} as {wanted}")
@@ -301,7 +346,7 @@ def ensure_snapshot(name: str, key: str, assume_yes: bool) -> None:
         say(TAG, f"sandbox snapshot {name} ready.")
         return
     if not _confirm(f"build the deployment's sandbox snapshot {name} now (~2 min)?", assume_yes):
-        say(TAG, f"warning: no snapshot {name}; each new thread will install its packages "
+        say(TAG, f"WARNING: no snapshot {name}; each new thread will install its packages "
                  f"at runtime (~95s). Build it later with:  "
                  f"uv run scripts/build_snapshot.py --name {name}")
         return
@@ -359,10 +404,16 @@ def main() -> int:
     # Named `settings` rather than `secrets`: most are not secret, and every one of them
     # becomes a deployment secret. Only their names are ever printed.
     settings = deploy_settings(name, mode)
+    if problem := deployment_problem(settings):
+        local = [key for key in ("AWS_PROFILE", "AWS_ACCESS_KEY_ID") if env_value(key)]
+        hint = (f"\n\n{' and '.join(local)} stay on this machine: a deployment signs in to "
+                "Bedrock with AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key) in .env."
+                if local and "Bedrock" in problem else "")
+        die(TAG, f"the deployment would refuse to start with these settings:\n\n{problem}{hint}")
     write_deploy_env(settings)
     say(TAG, f"wrote {DEPLOY_ENV.name}: {', '.join(sorted(settings))}")
     if "NCBI_API_KEY" not in settings:
-        say(TAG, "warning: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
+        say(TAG, "WARNING: no NCBI_API_KEY in .env. A deployment is one caller to NCBI for "
                  "every user, and without a key that caller is held to 3 requests/sec.")
 
     api_key = env_value("LANGSMITH_API_KEY")
@@ -386,7 +437,7 @@ def main() -> int:
             created = False
             asked = args.type or DEFAULT_TYPE
             if deployment_type and asked != deployment_type:
-                say(TAG, f"warning: {name} is {deployment_type}, and a type cannot change, so "
+                say(TAG, f"WARNING: {name} is {deployment_type}, and a type cannot change, so "
                          f"it stays {deployment_type}. Deploy under another --name for {asked}.")
     except Exception as exc:  # noqa: BLE001 - refused or unreachable, the same dead end
         die(TAG, f"the Deployments API refused: {exc}")

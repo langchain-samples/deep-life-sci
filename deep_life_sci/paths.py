@@ -35,9 +35,13 @@ from pathlib import Path
 # deep_life_sci/paths.py -> deep_life_sci/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The model each role runs (`models.py`). At the root beside langgraph.json because it is
-# the file a user edits to change models, not package internals.
-MODELS_FILE = REPO_ROOT / "models.yaml"
+# The model each role runs, and how calls to it are made (`models.py`). At the root beside
+# langgraph.json because it is the file a user edits to change models, not package
+# internals. MODELS_FILE names which of the root's models files: models.gateway.yaml (the
+# default) goes through the gateway, and setup writes another (models.MODEL_FILES) for a
+# user's own provider key, so that choice lives in .env rather than in an edit to a tracked
+# file.
+MODELS_FILE = REPO_ROOT / (os.environ.get("MODELS_FILE", "").strip() or "models.gateway.yaml")
 
 DATA_DIR = Path(os.environ.get("DEEP_LIFE_SCI_DATA_DIR") or REPO_ROOT / "data")
 

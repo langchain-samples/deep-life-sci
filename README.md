@@ -80,13 +80,23 @@ private copy inside the repo; nothing else on your machine changes.
 
 ### 5. Configure your models
 
-Model calls go through the [LangSmith LLM gateway](https://docs.langchain.com/langsmith/llm-gateway), so your workspace also needs the
-provider key behind them, added once under **Settings → Integrations → Provider Secrets**
-as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
-For Amazon Bedrock, add `AWS_BEARER_TOKEN_BEDROCK` (a Bedrock API key) and prefix model ids with
-`bedrock/`; see the note at the top of `models.yaml`.
+Setup will ask you how the agent should reach its models. Each answer has its own models file:
 
-Then, in the `models.yaml` file, configure the models you want to use for the agent. Defaults are OpenAI; recommended Anthropic alternatives are shown in comments.
+- **LangSmith LLM Gateway** (`models.gateway.yaml`). Model calls go through the [LangSmith LLM gateway](https://docs.langchain.com/langsmith/llm-gateway), so your workspace also needs the
+  provider key behind them, added once in LangSmith under **Settings → Integrations → Provider Secrets**
+  as `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`. Add whichever providers the models you run use.
+- **Your own Anthropic or OpenAI API key** (`models.anthropic.yaml` or `models.openai.yaml`). Model
+  calls go straight to that provider, with the key you add during setup.
+- **Your own Amazon Bedrock credentials** (`models.bedrock.yaml`). Setup asks for a Bedrock API key and
+  a region. The models in that file run in `us-east-1`, `us-east-2` and `us-west-2`; for other regions,
+  see the Bedrock notes in it.
+
+**With your own credentials, LangSmith still handles tracing and sandboxes, so you still need its API key.**
+
+Setup records your answer as `MODELS_FILE` in `.env`. To change it later, set `MODELS_FILE` to another
+of these files and run setup again; it asks for any key that file needs.
+
+Then, in that file, configure the models you want to use for the agent.
 
 ### 6. Run the agent
 
@@ -109,7 +119,7 @@ uv run scripts/deploy.py
 ```
 
 This creates a deployment named `deep-life-sci-cloud`, or updates it if it exists (use `--name` to pick
-another). Models are whatever `models.yaml` says when you deploy; edit it and deploy
+another). Models are whatever your models file says when you deploy; edit it and deploy
 again to change them.
 
 *Cost:* the default is a Dedicated Small deployment, always on, about $390 a month. For a cheaper
@@ -150,7 +160,7 @@ decision-making, diagnosis, or treatment.**
 
 ## Notes
 
-*Models:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default. To change the model or effort for the main agent, subagents or web search, edit [`models.yaml`](models.yaml); changes apply to your next message. To add a provider, including a custom OpenAI-compatible endpoint, configure it in LangSmith under **LLM Gateway**. The wrench under the chat box shows what each role is running.
+*Models:* Deep Life Sci runs on GPT-5.6 Terra with High effort by default. To change the model or effort for the main agent, subagents or web search, edit your models file ([`models.gateway.yaml`](models.gateway.yaml) unless `MODELS_FILE` names another); changes apply to your next message. To add a provider, including a custom OpenAI-compatible endpoint, configure it in LangSmith under **LLM Gateway**. The wrench under the chat box shows what each role is running.
 
 The chat UI in `frontend/` began as [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui).
 
