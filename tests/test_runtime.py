@@ -38,7 +38,9 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
     from deep_life_sci.middleware.model_errors import SurfaceModelErrors
 
     kwargs, backend = assembled
-    assert kwargs["backend"] is backend
+    assert kwargs["backend"].default is backend
+    assert set(kwargs["backend"].routes) == {"/skills/"}
+    assert kwargs["skills"] == [("/skills/", "Research")]
     assert {s["name"] for s in kwargs["subagents"]} == {
         "abstract-analyst",
         "full-text-analyst",
