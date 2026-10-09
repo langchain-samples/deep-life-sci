@@ -76,7 +76,7 @@ class TestTheImageCanInstallThePackage:
     def test_the_thread_ttl_is_the_one_each_run_restarts(self, config):
         """graph.py sets a thread's TTL to `paths.THREAD_TTL_MINUTES` at every run; the
         config's TTL is what a new thread starts with, so the two must agree. A thread's
-        uploads, in the store, are kept as long as the thread is (README.md)."""
+        uploads, in the store, are kept as long as the thread is (DEPLOYMENT.md)."""
         settings = json.loads(_read(config))
         ttl = settings["checkpointer"]["ttl"]
         assert ttl["strategy"] == "delete"
