@@ -154,26 +154,26 @@ async def test_runner_trace_matches_search_fetch_and_final_citation(monkeypatch,
     assert result.as_dict()["source_trace"] == result.source_trace
 
     trace = result.source_trace
-    assert trace["pmids"] == ["123"]
+    assert trace["retrieved"]["abstracts"] == ["123"]
     assert len(trace["events"]) == 2
 
     search, fetch = trace["events"]
     assert search["tool"] == "pubmed_search"
     assert search["operation"] == "search"
-    assert search["query"] == "cancer evidence"
+    assert search["request"]["term"] == "cancer evidence"
     assert search["returned_ids"] == ["123"]
-    assert search["success"] is True
+    assert search["status"] == "ok"
 
     assert fetch["tool"] == "fetch_abstracts"
     assert fetch["operation"] == "fetch"
     assert fetch["requested_ids"] == ["123"]
     assert fetch["returned_ids"] == ["123"]
-    assert fetch["success"] is True
+    assert fetch["status"] == "ok"
 
     # The answer cites exactly the paper whose source content this run retrieved, while
     # the scientific payload itself stays out of the compact provenance record.
     assert "123" in result.answer
-    assert "123" in trace["pmids"]
+    assert "123" in trace["retrieved"]["abstracts"]
     assert "Evidence payload for 123" not in repr(trace)
 
 
@@ -260,7 +260,7 @@ async def test_concurrent_runner_traces_do_not_cross_contaminate_quickjs(
         event = result.source_trace["events"][0]
         assert event["tool"] == "pubmed_search"
         assert event["operation"] == "search"
-        assert event["success"] is True
+        assert event["status"] == "ok"
         assert len(event["returned_ids"]) == 1
         by_pmid[event["returned_ids"][0]] = (result, event)
 
@@ -268,15 +268,17 @@ async def test_concurrent_runner_traces_do_not_cross_contaminate_quickjs(
 
     alpha_result, alpha = by_pmid["111"]
     beta_result, beta = by_pmid["222"]
-    assert alpha["query"] == "alpha evidence"
-    assert beta["query"] == "beta evidence"
+    assert alpha["request"]["term"] == "alpha evidence"
+    assert beta["request"]["term"] == "beta evidence"
     assert alpha_result.answer == "Alpha search returned PMID 111."
     assert beta_result.answer == "Beta search returned PMID 222."
 
     # Search hits stay out of the fetched-PMID summary, and neither run may contain the
     # other run's query or identifier.
-    assert alpha_result.source_trace["pmids"] == []
-    assert beta_result.source_trace["pmids"] == []
+    assert alpha_result.source_trace["retrieved"]["abstracts"] == []
+    assert alpha_result.source_trace["discovered"]["pmids"] == ["111"]
+    assert beta_result.source_trace["retrieved"]["abstracts"] == []
+    assert beta_result.source_trace["complete"] is True
     assert "222" not in repr(alpha_result.source_trace)
     assert "beta evidence" not in repr(alpha_result.source_trace)
     assert "111" not in repr(beta_result.source_trace)

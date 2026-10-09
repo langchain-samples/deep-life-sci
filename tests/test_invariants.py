@@ -19,6 +19,7 @@ import re
 import pytest
 
 from deep_life_sci import paths
+from deep_life_sci.middleware.source_trace import EVIDENCE_SOURCE_TOOLS
 from deep_life_sci.middleware.upload_probe import PROBES
 from deep_life_sci.middleware.uploads import UPLOAD_KINDS
 from deep_life_sci.models import DEFAULTS, ENV_VARS
@@ -69,6 +70,14 @@ class TestEveryPtcToolIsDiscoverable:
         allowlisted = set(_ptc_allowlist())
         for name in _root_tool_names():
             assert name in allowlisted, f"{name} is bound but not reachable from eval"
+
+    def test_every_bound_source_tool_has_a_provenance_extractor(self):
+        """Every wrapped call is recorded generically, but a source tool recorded without
+        its identifiers is a run the evaluator cannot audit. `source_trace.py` says what
+        each extractor must project; its test file exercises the real tool."""
+        for name in _root_tool_names():
+            assert name in EVIDENCE_SOURCE_TOOLS, f"{name} has no provenance extractor"
+        assert set(EVIDENCE_SOURCE_TOOLS) <= set(_root_tool_names())
 
     def test_web_search_is_a_ptc_tool_rather_than_a_spec_on_the_root_model(self):
         """Server-side search bound to the root lands every page in root context —
