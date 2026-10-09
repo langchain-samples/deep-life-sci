@@ -136,6 +136,8 @@ async def test_search_hits_are_discovered_and_only_fetched_abstracts_are_retriev
     data = trace.as_dict()
     assert data["complete"] is True
     assert data["discovered"]["pmids"] == pmids
+    assert data["discovered"]["truncated"] is False
+    assert data["unextracted_tools"] == []
     assert data["retrieved"]["abstracts"] == pmids[:2]
     search_event, fetch_event = data["events"]
     assert search_event["operation"] == "search"
@@ -289,6 +291,8 @@ async def test_a_wrapped_tool_without_an_extractor_is_still_recorded():
     assert event["tool"] == "future_tool"
     assert event["extracted"] is False
     assert event["status"] == "ok"
+    assert trace.as_dict()["unextracted_tools"] == ["future_tool"]
+    assert trace.as_dict()["complete"] is True
     assert event["request"] == {"topic": "t" * source_trace.MAX_TEXT_CHARS, "big": "<dict>"}
     assert event["returned_ids"] == []
 
@@ -320,9 +324,11 @@ async def test_wide_search_results_are_capped_but_counted(mock_ncbi):
     mock_ncbi(_pubmed(pmids))
     with research_trace() as trace:
         await with_error_capture([pubmed_search])[0].ainvoke({"term": "wide", "retmax": 300})
-    event = trace.as_dict()["events"][0]
+    data = trace.as_dict()
+    event = data["events"][0]
     assert len(event["returned_ids"]) == MAX_SEARCH_IDS
     assert event["returned_count"] == MAX_SEARCH_IDS + 10
+    assert data["discovered"]["truncated"] is True
 
 
 async def test_inactive_trace_preserves_source_return_value(mock_ncbi):

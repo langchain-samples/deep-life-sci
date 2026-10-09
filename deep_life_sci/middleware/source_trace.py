@@ -13,7 +13,9 @@ events recorded here. Three rules keep the record honest:
   returned. The summary projects those into `discovered` (appeared in a search result),
   `located` (`pmc_locate` found full text, which was not fetched by that call), and
   `retrieved` (abstract, full text, staged files, or registry record actually returned).
-  A search hit is never retrieved, and a located article is never read.
+  A search hit is never retrieved, and a located article is never read. The summary
+  also names `unextracted_tools` and whether `discovered` was truncated, so coverage
+  gaps are visible without scanning events.
 * **Requested and resolved identifiers both survive.** The model may type `5904197` or
   `pmc123`; the sources normalise before fetching. `requested_ids` keeps the model's
   spelling and `resolved_ids` the canonical form, so joins against `returned_ids` work
@@ -122,9 +124,13 @@ class ResearchTrace:
             "complete": self.complete,
             "capture_failures": list(self.capture_failures),
             "events": [event.as_dict() for event in events],
+            "unextracted_tools": _unique(e.tool for e in events if not e.extracted),
             "discovered": {
                 "pmids": _returned(events, "pubmed_search"),
                 "nct_ids": _returned(events, "ctgov_search"),
+                # True when a search returned more IDs than an event stores: an ID
+                # absent from these lists may still have been discovered.
+                "truncated": _truncated(events, "pubmed_search", "ctgov_search"),
             },
             "located": {
                 "pmcids": _returned(events, "pmc_locate"),
@@ -319,6 +325,14 @@ def _error(tool_name: str, result: Any) -> str | None:
 
 def _returned(events: list[SourceEvent], *tools: str) -> list[str]:
     return _unique(i for e in events if e.tool in tools for i in e.returned_ids)
+
+
+def _truncated(events: list[SourceEvent], *tools: str) -> bool:
+    return any(
+        e.tool in tools and e.returned_count is not None
+        and e.returned_count > len(e.returned_ids)
+        for e in events
+    )
 
 
 def _related(events: list[SourceEvent], tool: str) -> list[str]:
