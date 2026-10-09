@@ -12,7 +12,8 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents._models import get_model_provider
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.backends import CompositeBackend, FilesystemBackend
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
 from langchain_quickjs import CodeInterpreterMiddleware
 
 from deep_life_sci.middleware.artifacts import ArtifactMiddleware
@@ -30,6 +31,7 @@ from deep_life_sci.models import (
     takes_system_midway,
     validate,
 )
+from deep_life_sci.paths import SKILLS_DIR
 from deep_life_sci.prompts import (
     ABSTRACT_ANALYST,
     DOCUMENT_ANALYST,
@@ -102,6 +104,15 @@ def build_agent(backend):
     for _provider in {"openai", "anthropic", *filter(None, built)}:
         register_harness_profile(_provider, _NO_GENERAL_PURPOSE)
 
+    # The source-specific prompt sections are skills, read on demand. They are package
+    # files rather than sandbox files, so `/skills/` routes to the host and everything
+    # else to the sandbox; the deny rule keeps the agent from editing them.
+    skills_route = "/skills/"
+    root_backend = CompositeBackend(
+        default=backend,
+        routes={skills_route: FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True)},
+    )
+
     agent = create_deep_agent(
         model=root,
         # The PTC bridge calls `tool.arun` directly, so no middleware hook sees a call
@@ -120,7 +131,11 @@ def build_agent(backend):
         ])),
         system_prompt=build_system_prompt(),
         subagents=leaves,
-        backend=backend,
+        backend=root_backend,
+        skills=[(skills_route, "Research")],
+        permissions=[
+            FilesystemPermission(operations=["write"], paths=[f"{skills_route}**"], mode="deny")
+        ],
         middleware=[
             # First: its `before_agent` strips the upload payload out of the human
             # message, which must happen before the first model call.

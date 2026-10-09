@@ -50,6 +50,10 @@ DATA_DIR = Path(os.environ.get("DEEP_LIFE_SCI_DATA_DIR") or REPO_ROOT / "data")
 # `DEEP_LIFE_SCI_STATIC=1 pnpm build` leaves in frontend/out, for testing that build.
 UI_DIR = Path(os.environ.get("DEEP_LIFE_SCI_UI_DIR") or REPO_ROOT / "frontend" / "out")
 
+# The root agent's skills (`agent.py` serves them at `/skills/`). Package files, so they
+# are anchored to the package rather than the repo root: they ship with it.
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
 ABSTRACT_CACHE = DATA_DIR / "abstracts"
 PMC_CACHE = DATA_DIR / "pmc"
 CTGOV_CACHE = DATA_DIR / "trials"

@@ -114,6 +114,10 @@ packages = [
     "deep_life_sci.sources",
 ]
 
+# The root agent's skills are Markdown inside the package (`paths.SKILLS_DIR`).
+[tool.setuptools.package-data]
+deep_life_sci = ["skills/*/SKILL.md"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

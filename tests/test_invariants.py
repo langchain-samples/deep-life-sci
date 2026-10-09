@@ -25,6 +25,8 @@ from deep_life_sci.models import DEFAULTS, ENV_VARS
 from deep_life_sci.prompts.system import _TEMPLATE, build_system_prompt
 
 REPO = paths.REPO_ROOT
+SKILLS = {path.parent.name: path.read_text(encoding="utf-8")
+          for path in sorted(paths.SKILLS_DIR.glob("*/SKILL.md"))}
 
 
 def _camel(name: str) -> str:
@@ -54,12 +56,12 @@ class TestEveryPtcToolIsDiscoverable:
     """A tool the prompt does not mention is a tool the model has no way to reach.
 
     "Adding a tool means adding it to that allowlist and writing a prompt segment for
-    it in `prompts/system.py` — the model has no other way to discover it."
+    it in `prompts/system.py` or a skill — the model has no other way to discover it."
     """
 
     @pytest.mark.parametrize("name", _ptc_allowlist())
     def test_each_allowlisted_tool_appears_in_the_prompt_in_its_js_form(self, name: str):
-        assert f"tools.{_camel(name)}" in _TEMPLATE
+        assert any(f"tools.{_camel(name)}" in text for text in (_TEMPLATE, *SKILLS.values()))
 
     def test_the_allowlist_is_not_empty(self):
         assert len(_ptc_allowlist()) > 5
@@ -257,7 +259,8 @@ class TestThePromptKeepsThePayloadRulesItEnforces:
     """The prompt is production code — "one line ... cut root context from 115k to 31k"."""
 
     def test_the_triage_step_before_any_full_text_call_is_named(self):
-        assert _TEMPLATE.index("### Triage first") < _TEMPLATE.index("tools.fetchFullText")
+        pubmed = SKILLS["pubmed"].split("\n---\n", 1)[1]  # the body, not the description
+        assert pubmed.index("### Triage first") < pubmed.index("tools.fetchFullText")
 
     def test_reading_a_deliverable_back_is_forbidden(self):
         """Reading a PNG back can cost more context than an entire run."""
@@ -266,6 +269,29 @@ class TestThePromptKeepsThePayloadRulesItEnforces:
     def test_subagents_are_told_not_to_fetch_for_themselves(self):
         """NCBI allows 3 req/sec; N subagents each fetching would collect 429s."""
         assert "The subagents do no I/O of their own" in _TEMPLATE
+
+
+class TestTheSkillsLoad:
+    """A skill that fails to parse is dropped with only a log line, and its source with it."""
+
+    def test_each_skill_parses_and_the_prompt_names_it(self):
+        from deepagents.backends import FilesystemBackend
+        from deepagents.middleware.skills import _list_skills_with_errors
+
+        backend = FilesystemBackend(root_dir=paths.SKILLS_DIR, virtual_mode=True)
+        skills, error = _list_skills_with_errors(backend, "/")
+        assert error is None
+        assert {skill["name"] for skill in skills} == set(SKILLS) == {"pubmed", "clinical-trials"}
+        for name in SKILLS:
+            assert f"`{name}`" in _TEMPLATE
+
+    def test_the_skills_ship_with_the_package(self):
+        import tomllib
+
+        config = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+        assert config["tool"]["setuptools"]["package-data"]["deep_life_sci"] == [
+            "skills/*/SKILL.md"
+        ]
 
 
 class TestThePackageShipsNoTestFramework:
