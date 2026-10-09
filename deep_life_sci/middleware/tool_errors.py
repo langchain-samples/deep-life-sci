@@ -27,6 +27,10 @@ wrong answer.
 Only `SourceError` and transport failures are caught. A `TypeError` in our own code keeps
 killing the run loudly rather than reaching the model as a string it will try to route
 around.
+
+This is also the one seam that sees successful and contained-failure returns from PTC
+source tools. When a runner trace is active, the same return is projected into compact
+run provenance after containment, without changing the value handed back to QuickJS.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from typing import Any
 import httpx
 from langchain_core.tools import BaseTool
 
+from deep_life_sci.middleware.source_trace import record_source_call
 from deep_life_sci.sources._errors import SourceError
 
 
@@ -58,14 +63,17 @@ def _wrap(tool: BaseTool) -> BaseTool:
     @functools.wraps(inner)
     async def contained(*args: Any, **kwargs: Any) -> Any:
         try:
-            return await inner(*args, **kwargs)
+            result = await inner(*args, **kwargs)
         except SourceError as exc:
-            return {"error": f"{tool.name} failed: {exc}"}
+            result = {"error": f"{tool.name} failed: {exc}"}
         except httpx.HTTPError as exc:
             # Below `_request`'s retry ladder, so this is a transport failure that already
             # survived its backoff — a dead connection, not a 429. Same containment: one
             # unreachable host must not take the fan-out around it with it.
-            return {"error": f"{tool.name} failed: {type(exc).__name__}: {exc}"}
+            result = {"error": f"{tool.name} failed: {type(exc).__name__}: {exc}"}
+
+        record_source_call(tool.name, inner, args, kwargs, result=result)
+        return result
 
     # A copy rather than a subclass, for the same reason `progress.py` uses one: the name,
     # description and args schema are what PTC renders into JS and inspects for injected

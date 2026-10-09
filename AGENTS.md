@@ -73,8 +73,9 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
 - `eval` is QuickJS orchestration, with no filesystem, shell, or network of its own.
   `execute` runs real Python/shell commands in the LangSmith sandbox.
 - Adding a source tool requires assembly registration, the `ptc` allowlist, its camelCase
-  usage in `prompts/system.py`, and progress/error wrapping. Preserve the interpreter's
-  explicit limits; default timeouts are too short for research fan-outs.
+  usage in `prompts/system.py`, progress/error wrapping, and a provenance extractor in
+  `middleware/source_trace.py` (`tests/test_invariants.py` enforces this). Preserve the
+  interpreter's explicit limits; default timeouts are too short for research fan-outs.
 - Contain expected source/transport failures as `{error}` through `with_error_capture`.
   Exceptions escaping the PTC bridge can end the entire run. Keep programming errors
   visible rather than disguising them as empty results.

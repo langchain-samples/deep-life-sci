@@ -100,7 +100,10 @@ conventions on this page, including the checked-in seed files.
 
 - **Misattribution.** `citations_exist` proves a PMID was fetched, not that it supports
   the claim it's attached to. The cache is also shared across every run on the machine,
-  so a paper fetched by an earlier run passes. That gap is the judge's job.
+  so a paper fetched by an earlier run passes. `RunResult.source_trace` records what
+  this run discovered, located and retrieved, with `complete: false` when a record was
+  lost; an incomplete trace means "unknown", never "not fetched". Matching citations
+  against it is not scored yet. Whether a source supports a claim is the judge's job.
 - **Retrieval quality.** Nothing scores whether the search returned the *right* corpus,
   only what the agent did with what it got.
 - **Reference answers.** The seeds carry rubrics, not gold answers. Literature questions
