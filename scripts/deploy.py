@@ -16,7 +16,7 @@ A wrapper rather than `langgraph deploy` alone, for three reasons:
    belong to one developer's machine: model overrides for an eval sweep, a cache path, this
    install's NCBI `tool`. So a deploy reads `langgraph.deploy.json` instead — the same config
    with `env` pointed at `.env.deploy` — and this script writes `.env.deploy` from the
-   allowlist in `deploy_settings`, and nothing else.
+   allowlist in `deploy_settings`, including the Git revision for tracing.
 2. **Keys.** The platform injects a `LANGSMITH_API_KEY` of its own under a reserved name,
    and nothing documents whether it may call the LLM gateway or create sandboxes. Both get
    an explicit key instead, so a deployment never depends on it.
@@ -174,14 +174,7 @@ OIDC_SETTINGS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "OIDC_SCOPE",
 
 
 def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
-    """Everything the deployed server reads from its environment, and nothing else.
-
-    Empty values are dropped, as `langgraph deploy` would drop them. Model settings are
-    absent on purpose: the deployment runs what the models file says, not this machine's
-    overrides. MODELS_FILE always ships, so a deployment switched back to the gateway does
-    not keep an earlier file, and provider keys ship only for the providers that file calls
-    with them, never beside the gateway.
-    """
+    """Allowlisted server settings, excluding empty values and local model overrides."""
     langsmith_key = env_value("LANGSMITH_API_KEY")
     # One `tool` per deployment, derived from this install's own so that two people who
     # both keep the default deployment name are still two callers to NCBI.
@@ -199,6 +192,19 @@ def deploy_settings(name: str, auth_mode: str = "langsmith") -> dict[str, str]:
         "DEEP_LIFE_SCI_AUTH": auth_mode,
         "MODELS_FILE": env_value("MODELS_FILE") or "models.gateway.yaml",
     }
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if revision:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"], cwd=REPO_ROOT,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            settings["LANGSMITH_REVISION_ID"] = revision + ("-dirty" if status else "")
+    except (OSError, subprocess.SubprocessError):
+        pass
     from deep_life_sci import models
 
     for destination in models.file_needs(REPO_ROOT / settings["MODELS_FILE"])[1]:

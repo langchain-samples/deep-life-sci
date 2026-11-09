@@ -9,6 +9,7 @@ developer's own `.env` following the code into a shared server.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tomllib
 from unittest.mock import Mock
@@ -122,6 +123,48 @@ def dotenv(tmp_path, monkeypatch):
 
 
 class TestDeploySecrets:
+    @pytest.fixture(autouse=True)
+    def git(self, monkeypatch):
+        run = Mock(side_effect=lambda argv, **kwargs: Mock(
+            stdout="abc123\n" if argv[1] == "rev-parse" else ""
+        ))
+        monkeypatch.setattr(deploy.subprocess, "run", run)
+        return run
+
+    @pytest.mark.parametrize("status, expected", [
+        ("", "abc123"), (" M scripts/deploy.py\n", "abc123-dirty"),
+    ])
+    def test_revision_ships_in_the_env_file(self, dotenv, git, tmp_path, monkeypatch,
+                                          status, expected):
+        dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="")
+        git.side_effect = [Mock(stdout="abc123\n"), Mock(stdout=status)]
+        env = tmp_path / ".env.deploy"
+        monkeypatch.setattr(deploy, "DEPLOY_ENV", env)
+        settings = deploy.deploy_settings("x")
+        assert settings["LANGSMITH_REVISION_ID"] == expected
+        assert settings["LANGSMITH_SANDBOX_API_KEY"] == "k"
+        assert "NCBI_API_KEY" not in settings
+        deploy.write_deploy_env(settings)
+        assert f"LANGSMITH_REVISION_ID={expected}" in env.read_text().splitlines()
+
+    @pytest.mark.parametrize("results", [
+        [FileNotFoundError("git")],
+        [subprocess.CalledProcessError(128, ["git", "rev-parse", "HEAD"])],
+        [Mock(stdout=" \n")],
+        [Mock(stdout="abc123\n"), subprocess.CalledProcessError(128, ["git", "status"])],
+    ])
+    def test_unavailable_revision_is_omitted(self, dotenv, git, tmp_path, monkeypatch, results):
+        dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="")
+        git.side_effect = results
+        env = tmp_path / ".env.deploy"
+        monkeypatch.setattr(deploy, "DEPLOY_ENV", env)
+        settings = deploy.deploy_settings("x")
+        assert "LANGSMITH_REVISION_ID" not in settings
+        assert settings["LANGSMITH_SANDBOX_API_KEY"] == "k"
+        assert "NCBI_API_KEY" not in settings
+        deploy.write_deploy_env(settings)
+        assert "LANGSMITH_REVISION_ID" not in env.read_text()
+
     def test_only_the_allowlist_ships_and_both_keys_are_explicit(self, dotenv):
         dotenv(
             LANGSMITH_API_KEY="lsv2_personal",
@@ -142,6 +185,7 @@ class TestDeploySecrets:
             "DEEP_LIFE_SCI_AUTH": "langsmith",
             # Explicit, so a deployment once deployed with another file does not keep it.
             "MODELS_FILE": "models.gateway.yaml",
+            "LANGSMITH_REVISION_ID": "abc123",
         }
 
     def test_oidc_settings_ship_only_in_oidc_mode(self, dotenv):
@@ -197,7 +241,7 @@ class TestDeploySecrets:
         assert not set(deploy.deploy_settings("x", "oidc")) & reserved
 
     def test_every_secret_is_read_by_the_package(self, dotenv):
-        """A secret nothing reads is a setting that silently does nothing."""
+        """Settings are read by the package, except the SDK's tracing revision."""
         dotenv(LANGSMITH_API_KEY="k", NCBI_API_KEY="k", NCBI_EMAIL="e",
                LANGSMITH_GATEWAY_ANTHROPIC_URL="u", LANGSMITH_GATEWAY_BASE_URL="u",
                OIDC_ISSUER="i", OIDC_CLIENT_ID="c", OIDC_AUDIENCE="a", OIDC_SCOPE="s",
@@ -205,7 +249,7 @@ class TestDeploySecrets:
         source = "".join(
             path.read_text(encoding="utf-8") for path in (REPO / "deep_life_sci").rglob("*.py")
         )
-        for name in deploy.deploy_settings("x", "oidc"):
+        for name in deploy.deploy_settings("x", "oidc").keys() - {"LANGSMITH_REVISION_ID"}:
             assert f'"{name}"' in source, name
 
 
