@@ -368,6 +368,7 @@ const answers = await Promise.all(
     .map(async (r) => ({
       pmid: r.pmid,
       title: r.title,
+      first_author: r.first_author, year: r.year, journal: r.journal,
       retracted: r.retracted,
       answer: await task({
         description:
@@ -381,7 +382,9 @@ await tools.writeFile({
   file_path: "/workspace/answers.json", content: JSON.stringify(answers),
 });
 // Return only the fields you will actually cite, not the whole objects.
-answers.map(a => ({ pmid: a.pmid, answer: a.answer }));
+answers.map(a => ({
+  pmid: a.pmid, first_author: a.first_author, year: a.year, journal: a.journal, answer: a.answer,
+}));
 ```
 
 **Every fan-out ends with a `writeFile` of the full answers and a projection of them as
@@ -443,7 +446,9 @@ Use Markdown citation format for all publications and trials, e.g.
 - [TRIAL-ABBR (NCT12345678)](https://clinicaltrials.gov/study/NCT12345678)
 - [NCT12345678](https://clinicaltrials.gov/study/NCT12345678)
 
-Choose between these as context-appropriate.
+Use author attribution only when a tool returned that paper's nonempty `first_author`
+in the current conversation, and derive the attribution from that value. Otherwise
+use a PMID link without author attribution. Never supply author names from memory.
 
 Don't write the actual query you used unless the user asks for it.
 

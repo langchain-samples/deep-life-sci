@@ -296,6 +296,43 @@ class TestParseArticle:
     def _article(self, inner: str) -> ET.Element:
         return ET.fromstring(f"<PubmedArticle>{inner}</PubmedArticle>")
 
+    @pytest.mark.parametrize(
+        ("author_xml", "first", "last"),
+        [
+            (
+                "<Author><LastName>Zhang</LastName><Initials>Q</Initials></Author>"
+                "<Author><LastName>Smith</LastName><ForeName>Jane</ForeName></Author>",
+                "Zhang Q",
+                "Smith Jane",
+            ),
+            (
+                "<Author><CollectiveName>Study Consortium</CollectiveName></Author>",
+                "Study Consortium",
+                "Study Consortium",
+            ),
+            ("<Author><LastName>Smith</LastName></Author>", "Smith", "Smith"),
+            ("", None, None),
+            ("<Author/>", None, None),
+            (
+                "<Author><LastName> </LastName><CollectiveName> </CollectiveName></Author>",
+                None,
+                None,
+            ),
+            ("<Author/><Author><LastName>Smith</LastName></Author>", None, "Smith"),
+        ],
+    )
+    def test_authors_come_from_the_papers_own_list(self, author_xml, first, last):
+        art = self._article(
+            "<MedlineCitation><PMID>1</PMID><Article><AuthorList>"
+            f"{author_xml}</AuthorList></Article></MedlineCitation>"
+            "<PubmedData><ReferenceList><Reference><AuthorList><Author>"
+            "<LastName>Other</LastName></Author></AuthorList></Reference>"
+            "</ReferenceList></PubmedData>"
+        )
+        record = _parse_article(art)
+        assert record["first_author"] == first
+        assert record["last_author"] == last
+
     def test_a_structured_abstract_keeps_its_labels(self):
         art = self._article(
             "<MedlineCitation><PMID>1</PMID><Article><Abstract>"
@@ -383,6 +420,15 @@ class TestParseEfetch:
         assert set(records) == {"1", "2"}
         assert records["2"]["abstract"] == "Chapter."
         assert records["2"]["title"] == "StatPearls"
+
+    def test_book_authors_exclude_the_books_editors(self):
+        xml = """<PubmedArticleSet><PubmedBookArticle><BookDocument><PMID>2</PMID>
+          <Book><AuthorList><Author><LastName>Editor</LastName></Author></AuthorList></Book>
+          <AuthorList><Author><LastName>Chapter</LastName><Initials>A</Initials></Author>
+          </AuthorList></BookDocument></PubmedBookArticle></PubmedArticleSet>"""
+        record = _parse_efetch(xml)["2"]
+        assert record["first_author"] == "Chapter A"
+        assert record["last_author"] == "Chapter A"
 
     def test_an_empty_set_parses_to_nothing(self):
         assert _parse_efetch("<PubmedArticleSet/>") == {}
@@ -710,10 +756,50 @@ class TestFetchAbstracts:
         assert result["from_cache"] == ["111"]
         assert transport.requests == []
 
-    async def test_a_fetch_writes_through_to_the_cache(self, abstract_cache, mock_ncbi):
+    @pytest.mark.parametrize("missing_key", ["first_author", "last_author", "both"])
+    async def test_old_author_schema_is_refetched_and_null_authors_stay_cached(
+        self, abstract_cache, mock_ncbi, missing_key
+    ):
+        path = write_cached_abstract(abstract_cache, "29695998")
+        old = json.loads(path.read_text())
+        for key in ("first_author", "last_author") if missing_key == "both" else (missing_key,):
+            del old[key]
+        path.write_text(json.dumps(old))
         mock_ncbi(lambda r: text_response(_ARTICLE_WITH_REFERENCES))
-        await fetch_abstracts.ainvoke({"pmids": ["29695998"]})
-        assert json.loads((abstract_cache / "29695998.json").read_text())["pmid"] == "29695998"
+        result = await fetch_abstracts.ainvoke({"pmids": ["29695998"]})
+        assert result["from_cache"] == []
+        assert result["records"]["29695998"] == {
+            "pmid": "29695998",
+            "title": "The real paper",
+            "abstract": "Body.",
+            "sections": [{"label": None, "text": "Body."}],
+            "journal": "Real Journal",
+            "year": "2018",
+            "retracted": False,
+            "publication_types": [],
+            "doi": "10.1000/real",
+            "pmcid": "PMC5904197",
+            "first_author": None,
+            "last_author": None,
+        }
+        assert json.loads(path.read_text()) == result["records"]["29695998"]
+        cached = await fetch_abstracts.ainvoke({"pmids": ["29695998"]})
+        assert cached["from_cache"] == ["29695998"]
+        assert cached["records"] == result["records"]
+
+    async def test_a_fetch_writes_through_to_the_cache(self, abstract_cache, mock_ncbi):
+        xml = _ARTICLE_WITH_REFERENCES.replace(
+            "<ArticleTitle>",
+            "<AuthorList><Author><LastName>Zhang</LastName><Initials>Q</Initials></Author>"
+            "<Author><LastName>Smith</LastName><Initials>J</Initials></Author>"
+            "</AuthorList><ArticleTitle>",
+        )
+        mock_ncbi(lambda r: text_response(xml))
+        result = await fetch_abstracts.ainvoke({"pmids": ["29695998"]})
+        record = result["records"]["29695998"]
+        assert record["first_author"] == "Zhang Q"
+        assert record["last_author"] == "Smith J"
+        assert json.loads((abstract_cache / "29695998.json").read_text()) == record
 
     async def test_an_invalid_pmid_is_reported_and_never_sent(
         self, abstract_cache, mock_ncbi

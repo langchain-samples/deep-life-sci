@@ -83,12 +83,13 @@ alongside the final count.
 ```js
 const pmids = res.records.map(r => r.pmid);
 const { records, missing, invalid } = await tools.fetchAbstracts({ pmids });
-// records -> { [pmid]: { title, abstract, sections, journal, year, retracted } }
+// records -> { [pmid]: { title, abstract, sections, first_author, last_author, journal, year, retracted } }
 ```
 
 Pass every PMID in one call. Batching is what keeps this inside NCBI's rate limit —
 never loop one PMID at a time. Results are cached on disk, so refetching is free.
 
+- `first_author` and `last_author` come from the paper's own author list, or are `null`.
 - `abstract` is `null` for errata and editorials, which have metadata but no body. Skip
   those rather than reporting them as unanswerable.
 - `sections` preserves structured-abstract labels (BACKGROUND, METHODS, FINDINGS,
@@ -165,11 +166,18 @@ const { records: full } = await tools.fetchFullText({
 
 Full text is ~40× an abstract, so read it yourself only when the user asked about one
 specific paper. For anything across papers, fan out `full-text-analyst` subagents exactly
-as you do for abstracts — one per paper, one `Promise.all`, the text in the prompt:
+as you do for abstracts — one per paper, one `Promise.all`, the text in the prompt.
+Full-text records lack citation metadata: join PubMed records by PMID before projecting
+answers. Missing metadata means PMID-only citations, as in the system citation rule:
 
 ```js
+const { records: citations } = await tools.fetchAbstracts({
+  pmids: [...new Set(Object.values(full).map(r => r.pmid).filter(Boolean))],
+});
 const answers = await Promise.all(Object.values(full).map(async (r) => ({
   pmcid: r.pmcid, pmid: r.pmid, title: r.title, retracted: r.retracted,
+  first_author: citations[r.pmid]?.first_author ?? null,
+  year: citations[r.pmid]?.year ?? null, journal: citations[r.pmid]?.journal ?? null,
   answer: await task({
     description: `Question: ${question}\n\nTitle: ${r.title}\nPMCID: ${r.pmcid}\n\n${r.text}`,
     subagentType: "full-text-analyst",
@@ -178,7 +186,9 @@ const answers = await Promise.all(Object.values(full).map(async (r) => ({
 await tools.writeFile({
   file_path: "/workspace/answers.json", content: JSON.stringify(answers),
 });
-answers.map(a => ({ pmid: a.pmid, answer: a.answer })); // projection, not the whole array
+answers.map(a => ({
+  pmid: a.pmid, first_author: a.first_author, year: a.year, journal: a.journal, answer: a.answer,
+})); // projection, not the whole array
 ```
 
 ### Reading figures

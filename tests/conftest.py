@@ -287,6 +287,8 @@ def write_cached_abstract(cache: Path, pmid: str, **fields: Any) -> Path:
         "pmid": pmid,
         "title": f"Paper {pmid}",
         "abstract": "An abstract.",
+        "first_author": None,
+        "last_author": None,
         "sections": [],
         "journal": "Journal",
         "year": "2025",

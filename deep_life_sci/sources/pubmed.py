@@ -505,10 +505,21 @@ def _parse_article(art: ET.Element) -> dict | None:
     year = art.findtext(".//PubDate/Year") or art.findtext(".//PubDate/MedlineDate") or ""
 
     ids = _article_ids(art)
+    author_nodes = art.findall("MedlineCitation/Article/AuthorList/Author")
+    if not author_nodes:
+        author_nodes = art.findall("BookDocument/AuthorList/Author")
+    authors = []
+    for author in author_nodes:
+        surname = (author.findtext("LastName") or "").strip()
+        given = (author.findtext("Initials") or author.findtext("ForeName") or "").strip()
+        name = " ".join(part for part in (surname, given) if part) if surname else ""
+        authors.append(name or (author.findtext("CollectiveName") or "").strip() or None)
 
     return {
         "pmid": pmid,
         "title": art.findtext(".//ArticleTitle") or art.findtext(".//BookTitle"),
+        "first_author": authors[0] if authors else None,
+        "last_author": authors[-1] if authors else None,
         "abstract": abstract or None,
         "sections": sections,
         "journal": art.findtext(".//Journal/Title") or art.findtext(".//BookTitle"),
@@ -522,14 +533,7 @@ def _parse_article(art: ET.Element) -> dict | None:
 
 
 def _scan_cache(valid: list[str]) -> tuple[dict[str, dict], list[str], list[str]]:
-    """Partition PMIDs into cached records and ones still needing a fetch.
-
-    Blocking, and called via a single `asyncio.to_thread` rather than one hop per
-    PMID: a 200-paper corpus is 200 cache reads, and paying thread-handoff overhead
-    on each would cost more than the reads themselves.
-
-    Returns `(records, from_cache, to_fetch)`.
-    """
+    """Partition PMIDs into current cached records and ones needing a fetch."""
     ABSTRACT_CACHE.mkdir(parents=True, exist_ok=True)
     records: dict[str, dict] = {}
     from_cache: list[str] = []
@@ -547,11 +551,8 @@ def _scan_cache(valid: list[str]) -> tuple[dict[str, dict], list[str], list[str]
         if cache_io.is_fresh(path, ttl):
             try:
                 cached = json.loads(path.read_text())
-                # Schema migration: entries written before PMC support predate the
-                # `pmcid` key. Checking for the key (not its value) is what makes this
-                # a one-time refetch — None is a legitimate answer for 39% of papers,
-                # so a truthiness check would refetch those forever.
-                if "pmcid" in cached:
+                # Check keys rather than values: null metadata is a valid cached answer.
+                if {"pmcid", "first_author", "last_author"} <= cached.keys():
                     records[pmid] = cached
                     from_cache.append(pmid)
                     # Only a usable entry is kept alive: a stale-schema or corrupt file
@@ -607,32 +608,7 @@ async def _efetch_chunk(chunk: list[str], sem: asyncio.Semaphore) -> dict[str, d
 
 @tool
 async def fetch_abstracts(pmids: list[str]) -> dict:
-    """Retrieve abstracts for a list of PMIDs, batched and cached locally.
-
-    Pass every PMID you need in one call — batching is what keeps the whole workflow
-    inside NCBI's rate limit. Do NOT call this once per paper in a loop, and do not
-    have subagents call it; fetch here, then pass the text into subagent prompts.
-
-    Already-cached abstracts are served from disk without an HTTP request, so calling
-    this again with overlapping PMIDs is cheap. Batching is also what makes the fetch
-    concurrent: chunks of one call go out together, where separate calls serialise.
-
-    Args:
-        pmids: PMIDs as strings. Anything that isn't all digits is rejected rather
-            than sent — PubMed would otherwise return an unrelated paper for it.
-
-    Returns:
-        records: {pmid: {title, abstract, sections, journal, year, retracted,
-            publication_types, doi, pmcid}}. `abstract` is None for errata and editorials,
-            which have citation metadata but no body. `sections` preserves
-            structured-abstract labels (BACKGROUND / METHODS / FINDINGS / ...) when the
-            journal uses them. `retracted` is True for retracted papers — always surface
-            that to the user. `pmcid` is non-null for roughly 61% of papers and is what
-            you pass to `pmc_locate` to check for full text; null means abstract-only.
-        missing: requested PMIDs that PubMed returned nothing for
-        invalid: inputs rejected as malformed
-        from_cache: PMIDs served from the local cache
-    """
+    """Batch-fetch/cache abstracts and citation metadata; first_author/last_author may be null."""
     valid, invalid = validate_pmids([str(p) for p in pmids])
 
     # The cache lives on the host filesystem, so reading it is blocking I/O. This
