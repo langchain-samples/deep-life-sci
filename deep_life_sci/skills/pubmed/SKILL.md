@@ -5,17 +5,25 @@ description: Instructions on using PubMed and PubMed Central tools. Read before 
 
 ## Searching
 
-**Example pattern for initial searches: probe with `retmax: 0`.**
-Returns `count`, `query_translation` and `warnings` without fetching records, so it is cheap.
-Iterate here.
+Probe and fetch in one `eval` when the count is acceptable (here, 1–500).
+Return for query refinement when the count is zero or too large, or for inspection when
+`warnings` is non-empty. Inspect `query_translation` to check what PubMed actually searched;
+`warnings` must be empty before trusting the count. Use a standalone probe `eval` only
+when refinement is expected, not as a mandatory first step.
 
 ```js
-let term = '("base editing"[tiab] OR "base editor"[tiab]) AND liver[tiab]';
-let probe = await tools.pubmedSearch({ term, retmax: 0 });
-probe.count;              // too many? tighten. zero or a handful? loosen.
-probe.query_translation;  // what PubMed ACTUALLY searched
-probe.warnings;           // must be empty before you trust the count
+const query = { term: '("base editing"[tiab] OR "base editor"[tiab]) AND liver[tiab]' };
+const limit = 500;
+const probe = await tools.pubmedSearch({ ...query, retmax: 0 });
+let res = probe;
+if (probe.count > 0 && probe.count <= limit && !probe.warnings.length) {
+  res = await tools.pubmedSearch({ ...query, retmax: probe.count, sort: "relevance" });
+}
+({ count: res.count, query_translation: res.query_translation, warnings: res.warnings });
 ```
+
+Continue collecting and processing `res.records` in this same `eval` after a successful
+fetch; keep records in JavaScript and return only a summary.
 
 ### Field tags
 
@@ -58,12 +66,7 @@ neither is safe alone:
   inflects, hyphenates or misspells** the concept. A title typo or an author who writes
   "C. jejuni" throughout drops the paper silently, and no `warnings` entry fires.
 
-**Fetching records once you've appropriately narrowed your search:**
-
-```js
-const res = await tools.pubmedSearch({ term, sort: "relevance" });
-res.records; // [{ pmid, title, first_author, last_author, year, journal, doi }]
-```
+`res.records` contains `{ pmid, title, first_author, last_author, year, journal, doi }`.
 
 All matching records come back, not a truncated head, so you can filter and sort them in
 code. If you want the records as a file, write them yourself with `tools.writeFile`.

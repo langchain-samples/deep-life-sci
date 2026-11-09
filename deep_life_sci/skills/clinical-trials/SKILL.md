@@ -25,15 +25,28 @@ tighter than PubMed, so batching is not a preference here:
 
 ### Searching
 
-Probe with `retmax: 0` first, the same discipline as `pubmedSearch`:
+Probe and fetch in one `eval` when the count is acceptable (here, 1–500).
+Return for refinement when the count is zero or too large, or for inspection when
+`warnings` is non-empty. Use a standalone probe `eval` only when refinement is expected,
+not as a mandatory first step.
 
 ```js
-const probe = await tools.ctgovSearch({
+const query = {
   condition: "HIV", intervention: "lenacapavir",
-  filterAdvanced: "AREA[Phase]PHASE3", retmax: 0,
-});
-probe.count;  // too many? add a filter, but beware over-narrowing. zero? check spelling — see below
+  filterAdvanced: "AREA[Phase]PHASE3",
+};
+const limit = 500;
+const probe = await tools.ctgovSearch({ ...query, retmax: 0 });
+let res = probe;
+if (probe.count > 0 && probe.count <= limit && !probe.warnings.length) {
+  res = await tools.ctgovSearch({ ...query, retmax: probe.count, sort: "EnrollmentCount:desc" });
+}
+({ count: res.count, warnings: res.warnings });
 ```
+
+Continue collecting and processing `res.records` in this same `eval` after a successful
+fetch; keep records in JavaScript and return only a summary. Check `res.warnings` before
+using results. Unlike PubMed, there is no `query_translation` to inspect; see below.
 
 Search arguments, all optional but **at least one required** (an unfiltered search would
 return the whole registry, so it is rejected):
@@ -48,18 +61,10 @@ return the whole registry, so it is rejected):
 | `status` | array of statuses, ORed — `["RECRUITING", "NOT_YET_RECRUITING"]` |
 | `filterAdvanced` | an Essie expression, ANDed with the rest |
 
-Then fetch the records:
-
-```js
-const res = await tools.ctgovSearch({
-  condition: "HIV", filterAdvanced: "AREA[Phase]PHASE3",
-  status: ["COMPLETED"], retmax: 500, sort: "EnrollmentCount:desc",
-});
-res.records;  // [{ nct_id, title, acronym, status, why_stopped, study_type, phases,
-              //    enrollment, enrollment_type, lead_sponsor, sponsor_class, start_date,
-              //    primary_completion_date, completion_date, last_updated, conditions,
-              //    interventions, has_results, url }]
-```
+`res.records` contains `{ nct_id, title, acronym, status, why_stopped, study_type,
+phases, enrollment, enrollment_type, lead_sponsor, sponsor_class, start_date,
+primary_completion_date, completion_date, last_updated, conditions, interventions,
+has_results, url }`.
 
 `sort` is `"@relevance"` or `"FieldName:asc|desc"` — `EnrollmentCount:desc`,
 `LastUpdatePostDate:desc`, `StartDate:desc`.

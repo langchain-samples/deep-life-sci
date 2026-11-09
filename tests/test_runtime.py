@@ -321,6 +321,70 @@ async def test_real_compiled_agent_runs_quickjs_source_tool_and_returns_answer(
     backend.aexecute.assert_awaited_once()  # real artifact middleware runs after eval
 
 
+@pytest.mark.parametrize("skill,tool_name", [
+    ("pubmed", "pubmed_search"), ("clinical-trials", "ctgov_search"),
+])
+@pytest.mark.parametrize("count,warnings,fetch", [
+    (1, [], True), (500, [], True), (0, [], False), (501, [], False),
+    (7, ["Inspect this query"], False),
+])
+async def test_search_skill_probes_and_conditionally_fetches_in_one_eval(
+    monkeypatch, skill, tool_name, count, warnings, fetch
+):
+    import json
+    import re
+
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+
+    from deep_life_sci import paths
+    from deep_life_sci.sandbox import ResilientSandbox
+
+    class ScriptedModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    text = (paths.SKILLS_DIR / skill / "SKILL.md").read_text()
+    code = re.search(r"```js\n(.*?)```", text, re.S).group(1)
+    code += '\nconsole.log(JSON.stringify(res));'
+    probe = {"count": count, "warnings": warnings, "query_translation": "translated query",
+             "records": []}
+    records = [{"title": "Fetched record"}]
+    search = AsyncMock(side_effect=[probe, {**probe, "records": records}])
+
+    async def search_records(**kwargs):
+        return await search(**kwargs)
+
+    monkeypatch.setattr(getattr(agent, tool_name), "coroutine", search_records)
+    model = ScriptedModel(responses=[
+        AIMessage("", tool_calls=[{
+            "name": "eval", "id": "search", "args": {"code": code},
+        }]),
+        AIMessage("Search complete."),
+    ])
+    monkeypatch.setattr(agent, "root_model", lambda: model)
+    monkeypatch.setattr(agent, "subagent_model", lambda: model)
+    monkeypatch.setattr(agent, "register_harness_profile", Mock())
+    backend = ResilientSandbox(SimpleNamespace())
+    monkeypatch.setattr(backend, "aexecute", AsyncMock(return_value=SimpleNamespace(output="")))
+    compiled = agent.build_agent(backend)
+    result = await compiled.ainvoke({"messages": [HumanMessage("Search this source")]})
+    messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(messages) == 1
+    assert json.dumps(records if fetch else [], separators=(",", ":")) in messages[0].text
+    assert "translated query" in messages[0].text
+    assert search.await_count == (2 if fetch else 1)
+    first = search.call_args_list[0].kwargs
+    assert first["retmax"] == 0
+    if fetch:
+        second = search.call_args_list[1].kwargs
+        assert second["retmax"] == count
+        assert {k: v for k, v in second.items() if k not in {"retmax", "sort"}} == {
+            k: v for k, v in first.items() if k not in {"retmax", "sort"}
+        }
+    else:
+        assert json.dumps(warnings, separators=(",", ":")) in messages[0].text
+
+
 async def test_one_ptc_script_fetches_stages_and_dispatches_file_reading_trial_analyst(
     monkeypatch, mock_ctgov, tmp_path
 ):

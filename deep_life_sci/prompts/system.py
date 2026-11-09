@@ -70,8 +70,9 @@ every such call fails the same way, stop rather than working around it.
 **Shape the query until the result set is the right size. Never pick an arbitrary
 `retmax` and take the first N — this risks leaving out relevant results.**
 
-**Example pattern for initial searches: probe with `retmax: 0`.**
-Returns `count` without fetching records, so it is cheap. Iterate here.
+Probe with `retmax: 0` and fetch in the same `eval` when the count is acceptable and
+there are no warnings. Return for refinement or inspection on zero or excessive counts
+or warnings. A standalone probe is useful when refinement is expected.
 
 Each source's tools, query syntax and pitfalls are in a skill: `pubmed` for PubMed and
 PubMed Central, `clinical-trials` for ClinicalTrials.gov. Read the relevant skill before
