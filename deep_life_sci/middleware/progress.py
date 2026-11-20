@@ -9,7 +9,7 @@ screen shows nothing at all.
 The inner calls are ordinary tool invocations — they are simply made below the agent's tool
 node, by `langchain_quickjs`'s host-function bridge, so no middleware hook sees them. What
 *does* see them is the tool object itself: the bridge calls `tool.arun` on whatever `agent.py`
-passed in `tools=[...]`. Wrapping the coroutine there is the one place the fan-out is visible,
+passed in `source_tools` to PTC. Wrapping the coroutine there makes the fan-out visible,
 which is why this is a wrapper rather than an `AgentMiddleware` like its neighbours.
 
 Events go out on LangGraph's `custom` stream mode and arrive at the frontend's existing

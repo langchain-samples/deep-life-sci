@@ -72,9 +72,10 @@ uv run python -m evals.sync             # publish dataset seeds to LangSmith
   sandbox or perform external I/O; callers own sandbox lifetime.
 - `eval` is QuickJS orchestration, with no filesystem, shell, or network of its own.
   `execute` runs real Python/shell commands in the LangSmith sandbox.
-- Adding a source tool requires assembly registration, the `ptc` allowlist, its camelCase
-  usage in `prompts/system.py` or its source's skill (`deep_life_sci/skills/`), and
-  progress/error wrapping. Preserve the interpreter's
+- Register source tools once in `agent.py:source_tools`, wrapped for progress/errors and
+  passed as tool instances to `ptc`, and document their camelCase usage in
+  `prompts/system.py` or their source's skill (`deep_life_sci/skills/`). Keep them off the
+  root model's tool list. Preserve the interpreter's
   explicit limits; default timeouts are too short for research fan-outs.
 - Contain expected source/transport failures as `{error}` through `with_error_capture`.
   Exceptions escaping the PTC bridge can end the entire run. Keep programming errors

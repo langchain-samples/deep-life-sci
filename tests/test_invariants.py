@@ -7,8 +7,8 @@ checker, or by any test that stays inside one module.
 
 Two of these read source with `ast` rather than importing and inspecting. That is
 deliberate: `build_agent` needs a sandbox backend and a gateway key to run, and the
-allowlist is a literal in its body, so reading the literal is both cheaper and closer to
-what a reviewer would check by eye.
+tool registrations are literals in its body, so reading them is both cheaper and closer
+to what a reviewer would check by eye.
 """
 
 from __future__ import annotations
@@ -36,16 +36,21 @@ def _camel(name: str) -> str:
 
 
 def _ptc_allowlist() -> list[str]:
-    """The `ptc=[...]` literal out of `agent.py:build_agent`."""
+    """Source instances and named tools exposed by `agent.py:build_agent`."""
     tree = ast.parse((REPO / "deep_life_sci" / "agent.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.keyword) and node.arg == "ptc":
-            return [element.value for element in node.value.elts]
+            assert any(isinstance(e, ast.Starred) and isinstance(e.value, ast.Name)
+                       and e.value.id == "source_tools" for e in node.value.elts)
+            return _source_tool_names() + [
+                element.value for element in node.value.elts
+                if isinstance(element, ast.Constant)
+            ]
     raise AssertionError("no ptc=[...] allowlist found in agent.py")
 
 
-def _root_tool_names() -> list[str]:
-    """The tools handed to `create_deep_agent`, by the name each is imported under."""
+def _source_tool_names() -> list[str]:
+    """The wrapped source tools, by the name each is imported under."""
     source = (REPO / "deep_life_sci" / "agent.py").read_text(encoding="utf-8")
     block = re.search(r"with_progress\(\[(.*?)\]\)", source, re.S)
     assert block, "no with_progress([...]) tool list found in agent.py"
@@ -55,8 +60,7 @@ def _root_tool_names() -> list[str]:
 class TestEveryPtcToolIsDiscoverable:
     """A tool the prompt does not mention is a tool the model has no way to reach.
 
-    "Adding a tool means adding it to that allowlist and writing a prompt segment for
-    it in `prompts/system.py` or a skill — the model has no other way to discover it."
+    Source tools and filesystem tools need usage in `prompts/system.py` or a skill.
     """
 
     @pytest.mark.parametrize("name", _ptc_allowlist())
@@ -65,12 +69,6 @@ class TestEveryPtcToolIsDiscoverable:
 
     def test_the_allowlist_is_not_empty(self):
         assert len(_ptc_allowlist()) > 5
-
-    def test_every_source_tool_bound_to_the_agent_is_also_in_the_allowlist(self):
-        """A tool bound but not allowlisted is invisible inside `eval`, where the work is."""
-        allowlisted = set(_ptc_allowlist())
-        for name in _root_tool_names():
-            assert name in allowlisted, f"{name} is bound but not reachable from eval"
 
     def test_web_search_is_a_ptc_tool_rather_than_a_spec_on_the_root_model(self):
         """Server-side search bound to the root lands every page in root context —
@@ -94,7 +92,7 @@ class TestEveryProgressLabelNamesARealTool:
     def test_every_source_tool_has_a_label_rather_than_falling_back_to_its_name(self):
         from deep_life_sci.middleware.progress import STARTED
 
-        unlabelled = [n for n in _root_tool_names() if n not in STARTED and n != "web_search"]
+        unlabelled = [n for n in _source_tool_names() if n not in STARTED and n != "web_search"]
         assert unlabelled == [], f"no progress label for {unlabelled}"
 
 

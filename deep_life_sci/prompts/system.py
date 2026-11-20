@@ -11,9 +11,8 @@ There are two code surfaces — the JS interpreter for orchestration and a sandb
 for Python — so the prompt also has to draw the line between them, or the model will
 reach for the wrong one.
 
-**Adding a tool means two edits, not one.** It goes in the `ptc=[...]` allowlist in
-`agent.py` *and* gets a segment here or in a skill; the model has no other way to
-discover it.
+Register source tools once in `agent.py:source_tools`, passed as wrapped tool instances
+to PTC, and give each a usage segment here or in a skill so the model can discover it.
 
 This file is production code. One line telling the model to print numbers instead of
 reading its own plot back cut root context from 115k to 31k chars, and prompt changes

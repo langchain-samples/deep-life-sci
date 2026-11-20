@@ -113,22 +113,24 @@ def build_agent(backend):
         routes={skills_route: FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True)},
     )
 
+    # The PTC bridge calls `tool.arun` directly, so no middleware hook sees a call
+    # made inside `eval`. Inner: progress lines. Outer: source failures return
+    # `{error}` instead of raising, since a raise ends the run, not the call.
+    source_tools = with_error_capture(with_progress([
+        pubmed_search,
+        fetch_abstracts,
+        pmc_locate,
+        fetch_full_text,
+        fetch_figures,
+        fetch_supplementary,
+        ctgov_search,
+        ctgov_fetch,
+        web_search,
+    ]))
+
     agent = create_deep_agent(
         model=root,
-        # The PTC bridge calls `tool.arun` directly, so no middleware hook sees a call
-        # made inside `eval`. Inner: progress lines. Outer: source failures return
-        # `{error}` instead of raising, since a raise ends the run, not the call.
-        tools=with_error_capture(with_progress([
-            pubmed_search,
-            fetch_abstracts,
-            pmc_locate,
-            fetch_full_text,
-            fetch_figures,
-            fetch_supplementary,
-            ctgov_search,
-            ctgov_fetch,
-            web_search,
-        ])),
+        tools=[],
         system_prompt=build_system_prompt(),
         subagents=leaves,
         backend=root_backend,
@@ -146,18 +148,7 @@ def build_agent(backend):
             CodeInterpreterMiddleware(
                 # Tools reach JS camelCased: pubmed_search -> tools.pubmedSearch.
                 ptc=[
-                    "pubmed_search",
-                    "fetch_abstracts",
-                    "pmc_locate",
-                    "fetch_full_text",
-                    "fetch_figures",
-                    "fetch_supplementary",
-                    "ctgov_search",
-                    "ctgov_fetch",
-                    # Provider-side search, spent inside the tool so its pages land in the
-                    # JS heap instead of root context. Binding the provider's own search
-                    # tool to the root model would undo that.
-                    "web_search",
+                    *source_tools,
                     "execute",
                     "read_file",
                     "write_file",

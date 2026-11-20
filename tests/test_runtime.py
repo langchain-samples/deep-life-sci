@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool
 
 from deep_life_sci import agent, runner
 from deep_life_sci.middleware.artifacts import ArtifactMiddleware
@@ -31,7 +32,7 @@ def assembled(monkeypatch):
     return create.call_args.kwargs, backend
 
 
-def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
+def test_assembly_keeps_leaves_read_only_and_sources_in_ptc(assembled):
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain_quickjs import CodeInterpreterMiddleware
 
@@ -62,8 +63,12 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
     assert interpreter._timeout == 900.0
     assert interpreter._max_result_chars == 40_000
     assert interpreter._max_ptc_calls == 512
-    assert {tool.name for tool in kwargs["tools"]} <= set(interpreter._ptc)
-    assert {t.name for t in kwargs["tools"]} == {
+    assert kwargs["tools"] == []
+    assert {t for t in interpreter._ptc if isinstance(t, str)} == {
+        "execute", "read_file", "write_file", "edit_file", "ls", "glob",
+    }
+    source_tools = [t for t in interpreter._ptc if isinstance(t, BaseTool)]
+    assert {t.name for t in source_tools} == {
         "pubmed_search",
         "fetch_abstracts",
         "pmc_locate",
@@ -74,7 +79,7 @@ def test_assembly_keeps_leaves_read_only_and_root_tools_callable(assembled):
         "ctgov_fetch",
         "web_search",
     }
-    assert all(callable(t.coroutine) for t in kwargs["tools"])
+    assert all(callable(t.coroutine) for t in source_tools)
 
 
 async def test_assembled_source_tools_contain_failures(assembled, monkeypatch):
@@ -82,7 +87,10 @@ async def test_assembled_source_tools_contain_failures(assembled, monkeypatch):
 
     kwargs, _ = assembled
     monkeypatch.setattr(pubmed, "_request", AsyncMock(side_effect=SourceError("API down")))
-    tool = next(t for t in kwargs["tools"] if t.name == "pubmed_search")
+    interpreter = next(m for m in kwargs["middleware"]
+                       if isinstance(m, agent.CodeInterpreterMiddleware))
+    tool = next(t for t in interpreter._ptc
+                if isinstance(t, BaseTool) and t.name == "pubmed_search")
     result = await tool.ainvoke({"term": "cancer", "retmax": 0})
     assert set(result) == {"error"}
     assert "API down" in result["error"]
@@ -269,15 +277,26 @@ async def test_runner_owned_session_closes_when_agent_raises(monkeypatch):
     assert events == [("open", {"quiet": False}), "close"]
 
 
+@pytest.mark.parametrize("source_fails", [False, True])
 async def test_real_compiled_agent_runs_quickjs_source_tool_and_returns_answer(
-    monkeypatch, mock_ncbi
+    monkeypatch, mock_ncbi, source_fails
 ):
     import httpx
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
+    bound_tools = []
+    model_inputs = []
+    progress = []
+    monkeypatch.setattr("deep_life_sci.middleware.progress._emit", progress.append)
+
     class ScriptedModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):
+            bound_tools.append({t.name for t in tools})
             return self
+
+        async def _agenerate(self, messages, **kwargs):
+            model_inputs.append(messages)
+            return await super()._agenerate(messages, **kwargs)
 
     model = ScriptedModel(
         responses=[
@@ -290,7 +309,7 @@ async def test_real_compiled_agent_runs_quickjs_source_tool_and_returns_answer(
                         "args": {
                             "code": 'const r = await tools.pubmedSearch('
                             '{term: "cancer", retmax: 0}); '
-                            'console.log("COUNT=" + r.count);'
+                            'console.log("COUNT=" + JSON.stringify(r));'
                         },
                     }
                 ],
@@ -301,6 +320,9 @@ async def test_real_compiled_agent_runs_quickjs_source_tool_and_returns_answer(
     monkeypatch.setattr(agent, "root_model", lambda: model)
     monkeypatch.setattr(agent, "subagent_model", lambda: model)
     monkeypatch.setattr(agent, "register_harness_profile", Mock())
+    if source_fails:
+        monkeypatch.setattr("deep_life_sci.sources.pubmed._request",
+                            AsyncMock(side_effect=SourceError("API down")))
     transport = mock_ncbi(
         lambda req: httpx.Response(
             200, json={"esearchresult": {"count": "7", "idlist": [], "querytranslation": "cancer"}}
@@ -315,9 +337,23 @@ async def test_real_compiled_agent_runs_quickjs_source_tool_and_returns_answer(
     assert result["messages"][-1].text == "Found 7 papers."
     tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
     assert len(tool_messages) == 1
-    assert "COUNT=7" in tool_messages[0].text
-    assert len(transport.requests) == 1
-    assert transport.requests[0].url.params["term"] == "cancer"
+    if source_fails:
+        assert 'COUNT={"error":"pubmed_search failed: API down"}' in tool_messages[0].text
+        assert not transport.requests
+    else:
+        assert '"count":7' in tool_messages[0].text
+        assert len(transport.requests) == 1
+        assert transport.requests[0].url.params["term"] == "cancer"
+    assert progress == ["Searching PubMed for cancer"]
+    assert bound_tools and all("eval" in names for names in bound_tools)
+    assert all(not (names & {
+        "pubmed_search", "fetch_abstracts", "pmc_locate", "fetch_full_text",
+        "fetch_figures", "fetch_supplementary", "ctgov_search", "ctgov_fetch", "web_search",
+    }) for names in bound_tools)
+    system = "\n".join(m.text for m in model_inputs[0] if m.type == "system")
+    for name in ("pubmedSearch", "fetchAbstracts", "pmcLocate", "fetchFullText",
+                 "fetchFigures", "fetchSupplementary", "ctgovSearch", "ctgovFetch", "webSearch"):
+        assert f"tools.{name}(input:" in system
     backend.aexecute.assert_awaited_once()  # real artifact middleware runs after eval
 
 
